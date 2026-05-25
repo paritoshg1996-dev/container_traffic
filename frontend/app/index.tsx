@@ -18,8 +18,9 @@ import {
   Image,
   Animated,
   Dimensions,
+  PanResponder,
 } from "react-native";
-import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { Ionicons } from "@expo/vector-icons";
@@ -89,6 +90,10 @@ type Load = {
   cargo_placement: string;
   weight_tons: number;
   space_cuft: number | null;
+  dimension_length?: number | null;
+  dimension_breadth?: number | null;
+  dimension_height?: number | null;
+  price_per_ton?: number | null;
   loading_date: string;
   poster_name: string;
   poster_phone: string;
@@ -177,11 +182,9 @@ export default function Index() {
     <SafeAreaView style={styles.fill} edges={["top"]}>
       <View style={styles.header} testID="app-header">
         <View style={styles.headerLeft}>
-          <View style={styles.logoBox}>
-            <Ionicons name="cube" size={20} color={COLORS.surface} />
-          </View>
+          <Image source={require("../assets/images/logo.png")} style={styles.logoImg} resizeMode="contain" />
           <View>
-            <Text style={styles.headerTitle}>LoadLink</Text>
+            <Text style={styles.headerTitle}>Truck Traffic PTL</Text>
             <Text style={styles.headerSubtitle}>Hi, {profile.name.split(" ")[0]}</Text>
           </View>
         </View>
@@ -191,18 +194,40 @@ export default function Index() {
       </View>
 
       <View style={styles.tabs} testID="tabs">
-        <TabButton label="Post Space" icon="add-circle-outline" active={tab === "post"} onPress={() => setTab("post")} testID="tab-post" />
-        <TabButton label="Load Market" icon="list-outline" active={tab === "market"} onPress={() => setTab("market")} testID="tab-market" />
+        <TabButton label="Post Truck Space" icon="add-circle-outline" active={tab === "post"} onPress={() => setTab("post")} testID="tab-post" />
+        <TabButton label="Find Truck Space" icon="search-outline" active={tab === "market"} onPress={() => setTab("market")} testID="tab-market" />
       </View>
 
-      <View style={styles.fill}>
-        {tab === "post" ? (
+      <SwipeableTabs tab={tab} setTab={setTab}>
+        <View style={[StyleSheet.absoluteFill, { display: tab === "post" ? "flex" : "none" }]} testID="post-tab-pane">
           <PostLoadScreen profile={profile} onPosted={() => setTab("market")} />
-        ) : (
+        </View>
+        <View style={[StyleSheet.absoluteFill, { display: tab === "market" ? "flex" : "none" }]} testID="market-tab-pane">
           <LoadMarketScreen profile={profile} />
-        )}
-      </View>
+        </View>
+      </SwipeableTabs>
     </SafeAreaView>
+  );
+}
+
+// Swipe-left/right between tabs
+function SwipeableTabs({ tab, setTab, children }: { tab: "post" | "market"; setTab: (t: "post" | "market") => void; children: React.ReactNode }) {
+  const responder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 24 && Math.abs(g.dy) < 24,
+      onPanResponderRelease: (_, g) => {
+        if (g.dx < -60) setTabRef.current("market");
+        else if (g.dx > 60) setTabRef.current("post");
+      },
+    })
+  ).current;
+  const setTabRef = useRef(setTab);
+  useEffect(() => { setTabRef.current = setTab; }, [setTab]);
+  return (
+    <View style={styles.fill} {...responder.panHandlers}>
+      {children}
+    </View>
   );
 }
 
@@ -233,9 +258,9 @@ function ProfileSetup({ onSave, lockedPhone }: { onSave: (p: Profile) => void; l
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.fill}>
         <ScrollView contentContainerStyle={styles.profileWrap} keyboardShouldPersistTaps="handled">
           <View style={styles.profileLogo}>
-            <Ionicons name="cube" size={36} color={COLORS.surface} />
+            <Image source={require("../assets/images/logo.png")} style={{ width: 60, height: 60, borderRadius: 14 }} resizeMode="contain" />
           </View>
-          <Text style={styles.profileTitle}>Welcome to LoadLink</Text>
+          <Text style={styles.profileTitle}>Welcome to Truck Traffic PTL</Text>
           <Text style={styles.profileSubtitle}>Set up your profile to start posting and finding loads</Text>
           <View style={{ height: 24 }} />
           <Field label="Your Name *">
@@ -697,7 +722,6 @@ function ProfileScreen({ profile, onClose, onEdit }: { profile: Profile; onClose
             <View style={styles.statsRow}>
               <View style={styles.statBox}><Text style={styles.statValue} testID="my-loads-count">{myLoads.length}</Text><Text style={styles.statLabel}>Loads Posted</Text></View>
               <View style={styles.statBox}><Text style={styles.statValue}>{myLoads.reduce((s, l) => s + (l.weight_tons || 0), 0).toFixed(1)} T</Text><Text style={styles.statLabel}>Total Weight</Text></View>
-              <View style={styles.statBox}><Text style={styles.statValue}>{myLoads.reduce((s, l) => s + (l.space_cuft || 0), 0).toFixed(0)}</Text><Text style={styles.statLabel}>Total ft³</Text></View>
             </View>
             <Text style={styles.sectionHeading}>My Posted Loads</Text>
             {loading ? <ActivityIndicator color={COLORS.primary} style={{ marginTop: 24 }} /> : null}
@@ -755,21 +779,30 @@ function PostLoadScreen({ profile, onPosted }: { profile: Profile; onPosted: () 
   const [destPin, setDestPin] = useState("");
   const [destInfo, setDestInfo] = useState<RouteInfo>(null);
   const [images, setImages] = useState<string[]>([]);
-  const [placement, setPlacement] = useState<string>("Stackable");
+  const [placement, setPlacement] = useState<string>("");
   const [truckType, setTruckType] = useState<string>("");
  
 const [weight, setWeight] = useState(1.0);
 const [date, setDate] = useState<Date>(new Date());
+const [showDatePicker, setShowDatePicker] = useState(false);
 const [weightModalVisible, setWeightModalVisible] = useState(false);
 const [weightInput, setWeightInput] = useState("");
+const [dimL, setDimL] = useState("");
+const [dimB, setDimB] = useState("");
+const [dimH, setDimH] = useState("");
+const [pricePerTon, setPricePerTon] = useState("");
 
-const changeDate = (days: number) => {
-  setDate(prev => {
-    const d = new Date(prev);
-    d.setDate(d.getDate() + days);
-    if (d < new Date(new Date().setHours(0,0,0,0))) return prev;
-    return d;
-  });
+const today = useMemo(() => { const d = new Date(); d.setHours(0,0,0,0); return d; }, []);
+const maxDate = useMemo(() => { const d = new Date(today); d.setDate(d.getDate() + 14); return d; }, [today]);
+
+const onDateChange = (event: any, selected?: Date) => {
+  if (Platform.OS !== "ios") setShowDatePicker(false);
+  if (event?.type === "dismissed") return;
+  if (selected) {
+    if (selected < today) setDate(today);
+    else if (selected > maxDate) setDate(maxDate);
+    else setDate(selected);
+  }
 };
   
 	
@@ -798,10 +831,15 @@ if (!w || w <= 0) return Alert.alert("Invalid", "Enter valid weight in tons");
     
     setLoadingPost(true);
     try {
+      const lengthVal = dimL ? Math.min(40, parseInt(dimL, 10)) : null;
+      const breadthVal = dimB ? Math.min(8, parseInt(dimB, 10)) : null;
+      const heightVal = dimH ? Math.min(9, parseInt(dimH, 10)) : null;
+      const priceVal = pricePerTon ? parseInt(pricePerTon, 10) : null;
       const payload = {
         origin_pincode: originPin, origin_locality: originInfo?.locality || "", origin_city: originInfo?.city || "", origin_state: originInfo?.state || "",
         destination_pincode: destPin, destination_locality: destInfo?.locality || "", destination_city: destInfo?.city || "", destination_state: destInfo?.state || "",
         cargo_types: [], cargo_placement: placement, truck_type: truckType, weight_tons: w, space_cuft: null,
+        dimension_length: lengthVal, dimension_breadth: breadthVal, dimension_height: heightVal, price_per_ton: priceVal,
         loading_date: date.toISOString().slice(0, 10), poster_name: profile.name, poster_phone: profile.phone,
         poster_company: profile.company, images,
       };
@@ -812,7 +850,8 @@ if (!w || w <= 0) return Alert.alert("Invalid", "Enter valid weight in tons");
       const reset = () => {
         setOriginText(""); setOriginPin(""); setOriginInfo(null);
         setDestText(""); setDestPin(""); setDestInfo(null);
-        setTruckType(""); setPlacement("Stackable"); setWeight(1.0); setImages([]);
+        setTruckType(""); setPlacement(""); setWeight(1.0); setImages([]);
+        setDimL(""); setDimB(""); setDimH(""); setPricePerTon("");
       };
 
       if (alsoShare) {
@@ -824,7 +863,7 @@ if (!w || w <= 0) return Alert.alert("Invalid", "Enter valid weight in tons");
         const loadLink = created?.id
           ? `\n\n🔗 More info & pics: https://www.trucktraffic.in?load=${created.id}`
           : `\n\n🔗 More info & pics: https://www.trucktraffic.in`;
-        const text = `🚛 *Truck Space Available – LoadLink*\n\n` +
+        const text = `🚛 *Truck Space Available – Truck Traffic PTL*\n\n` +
           `*Route:*\n${originLine}\n   ⬇️\n${destLine}\n\n` +
           `🚚 *Truck:* ${truckType}\n` +
           `⚖️ *Weight:* ${w} Tons\n` +
@@ -860,43 +899,68 @@ return (
         keyboardDismissMode="on-drag"
         testID="post-load-form"
       >
-		  
-     <SectionTitle icon="navigate-outline" title="Route" />
-<View style={styles.routeInputsRow}>
-  <SmartRouteInput
-    label="Origin"
-    testIDPrefix="origin"
-    text={originText}
-    pin={originPin}
-    info={originInfo}
-    onChange={(t, pin, info) => {
-      setOriginText(t);
-      setOriginPin(pin);
-      setOriginInfo(info);
-    }}
-  />
-  <View style={styles.routeArrowMid}>
-    <Ionicons name="arrow-forward" size={20} color={COLORS.secondary} />
-  </View>
-  <SmartRouteInput
-    label="Destination"
-    testIDPrefix="dest"
-    text={destText}
-    pin={destPin}
-    info={destInfo}
-    onChange={(t, pin, info) => {
-      setDestText(t);
-      setDestPin(pin);
-      setDestInfo(info);
-    }}
-  />
-</View>
+
+        <SectionTitle icon="navigate-outline" title="Route" />
+        <View style={styles.routeInputsRow}>
+          <SmartRouteInput
+            label="Origin"
+            testIDPrefix="origin"
+            text={originText}
+            pin={originPin}
+            info={originInfo}
+            onChange={(t, pin, info) => {
+              setOriginText(t);
+              setOriginPin(pin);
+              setOriginInfo(info);
+            }}
+          />
+          <View style={styles.routeArrowMid}>
+            <Ionicons name="arrow-forward" size={20} color={COLORS.secondary} />
+          </View>
+          <SmartRouteInput
+            label="Destination"
+            testIDPrefix="dest"
+            text={destText}
+            pin={destPin}
+            info={destInfo}
+            onChange={(t, pin, info) => {
+              setDestText(t);
+              setDestPin(pin);
+              setDestInfo(info);
+            }}
+          />
+        </View>
+
+        <SectionTitle icon="calendar-outline" title="Loading Date" />
+        <TouchableOpacity
+          testID="loading-date-btn"
+          style={[styles.stepperRow, { justifyContent: "center" }, styles.filledBorder]}
+          activeOpacity={0.8}
+          onPress={() => setShowDatePicker(true)}
+        >
+          <Ionicons name="calendar" size={18} color={COLORS.primary} />
+          <Text style={[styles.stepperDateText, { fontSize: 16 }]}>
+            {date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+          </Text>
+          <Ionicons name="chevron-down" size={16} color={COLORS.textMuted} style={{ marginLeft: 8 }} />
+        </TouchableOpacity>
+        {showDatePicker && (
+          <DateTimePicker
+            value={date}
+            mode="date"
+            display={Platform.OS === "ios" ? "spinner" : "default"}
+            minimumDate={today}
+            maximumDate={maxDate}
+            onChange={onDateChange}
+          />
+        )}
+
         <SectionTitle icon="bus-outline" title="Truck Type" />
         <View style={styles.truckRow} testID="truck-types-row">
           {TRUCK_TYPES.map((t) => {
             const on = truckType === t.name;
             return (
-              <TouchableOpacity key={t.name} testID={`truck-type-${t.name.replace(/\s+/g, "-")}`} onPress={() => setTruckType(t.name)} style={[styles.truckCard, on && styles.truckCardOn]} activeOpacity={0.7}>
+              <TouchableOpacity key={t.name} testID={`truck-type-${t.name.replace(/\s+/g, "-")}`} onPress={() => setTruckType(t.name)} style={[styles.truckCard, on && styles.truckCardOn, on && styles.filledBorder]} activeOpacity={0.7}>
                 <Image source={t.image} style={[styles.truckImg, on && styles.truckImgOn]} resizeMode="contain" />
                 <Text style={[styles.truckLabel, on && styles.truckLabelOn]} numberOfLines={1}>{t.name}</Text>
               </TouchableOpacity>
@@ -904,106 +968,168 @@ return (
           })}
         </View>
 
-<SectionTitle icon="scale-outline" title="Weight Capacity" />
-<View style={styles.stepperRow}>
-  <TouchableOpacity
-    style={styles.stepperBtn}
-    onPress={() => setWeight(w => Math.max(0.5, parseFloat((w - 0.5).toFixed(1))))}
-  >
-    <Text style={styles.stepperBtnText}>−</Text>
-  </TouchableOpacity>
-  <TouchableOpacity
-    style={styles.stepperCenter}
-    activeOpacity={0.8}
-    onPress={() => { setWeightInput(String(weight)); setWeightModalVisible(true); }}
-  >
-    <Text style={styles.stepperValue}>{weight.toFixed(1)}</Text>
-    <Text style={styles.stepperUnit}>tons</Text>
-  </TouchableOpacity>
-  <TouchableOpacity
-    style={styles.stepperBtn}
-    onPress={() => setWeight(w => parseFloat((w + 0.5).toFixed(1)))}
-  >
-    <Text style={styles.stepperBtnText}>+</Text>
-  </TouchableOpacity>
-</View>
-
-{/* Weight quick-entry modal */}
-<Modal visible={weightModalVisible} transparent animationType="fade" onRequestClose={() => setWeightModalVisible(false)}>
-  <TouchableOpacity style={wmStyles.backdrop} activeOpacity={1} onPress={() => setWeightModalVisible(false)}>
-    <TouchableOpacity style={wmStyles.sheet} activeOpacity={1}>
-      <Text style={wmStyles.title}>Enter Weight</Text>
-      <TextInput
-        style={wmStyles.input}
-        value={weightInput}
-        onChangeText={setWeightInput}
-        keyboardType="decimal-pad"
-        autoFocus
-        placeholder="e.g. 15"
-        placeholderTextColor={COLORS.textSubtle}
-      />
-      <View style={wmStyles.presets}>
-        {[1,2,5,10,15,20,25].map(n => (
-          <TouchableOpacity key={n} style={wmStyles.preset} onPress={() => setWeightInput(String(n))}>
-            <Text style={wmStyles.presetText}>{n}T</Text>
+        <SectionTitle icon="scale-outline" title="Available Load Capacity" />
+        <View style={[styles.stepperRow, weight > 0 && styles.filledBorder]}>
+          <TouchableOpacity
+            style={styles.stepperBtn}
+            onPress={() => setWeight(w => Math.max(0.5, parseFloat((w - 0.5).toFixed(1))))}
+          >
+            <Text style={styles.stepperBtnText}>-</Text>
           </TouchableOpacity>
-        ))}
-      </View>
-      <TouchableOpacity style={wmStyles.btn} onPress={() => {
-        const n = parseFloat(weightInput);
-        if (!isNaN(n) && n > 0) setWeight(parseFloat(n.toFixed(1)));
-        setWeightModalVisible(false);
-      }}>
-        <Text style={wmStyles.btnText}>Set Weight</Text>
-      </TouchableOpacity>
-    </TouchableOpacity>
-  </TouchableOpacity>
-</Modal>
+          <TouchableOpacity
+            style={styles.stepperCenter}
+            activeOpacity={0.8}
+            onPress={() => { setWeightInput(String(weight)); setWeightModalVisible(true); }}
+          >
+            <Text style={styles.stepperValue}>{weight.toFixed(1)}</Text>
+            <Text style={styles.stepperUnit}>tons</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.stepperBtn}
+            onPress={() => setWeight(w => parseFloat((w + 0.5).toFixed(1)))}
+          >
+            <Text style={styles.stepperBtnText}>+</Text>
+          </TouchableOpacity>
+        </View>
 
+        {/* Weight quick-entry modal */}
+        <Modal visible={weightModalVisible} transparent animationType="fade" onRequestClose={() => setWeightModalVisible(false)}>
+          <TouchableOpacity style={wmStyles.backdrop} activeOpacity={1} onPress={() => setWeightModalVisible(false)}>
+            <TouchableOpacity style={wmStyles.sheet} activeOpacity={1}>
+              <Text style={wmStyles.title}>Enter Weight</Text>
+              <TextInput
+                style={wmStyles.input}
+                value={weightInput}
+                onChangeText={setWeightInput}
+                keyboardType="decimal-pad"
+                autoFocus
+                placeholder="e.g. 15"
+                placeholderTextColor={COLORS.textSubtle}
+              />
+              <View style={wmStyles.presets}>
+                {[1,2,5,10,15,20,25].map(n => (
+                  <TouchableOpacity key={n} style={wmStyles.preset} onPress={() => setWeightInput(String(n))}>
+                    <Text style={wmStyles.presetText}>{n}T</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <TouchableOpacity style={wmStyles.btn} onPress={() => {
+                const n = parseFloat(weightInput);
+                if (!isNaN(n) && n > 0) setWeight(parseFloat(n.toFixed(1)));
+                setWeightModalVisible(false);
+              }}>
+                <Text style={wmStyles.btnText}>Set Weight</Text>
+              </TouchableOpacity>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </Modal>
 
-		  
-     <SectionTitle icon="layers-outline" title="Cargo Placement" />
-<View style={styles.placementRow} testID="placement-segment">
-  {PLACEMENT_OPTIONS.map((p) => {
-    const on = placement === p.key;
+        <SectionTitle icon="resize-outline" title="Available Space (optional)" />
+        <View style={styles.dimRow} testID="dimension-row">
+          <View style={styles.dimItem}>
+            <Text style={styles.dimLabel}>Length</Text>
+            <TextInput
+              testID="dim-length-input"
+              style={[styles.dimInput, dimL && styles.filledBorder]}
+              value={dimL}
+              onChangeText={(t) => {
+                const digits = t.replace(/\D/g, "");
+                if (!digits) { setDimL(""); return; }
+                const n = Math.min(40, parseInt(digits, 10));
+                setDimL(String(n));
+              }}
+              keyboardType="number-pad"
+              maxLength={2}
+              placeholder="0"
+              placeholderTextColor={COLORS.textSubtle}
+            />
+            <Text style={styles.dimUnit}>ft (max 40)</Text>
+          </View>
+          <View style={styles.dimItem}>
+            <Text style={styles.dimLabel}>Breadth</Text>
+            <TextInput
+              testID="dim-breadth-input"
+              style={[styles.dimInput, dimB && styles.filledBorder]}
+              value={dimB}
+              onChangeText={(t) => {
+                const digits = t.replace(/\D/g, "");
+                if (!digits) { setDimB(""); return; }
+                const n = Math.min(8, parseInt(digits, 10));
+                setDimB(String(n));
+              }}
+              keyboardType="number-pad"
+              maxLength={1}
+              placeholder="0"
+              placeholderTextColor={COLORS.textSubtle}
+            />
+            <Text style={styles.dimUnit}>ft (max 8)</Text>
+          </View>
+          <View style={styles.dimItem}>
+            <Text style={styles.dimLabel}>Height</Text>
+            <TextInput
+              testID="dim-height-input"
+              style={[styles.dimInput, dimH && styles.filledBorder]}
+              value={dimH}
+              onChangeText={(t) => {
+                const digits = t.replace(/\D/g, "");
+                if (!digits) { setDimH(""); return; }
+                const n = Math.min(9, parseInt(digits, 10));
+                setDimH(String(n));
+              }}
+              keyboardType="number-pad"
+              maxLength={1}
+              placeholder="0"
+              placeholderTextColor={COLORS.textSubtle}
+            />
+            <Text style={styles.dimUnit}>ft (max 9)</Text>
+          </View>
+        </View>
 
-    return (
-      <TouchableOpacity
-        key={p.key}
-        testID={`placement-${p.key.replace(" ", "-")}`}
-        style={[
-          styles.placementCardCompact,
-          on &&
-            (p.key === "Stackable"
-              ? styles.placementCardGreen
-              : styles.placementCardRed),
-        ]}
-        onPress={() => setPlacement(p.key)}
-        activeOpacity={0.7}
-      >
-        <Image
-          source={p.image}
-          style={styles.placementImgCompact}
-          resizeMode="contain"
-        />
+        <SectionTitle icon="pricetag-outline" title="Pricing (optional)" />
+        <View style={[styles.priceRow, pricePerTon && styles.filledBorder]}>
+          <Text style={styles.priceSymbol}>₹</Text>
+          <TextInput
+            testID="price-per-ton-input"
+            style={styles.priceInput}
+            value={pricePerTon}
+            onChangeText={(t) => setPricePerTon(t.replace(/\D/g, "").slice(0, 7))}
+            keyboardType="number-pad"
+            placeholder="0"
+            placeholderTextColor={COLORS.textSubtle}
+          />
+          <Text style={styles.priceSuffix}>/ ton</Text>
+        </View>
 
-        <Text
-          style={[
-            styles.placementLabelCompact,
-            on &&
-              (p.key === "Stackable"
-                ? styles.placementLabelGreen
-                : styles.placementLabelRed),
-          ]}
-        >
-          {p.label}
-        </Text>
-      </TouchableOpacity>
-    );
-  })}
-</View> 
-		  
-		  <SectionTitle icon="image-outline" title="Photos (optional)" />
+        <SectionTitle icon="layers-outline" title="Cargo Placement (optional)" />
+        <View style={styles.placementRow} testID="placement-segment">
+          {PLACEMENT_OPTIONS.map((p) => {
+            const on = placement === p.key;
+            return (
+              <TouchableOpacity
+                key={p.key}
+                testID={`placement-${p.key.replace(" ", "-")}`}
+                style={[
+                  styles.placementCardCompact,
+                  on && (p.key === "Stackable" ? styles.placementCardGreen : styles.placementCardRed),
+                ]}
+                onPress={() => setPlacement(prev => prev === p.key ? "" : p.key)}
+                activeOpacity={0.7}
+              >
+                <Image source={p.image} style={styles.placementImgCompact} resizeMode="contain" />
+                <Text
+                  style={[
+                    styles.placementLabelCompact,
+                    on && (p.key === "Stackable" ? styles.placementLabelGreen : styles.placementLabelRed),
+                  ]}
+                >
+                  {p.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        <SectionTitle icon="image-outline" title="Photos (optional)" />
         <Text style={styles.label}>Attach up to 3 photos of the truck or available space</Text>
         <View style={styles.photoRow} testID="photos-row">
           {[0, 1, 2].map((idx) => {
@@ -1027,23 +1153,6 @@ return (
           })}
         </View>
 
-
-      <SectionTitle icon="calendar-outline" title="Loading Date" />
-<View style={styles.stepperRow}>
-  <TouchableOpacity style={styles.stepperBtn} onPress={() => changeDate(-1)}>
-    <Text style={styles.stepperBtnText}>−</Text>
-  </TouchableOpacity>
-  <View style={styles.stepperCenter}>
-    <Ionicons name="calendar" size={14} color={COLORS.primary} />
-    <Text style={styles.stepperDateText}>
-      {date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
-    </Text>
-  </View>
-  <TouchableOpacity style={styles.stepperBtn} onPress={() => changeDate(1)}>
-    <Text style={styles.stepperBtnText}>+</Text>
-  </TouchableOpacity>
-</View>
-
         <View style={[styles.row, { marginTop: 24 }]}>
           <TouchableOpacity testID="submit-load-btn" style={[styles.primaryBtn, styles.flex1, { marginTop: 0 }]} onPress={() => submit(false)} disabled={loadingPost}>
             {loadingPost ? <ActivityIndicator color={COLORS.surface} /> : <><Ionicons name="checkmark-circle" size={18} color={COLORS.surface} /><Text style={styles.primaryBtnText}>Post</Text></>}
@@ -1056,8 +1165,7 @@ return (
         <View style={{ height: 40 }} />
       </ScrollView>
     </KeyboardAvoidingView>
-
-	   );
+  );
 }
 
 function PincodeHint({ info, pin, testID }: any) {
@@ -1445,13 +1553,13 @@ function SmartRouteInput({ label, testIDPrefix, text, pin, info, onChange }: {
       >
         {hasValue ? (
           <>
-            <Text style={sriStyles.pin} numberOfLines={1}>{pin},</Text>
+            <Text style={sriStyles.pin} numberOfLines={1}>{pin}</Text>
             {(() => {
               const loc = (info.locality || "").trim();
               const cty = (info.city || "").trim();
-              const showLoc = loc && loc.toLowerCase() !== cty.toLowerCase();
-              return showLoc ? (
-                <Text style={sriStyles.locality} numberOfLines={1}>{loc}</Text>
+              const areaLine = loc && loc.toLowerCase() !== cty.toLowerCase() ? loc : cty;
+              return areaLine ? (
+                <Text style={sriStyles.locality} numberOfLines={1}>{areaLine}</Text>
               ) : null;
             })()}
             <Text style={sriStyles.cityState} numberOfLines={1}>
@@ -1498,10 +1606,10 @@ const sriStyles = StyleSheet.create({
     minHeight: 104,
     justifyContent: "center",
   },
-  cardFilled: { borderColor: COLORS.primary, borderWidth: 1.5 },
+  cardFilled: { borderColor: COLORS.success, borderWidth: 1.5 },
   pin: { fontSize: 17, fontWeight: "800", color: COLORS.text, marginBottom: 4, letterSpacing: 0.2 },
-  locality: { fontSize: 14, fontWeight: "700", color: COLORS.text, marginBottom: 3 },
-  cityState: { fontSize: 11, color: COLORS.textMuted, fontStyle: "italic", fontWeight: "500" },
+  locality: { fontSize: 13, fontWeight: "700", color: COLORS.text, marginBottom: 3 },
+  cityState: { fontSize: 11, color: COLORS.textMuted, fontWeight: "600" },
   city: { fontSize: 15, fontWeight: "800", color: COLORS.text, marginBottom: 3 },
   state: { fontSize: 11, color: COLORS.textMuted, fontStyle: "italic", fontWeight: "500" },
   placeholder: { flexDirection: "row", alignItems: "center" },
@@ -1606,8 +1714,8 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
             </TouchableOpacity>
           )}
           <TouchableOpacity testID="find-space-btn" style={[styles.filterBtn, isFiltered && styles.filterBtnActive]} onPress={() => setShowFilter(true)}>
-            <Ionicons name="search" size={16} color={isFiltered ? COLORS.surface : COLORS.primary} />
-            <Text style={[styles.filterBtnText, isFiltered && { color: COLORS.surface }]}>Find Space</Text>
+            <Ionicons name="options-outline" size={16} color={isFiltered ? COLORS.surface : COLORS.primary} />
+            <Text style={[styles.filterBtnText, isFiltered && { color: COLORS.surface }]}>Filter</Text>
             {isFiltered && <View style={styles.filterDot} />}
           </TouchableOpacity>
         </View>
@@ -1695,6 +1803,7 @@ const ivStyles = StyleSheet.create({
 
 function LoadCard({ load, isMine, distance }: { load: Load; isMine: boolean; distance?: { origin: number; dest: number; offRoute: boolean } }) {
   const [viewerStart, setViewerStart] = useState<number | null>(null);
+  const [showImages, setShowImages] = useState(false);
   const callPoster = () => Linking.openURL(`tel:${load.poster_phone}`).catch(() => Alert.alert("Error", "Cannot open dialer"));
   const dateStr = useMemo(() => { try { return new Date(load.loading_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }); } catch { return load.loading_date; } }, [load.loading_date]);
 
@@ -1717,9 +1826,13 @@ function LoadCard({ load, isMine, distance }: { load: Load; isMine: boolean; dis
       ? Array.from({ length: imageCount }).map((_, i) => getImageUri(i))
       : [];
 
+  const truckImg = TRUCK_TYPES.find(t => t.name === load.truck_type)?.image;
+  const hasDim = load.dimension_length || load.dimension_breadth || load.dimension_height;
+  const dimStr = hasDim ? `${load.dimension_length || "-"}×${load.dimension_breadth || "-"}×${load.dimension_height || "-"}ft` : null;
+
   return (
     <View style={styles.card} testID={`load-card-${load.id}`}>
-      {/* ── LINE 1: Route ── */}
+      {/* LINE 1: Route */}
       <View style={styles.cardRouteRow}>
         <View style={styles.flex1}>
           <View style={cardStyles.routeEndpoint}>
@@ -1756,64 +1869,44 @@ function LoadCard({ load, isMine, distance }: { load: Load; isMine: boolean; dis
 
       <View style={styles.divider} />
 
-      {/* ── LINE 2: Weight · Date · Truck · Placement in one row ── */}
-      <View style={cardStyles.metaRow}>
+      {/* LINE 2: Truck mini-image · Weight · Dimensions · Price · Date · Placement — single line, horizontal scroll if overflow */}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={cardStyles.metaScrollContent}>
+        {truckImg ? (
+          <View style={cardStyles.truckMiniWrap}>
+            <Image source={truckImg} style={cardStyles.truckMiniImg} resizeMode="contain" />
+          </View>
+        ) : null}
         <View style={cardStyles.metaChip}>
           <Ionicons name="barbell-outline" size={12} color={COLORS.textMuted} />
-          <Text style={cardStyles.metaText}>{load.weight_tons} T</Text>
+          <Text style={cardStyles.metaText}>{load.weight_tons}T</Text>
         </View>
-        <Text style={cardStyles.metaSep}>·</Text>
+        {dimStr ? (
+          <View style={cardStyles.metaChip}>
+            <Ionicons name="resize-outline" size={12} color={COLORS.textMuted} />
+            <Text style={cardStyles.metaText}>{dimStr}</Text>
+          </View>
+        ) : null}
+        {load.price_per_ton ? (
+          <View style={cardStyles.metaChip}>
+            <Ionicons name="pricetag-outline" size={12} color={COLORS.textMuted} />
+            <Text style={cardStyles.metaText}>₹{load.price_per_ton}/T</Text>
+          </View>
+        ) : null}
         <View style={cardStyles.metaChip}>
           <Ionicons name="calendar-outline" size={12} color={COLORS.textMuted} />
           <Text style={cardStyles.metaText}>{dateStr}</Text>
         </View>
-        <Text style={cardStyles.metaSep}>·</Text>
-        {load.truck_type ? (
-          <View style={[cardStyles.metaChip, cardStyles.truckMeta]}>
-            <Text style={[cardStyles.metaText, { color: COLORS.surface }]}>{load.truck_type}</Text>
+        {load.cargo_placement ? (
+          <View style={[cardStyles.metaChip, cardStyles.placementMeta]}>
+            <Text style={[cardStyles.metaText, { color: COLORS.secondary }]}>{load.cargo_placement}</Text>
           </View>
         ) : null}
-        {load.cargo_placement ? (
-          <>
-            <Text style={cardStyles.metaSep}>·</Text>
-            <View style={[cardStyles.metaChip, cardStyles.placementMeta]}>
-              <Text style={[cardStyles.metaText, { color: COLORS.secondary }]}>{load.cargo_placement}</Text>
-            </View>
-          </>
-        ) : null}
-      </View>
+      </ScrollView>
 
       <View style={styles.divider} />
 
-      {/* ── LINE 3: Images + Contact ── */}
+      {/* LINE 3: Contact + Call */}
       <View style={cardStyles.line3Row}>
-        {/* Photos section */}
-        <View style={cardStyles.photosSection}>
-          {viewerImages.length > 0 ? (
-            <>
-              {viewerImages.slice(0, 3).map((src, i) => (
-                <TouchableOpacity
-                  key={i}
-                  testID={`thumb-${load.id}-${i}`}
-                  activeOpacity={0.8}
-                  onPress={() => setViewerStart(i)}
-                  style={cardStyles.thumbWrap}
-                >
-                  <Image source={{ uri: src }} style={cardStyles.thumb} resizeMode="cover" />
-                  {i === 2 && viewerImages.length > 3 ? (
-                    <View style={cardStyles.thumbMoreOverlay}>
-                      <Text style={cardStyles.thumbMoreText}>+{viewerImages.length - 3}</Text>
-                    </View>
-                  ) : null}
-                </TouchableOpacity>
-              ))}
-            </>
-          ) : (
-            <Text style={cardStyles.noPhotos}>No photos</Text>
-          )}
-        </View>
-
-        {/* Contact section */}
         <View style={cardStyles.contactSection}>
           <Text style={styles.posterName} numberOfLines={1}>{load.poster_name}{isMine && <Text style={styles.youTag}> · You</Text>}</Text>
           {load.poster_company ? <Text style={styles.posterCompany} numberOfLines={1}>{load.poster_company}</Text> : null}
@@ -1827,6 +1920,40 @@ function LoadCard({ load, isMine, distance }: { load: Load; isMine: boolean; dis
           </TouchableOpacity>
         )}
       </View>
+
+      {/* Photos: lazy-load with Show Images button */}
+      {viewerImages.length > 0 ? (
+        showImages ? (
+          <View style={cardStyles.photosSectionFull}>
+            {viewerImages.slice(0, 3).map((src, i) => (
+              <TouchableOpacity
+                key={i}
+                testID={`thumb-${load.id}-${i}`}
+                activeOpacity={0.8}
+                onPress={() => setViewerStart(i)}
+                style={cardStyles.thumbWrap}
+              >
+                <Image source={{ uri: src }} style={cardStyles.thumbBig} resizeMode="cover" />
+                {i === 2 && viewerImages.length > 3 ? (
+                  <View style={cardStyles.thumbMoreOverlay}>
+                    <Text style={cardStyles.thumbMoreText}>+{viewerImages.length - 3}</Text>
+                  </View>
+                ) : null}
+              </TouchableOpacity>
+            ))}
+          </View>
+        ) : (
+          <TouchableOpacity
+            testID={`show-images-btn-${load.id}`}
+            style={styles.showImagesBtn}
+            onPress={() => setShowImages(true)}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="images-outline" size={16} color={COLORS.primary} />
+            <Text style={styles.showImagesBtnText}>Show Images ({viewerImages.length})</Text>
+          </TouchableOpacity>
+        )
+      ) : null}
 
       <ImageViewerModal
         visible={viewerStart !== null}
@@ -1846,16 +1973,20 @@ const cardStyles = StyleSheet.create({
   routeComma: { fontSize: 14, fontWeight: "700", color: COLORS.text },
   routeCity: { fontSize: 14, fontWeight: "800", color: COLORS.text },
   routeState: { fontSize: 10, color: COLORS.textMuted, fontStyle: "italic", marginTop: 1 },
-  metaRow: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 4 },
-  metaChip: { flexDirection: "row", alignItems: "center", gap: 3 },
+  metaScrollContent: { flexDirection: "row", alignItems: "center", gap: 10, paddingRight: 8 },
+  metaChip: { flexDirection: "row", alignItems: "center", gap: 4 },
   metaText: { fontSize: 12, color: COLORS.text, fontWeight: "600" },
   metaSep: { fontSize: 12, color: COLORS.textSubtle },
+  truckMiniWrap: { width: 44, height: 28, alignItems: "center", justifyContent: "center", marginRight: 2 },
+  truckMiniImg: { width: 44, height: 28 },
   truckMeta: { backgroundColor: COLORS.primary, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 100 },
   placementMeta: { backgroundColor: "#FFF4EE", paddingHorizontal: 8, paddingVertical: 2, borderRadius: 100 },
   line3Row: { flexDirection: "row", alignItems: "center", gap: 10 },
   photosSection: { flexDirection: "row", gap: 6, alignItems: "center" },
+  photosSectionFull: { flexDirection: "row", gap: 8, marginTop: 12 },
   thumbWrap: { position: "relative", borderRadius: 8, overflow: "hidden" },
   thumb: { width: 52, height: 52, borderRadius: 8, backgroundColor: COLORS.bg },
+  thumbBig: { width: 90, height: 90, borderRadius: 8, backgroundColor: COLORS.bg },
   thumbMoreOverlay: { position: "absolute", inset: 0, top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.55)", alignItems: "center", justifyContent: "center" },
   thumbMoreText: { color: COLORS.surface, fontSize: 14, fontWeight: "800" },
   showImagesBtn: { flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: COLORS.border, backgroundColor: COLORS.bg },
@@ -1878,14 +2009,13 @@ function Spec({ icon, label, value }: any) {
 function FindSpaceModal({ visible, initial, onClose, onApply }: {
   visible: boolean; initial: ActiveFilter | null; onClose: () => void; onApply: (f: ActiveFilter) => Promise<void>;
 }) {
-  const insets = useSafeAreaInsets();
   const [originText, setOriginText] = useState("");
   const [originPin, setOriginPin] = useState("");
   const [originInfo, setOriginInfo] = useState<RouteInfo>(null);
   const [destText, setDestText] = useState("");
   const [destPin, setDestPin] = useState("");
   const [destInfo, setDestInfo] = useState<RouteInfo>(null);
-  const [weightKg, setWeightKg] = useState("");
+  const [weightTons, setWeightTons] = useState("");
   const [originErr, setOriginErr] = useState("");
   const [destErr, setDestErr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1894,7 +2024,7 @@ function FindSpaceModal({ visible, initial, onClose, onApply }: {
     if (visible) {
       setOriginPin(initial?.origin || ""); setOriginText(initial?.origin || ""); setOriginInfo(null);
       setDestPin(initial?.dest || ""); setDestText(initial?.dest || ""); setDestInfo(null);
-      setWeightKg(initial?.weightKg ? String(initial.weightKg) : "");
+      setWeightTons(initial?.weightKg ? String(initial.weightKg / 1000) : "");
       setOriginErr(""); setDestErr("");
     }
   }, [visible, initial]);
@@ -1903,8 +2033,9 @@ function FindSpaceModal({ visible, initial, onClose, onApply }: {
     setOriginErr(""); setDestErr("");
     if (!/^\d{6}$/.test(originPin)) { setOriginErr("Select a valid origin from the list or enter a 6-digit pincode"); return; }
     if (!/^\d{6}$/.test(destPin)) { setDestErr("Select a valid destination from the list or enter a 6-digit pincode"); return; }
-    const w = parseFloat(weightKg);
-    if (!w || w <= 0) return Alert.alert("Required", "Enter cargo weight in kg");
+    const wTons = parseFloat(weightTons);
+    if (!wTons || wTons <= 0) return Alert.alert("Required", "Enter cargo weight in tons");
+    const w = wTons * 1000; // convert tons to kg for downstream filter
     setBusy(true);
     try {
       const [oc, dc] = await Promise.all([geocodePin(originPin), geocodePin(destPin)]);
@@ -1915,65 +2046,60 @@ function FindSpaceModal({ visible, initial, onClose, onApply }: {
   };
 
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <View style={styles.modalBackdrop}>
-        <TouchableOpacity activeOpacity={1} style={{ flex: 1 }} onPress={onClose} />
-        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ width: "100%" }}>
-          <View
-            style={[
-              styles.modalSheet,
-              styles.modalSheetBottom,
-              { maxHeight: Dimensions.get("window").height * 0.9, paddingBottom: Math.max(insets.bottom, 12) + 8 },
-            ]}
-            testID="find-space-modal"
-          >
-            <View style={styles.modalHandle} />
-            <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-              <Text style={styles.modalTitle}>Find Space</Text>
-              <Text style={styles.modalSubtitle}>Enter your cargo details to find matching trucks within 30 km of your route.</Text>
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose} presentationStyle="fullScreen">
+      <SafeAreaView style={[styles.fill, { backgroundColor: COLORS.bg }]} edges={["top"]}>
+        <View style={styles.fsHeader}>
+          <TouchableOpacity onPress={onClose} testID="fs-back-btn" style={styles.iconBtn}>
+            <Ionicons name="arrow-back" size={24} color={COLORS.text} />
+          </TouchableOpacity>
+          <Text style={styles.fsHeaderTitle}>Filter</Text>
+          <View style={{ width: 32 }} />
+        </View>
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.fill}>
+          <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
+            <Text style={styles.modalSubtitle}>Enter your cargo details to find matching trucks within 30 km of your route.</Text>
 
-              <SectionTitle icon="navigate-outline" title="Route" />
-              <View style={styles.routeInputsRow}>
-                <SmartRouteInput
-                  label="My Origin"
-                  testIDPrefix="fs-origin"
-                  text={originText}
-                  pin={originPin}
-                  info={originInfo}
-                  onChange={(t, p, i) => { setOriginText(t); setOriginPin(p); setOriginInfo(i); setOriginErr(""); }}
-                />
-                <View style={styles.routeArrowMid}>
-                  <Ionicons name="arrow-forward" size={20} color={COLORS.secondary} />
-                </View>
-                <SmartRouteInput
-                  label="My Destination"
-                  testIDPrefix="fs-dest"
-                  text={destText}
-                  pin={destPin}
-                  info={destInfo}
-                  onChange={(t, p, i) => { setDestText(t); setDestPin(p); setDestInfo(i); setDestErr(""); }}
-                />
+            <SectionTitle icon="navigate-outline" title="Route" />
+            <View style={styles.routeInputsRow}>
+              <SmartRouteInput
+                label="My Origin"
+                testIDPrefix="fs-origin"
+                text={originText}
+                pin={originPin}
+                info={originInfo}
+                onChange={(t, p, i) => { setOriginText(t); setOriginPin(p); setOriginInfo(i); setOriginErr(""); }}
+              />
+              <View style={styles.routeArrowMid}>
+                <Ionicons name="arrow-forward" size={20} color={COLORS.secondary} />
               </View>
-              {originErr ? <Text style={[styles.errorText, { marginTop: -8, marginBottom: 8 }]}>{originErr}</Text> : null}
-              {destErr ? <Text style={[styles.errorText, { marginTop: -8, marginBottom: 8 }]}>{destErr}</Text> : null}
+              <SmartRouteInput
+                label="My Destination"
+                testIDPrefix="fs-dest"
+                text={destText}
+                pin={destPin}
+                info={destInfo}
+                onChange={(t, p, i) => { setDestText(t); setDestPin(p); setDestInfo(i); setDestErr(""); }}
+              />
+            </View>
+            {originErr ? <Text style={[styles.errorText, { marginTop: -8, marginBottom: 8 }]}>{originErr}</Text> : null}
+            {destErr ? <Text style={[styles.errorText, { marginTop: -8, marginBottom: 8 }]}>{destErr}</Text> : null}
 
-              <Field label="Cargo Weight (kg)">
-                <TextInput testID="fs-weight-input" style={styles.input} placeholder="e.g., 800" placeholderTextColor={COLORS.textSubtle} value={weightKg} onChangeText={setWeightKg} keyboardType="decimal-pad" />
-              </Field>
+            <Field label="Cargo Weight (tons)">
+              <TextInput testID="fs-weight-input" style={[styles.input, weightTons && styles.filledBorder]} placeholder="e.g., 5" placeholderTextColor={COLORS.textSubtle} value={weightTons} onChangeText={(t) => setWeightTons(t.replace(/[^0-9.]/g, ""))} keyboardType="decimal-pad" />
+            </Field>
 
-              <View style={styles.row}>
-                <TouchableOpacity testID="fs-cancel-btn" style={[styles.outlineBtn, styles.flex1]} onPress={onClose} disabled={busy}>
-                  <Text style={styles.outlineBtnText}>Cancel</Text>
-                </TouchableOpacity>
-                <View style={{ width: 12 }} />
-                <TouchableOpacity testID="fs-apply-btn" style={[styles.primaryBtn, styles.flex1, { marginTop: 0 }]} onPress={submit} disabled={busy}>
-                  {busy ? <ActivityIndicator color={COLORS.surface} /> : <Text style={styles.primaryBtnText}>Show Matching Trucks</Text>}
-                </TouchableOpacity>
-              </View>
-            </ScrollView>
-          </View>
+            <View style={styles.row}>
+              <TouchableOpacity testID="fs-cancel-btn" style={[styles.outlineBtn, styles.flex1]} onPress={onClose} disabled={busy}>
+                <Text style={styles.outlineBtnText}>Cancel</Text>
+              </TouchableOpacity>
+              <View style={{ width: 12 }} />
+              <TouchableOpacity testID="fs-apply-btn" style={[styles.primaryBtn, styles.flex1, { marginTop: 0 }]} onPress={submit} disabled={busy}>
+                {busy ? <ActivityIndicator color={COLORS.surface} /> : <Text style={styles.primaryBtnText}>Show Matching Trucks</Text>}
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
         </KeyboardAvoidingView>
-      </View>
+      </SafeAreaView>
     </Modal>
   );
 }
@@ -2006,6 +2132,7 @@ const styles = StyleSheet.create({
   header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingVertical: 14, backgroundColor: COLORS.surface, borderBottomWidth: 1, borderBottomColor: COLORS.border },
   headerLeft: { flexDirection: "row", alignItems: "center", gap: 12 },
   logoBox: { width: 40, height: 40, backgroundColor: COLORS.primary, borderRadius: 10, alignItems: "center", justifyContent: "center" },
+  logoImg: { width: 44, height: 44, borderRadius: 10 },
   headerTitle: { fontSize: 18, fontWeight: "700", color: COLORS.text },
   headerSubtitle: { fontSize: 13, color: COLORS.textMuted, marginTop: 2 },
   iconBtn: { padding: 4 },
@@ -2147,8 +2274,20 @@ const styles = StyleSheet.create({
   modalSheetBottom: { width: "100%", alignSelf: "stretch", borderBottomLeftRadius: 0, borderBottomRightRadius: 0 },
   modalHandle: { width: 40, height: 4, backgroundColor: COLORS.border, borderRadius: 2, alignSelf: "center", marginBottom: 16 },
   modalTitle: { fontSize: 22, fontWeight: "700", color: COLORS.text, marginBottom: 6 },
+  fsHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 12, paddingVertical: 12, backgroundColor: COLORS.surface, borderBottomWidth: 1, borderBottomColor: COLORS.border },
+  fsHeaderTitle: { fontSize: 18, fontWeight: "700", color: COLORS.text },
   modalSubtitle: { fontSize: 13, color: COLORS.textMuted, marginBottom: 20, lineHeight: 18 },
   inputError: { borderColor: COLORS.danger },
+  filledBorder: { borderColor: COLORS.success, borderWidth: 1.5 },
+  dimRow: { flexDirection: "row", gap: 10, marginBottom: 14 },
+  dimItem: { flex: 1 },
+  dimLabel: { fontSize: 11, fontWeight: "700", color: COLORS.textMuted, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6, textAlign: "center" },
+  dimInput: { backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border, borderRadius: 10, paddingVertical: 14, paddingHorizontal: 10, fontSize: 20, fontWeight: "700", color: COLORS.text, textAlign: "center" },
+  dimUnit: { fontSize: 10, color: COLORS.textSubtle, textAlign: "center", marginTop: 4 },
+  priceRow: { flexDirection: "row", alignItems: "center", backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 4, marginBottom: 14 },
+  priceSymbol: { fontSize: 22, fontWeight: "700", color: COLORS.primary, marginRight: 6 },
+  priceInput: { flex: 1, fontSize: 20, fontWeight: "700", color: COLORS.text, paddingVertical: 14 },
+  priceSuffix: { fontSize: 14, color: COLORS.textMuted, fontWeight: "600", marginLeft: 6 },
   errorText: { fontSize: 12, color: COLORS.danger, marginTop: 6, fontWeight: "500" },
   filterDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: COLORS.secondary, marginLeft: 6 },
   clearChip: { flexDirection: "row", alignItems: "center", paddingVertical: 6, paddingHorizontal: 10, borderRadius: 100, backgroundColor: COLORS.bg, borderWidth: 1, borderColor: COLORS.border, gap: 4 },

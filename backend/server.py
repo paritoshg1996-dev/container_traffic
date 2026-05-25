@@ -89,6 +89,10 @@ class LoadCreate(BaseModel):
     truck_type: str = ""
     weight_tons: float
     space_cuft: Optional[float] = None
+    dimension_length: Optional[float] = None
+    dimension_breadth: Optional[float] = None
+    dimension_height: Optional[float] = None
+    price_per_ton: Optional[float] = None
     loading_date: str
     poster_name: str
     poster_phone: str
