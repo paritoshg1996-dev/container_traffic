@@ -59,6 +59,7 @@ loading_date, poster_name, poster_phone, poster_company, created_at, images[]
 ```
 
 ## Recent Changes (May 2026)
+- **Native Firebase Phone Auth audit + auto-read OTP**: Migrated the OTP screen from the basic `signInWithPhoneNumber` flow to the full state-machine flow using `auth().verifyPhoneNumber(...).on('state_changed', ...)` + `auth().onAuthStateChanged(...)`. Handles `CODE_SENT`, `AUTO_VERIFIED` (silent SMS Retriever — no SMS permission needed), `AUTO_VERIFY_TIMEOUT`, and `ERROR` states. On a properly configured Android build, the SMS is verified silently and the user is signed in **without typing the OTP**. Removed `expo-web-browser` (was unused). Verified there is **no** Firebase Web SDK, **no** `RecaptchaVerifier`, **no** `signInWithRedirect`, **no** `firebaseapp.com` redirect, **no** `sessionStorage`, and **no** `expo-auth-session` anywhere in the code path. Added `@react-native-firebase/app` config plugin and `expo.android.googleServicesFile` to `app.json` so Expo prebuild keeps the native Firebase config wired on a clean rebuild. Added `expo-build-properties` to pin `minSdkVersion=23` (required by RNFirebase v21).
 - Renamed app to "Truck Traffic PTL" with new logo across header / profile / OTP screens.
 - App icon, adaptive icon, splash, favicon and app-image all updated to new logo. App.json `name` set to `Truck Traffic PTL` (device drawer will show this after APK rebuild).
 - Removed logo image from in-app header (now header shows only "Truck Traffic PTL" text + greeting).

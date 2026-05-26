@@ -13,6 +13,7 @@
     },
     "android": {
       "package": "com.ptlmarket.trucktraffic",
+      "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#000"
@@ -27,6 +28,15 @@
     "plugins": [
       "expo-router",
       "expo-speech-recognition",
+      "@react-native-firebase/app",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 23
+          }
+        }
+      ],
       [
         "expo-contacts",
         {

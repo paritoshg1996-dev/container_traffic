@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "306056907973",
+    "project_id": "ptl-market",
+    "storage_bucket": "ptl-market.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:306056907973:android:e33c43f7043534bf2c74ac",
+        "android_client_info": {
+          "package_name": "com.ptlmarket.trucktraffic"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA_eLI5nDD4nYA4hrrXgwGkHlE78wF32fM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

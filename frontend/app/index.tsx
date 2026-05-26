@@ -34,15 +34,27 @@ const API = `https://ptl-market.onrender.com/api`;
 const PROFILE_KEY = "profile";
 const PHONE_VERIFIED_KEY = "phoneVerified";
 
-// Lazy-load @react-native-firebase/auth so the web preview (no native module)
-// doesn't crash on import. On Android APK build it loads normally.
-let firebaseAuth: any = null;
+// === Native Firebase Phone Auth (Android-only) ===
+// We use a defensive lazy require so the web preview (which has no native
+// module) doesn't crash on import. On a real Android build the require
+// always succeeds and the FULL NATIVE flow is used:
+//   - auth().verifyPhoneNumber(phone).on('state_changed', ...)
+//     -> handles CODE_SENT, AUTO_VERIFIED (silent SMS retrieval), ERROR
+//   - auth().onAuthStateChanged(user) is the source of truth: when a user
+//     appears we mint a fresh ID token and verify it on the backend.
+// There is NO Firebase Web SDK, NO RecaptchaVerifier, NO signInWithRedirect,
+// NO firebaseapp.com browser page, NO sessionStorage, NO expo-auth-session
+// anywhere in this flow.
+let rnfAuthModule: any = null;
 try {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  firebaseAuth = require("@react-native-firebase/auth").default;
+  rnfAuthModule = require("@react-native-firebase/auth");
 } catch {
-  firebaseAuth = null;
+  rnfAuthModule = null;
 }
+const firebaseAuth: any = rnfAuthModule?.default || null;
+const PhoneAuthState: any = firebaseAuth?.PhoneAuthState || null;
+const PhoneAuthProvider: any = firebaseAuth?.PhoneAuthProvider || null;
 
 type PhoneVerified = {
   phone: string;       // 10-digit local form, e.g. "9876543210"
@@ -315,8 +327,11 @@ function PhoneVerification({ onVerified }: { onVerified: (v: PhoneVerified) => v
   const [phone, setPhone] = useState("");
   const [otp, setOtp] = useState("");
   const [busy, setBusy] = useState(false);
-  const [confirmation, setConfirmation] = useState<any>(null);
+  const [verificationId, setVerificationId] = useState<string | null>(null);
+  const [autoVerified, setAutoVerified] = useState(false);
   const [resendTimer, setResendTimer] = useState(0);
+  const listenerRef = useRef<any>(null);
+  const fullPhoneRef = useRef<string>("");
 
   // Resend countdown
   useEffect(() => {
@@ -325,50 +340,19 @@ function PhoneVerification({ onVerified }: { onVerified: (v: PhoneVerified) => v
     return () => clearTimeout(t);
   }, [resendTimer]);
 
-  const sendOtp = async () => {
-    if (!/^\d{10}$/.test(phone.trim())) {
-      return Alert.alert("Invalid number", "Enter a valid 10-digit Indian mobile number.");
-    }
-    if (!firebaseAuth) {
-      return Alert.alert(
-        "Native build required",
-        "Phone OTP verification requires the Android app build. The web preview cannot send SMS. Please install the APK on your phone to test.",
-      );
-    }
-    setBusy(true);
-    try {
-      const fullPhone = `+91${phone.trim()}`;
-      const conf = await firebaseAuth().signInWithPhoneNumber(fullPhone);
-      setConfirmation(conf);
-      setStage("otp");
-      setResendTimer(45);
-    } catch (e: any) {
-      console.warn("OTP send failed:", e);
-      const code = e?.code || "";
-      let msg = "Could not send OTP. Please check your number and try again.";
-      if (code === "auth/invalid-phone-number") msg = "The phone number is invalid.";
-      else if (code === "auth/too-many-requests") msg = "Too many requests. Please try again later.";
-      else if (code === "auth/network-request-failed") msg = "Network error. Please check your internet connection.";
-      else if (e?.message) msg = e.message;
-      Alert.alert("Failed to send OTP", msg);
-    } finally {
-      setBusy(false);
-    }
-  };
+  // Stop any pending PhoneAuthListener when the screen unmounts
+  useEffect(() => {
+    return () => {
+      try { listenerRef.current?.removeAllListeners?.(); } catch {}
+      listenerRef.current = null;
+    };
+  }, []);
 
-  const verifyOtp = async () => {
-    if (!/^\d{6}$/.test(otp.trim())) {
-      return Alert.alert("Invalid code", "Enter the 6-digit code sent to your phone.");
-    }
-    if (!confirmation) {
-      return Alert.alert("Session expired", "Please request a new OTP.");
-    }
-    setBusy(true);
+  // Backend token verification helper — called whenever we have a signed-in
+  // user (either via manual OTP entry OR via silent auto-retrieval).
+  const completeWithSignedInUser = useCallback(async (user: any) => {
     try {
-      const userCred = await confirmation.confirm(otp.trim());
-      const idToken: string = await userCred.user.getIdToken();
-
-      // Verify on backend (also fetches the verified phone number)
+      const idToken: string = await user.getIdToken(true);
       const res = await fetch(`${API}/auth/verify-token`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -381,28 +365,153 @@ function PhoneVerification({ onVerified }: { onVerified: (v: PhoneVerified) => v
       const data = await res.json();
       const verified: PhoneVerified = {
         phone: data.phone_local || phone.trim(),
-        phoneFull: data.phone_number || `+91${phone.trim()}`,
+        phoneFull: data.phone_number || fullPhoneRef.current,
         verifiedAt: data.verified_at || new Date().toISOString(),
-        uid: data.uid || userCred.user.uid,
+        uid: data.uid || user.uid,
       };
       onVerified(verified);
     } catch (e: any) {
-      console.warn("OTP verify failed:", e);
+      console.warn("Backend token verify failed:", e);
+      Alert.alert("Verification failed", e?.message || "Could not verify the session. Please retry.");
+      setBusy(false);
+    }
+  }, [onVerified, phone]);
+
+  // onAuthStateChanged = single source of truth. As soon as a phone user
+  // is signed in (auto-retrieved OR manually confirmed) we proceed.
+  useEffect(() => {
+    if (!firebaseAuth) return;
+    const unsub = firebaseAuth().onAuthStateChanged((user: any) => {
+      if (user && user.phoneNumber) {
+        completeWithSignedInUser(user);
+      }
+    });
+    return () => { try { unsub(); } catch {} };
+  }, [completeWithSignedInUser]);
+
+  const sendOtp = async () => {
+    if (!/^\d{10}$/.test(phone.trim())) {
+      return Alert.alert("Invalid number", "Enter a valid 10-digit Indian mobile number.");
+    }
+    if (!firebaseAuth) {
+      return Alert.alert(
+        "Native build required",
+        "Phone OTP verification uses native Firebase on Android. Please install the APK on your phone to use this feature.",
+      );
+    }
+    setBusy(true);
+    setAutoVerified(false);
+    setOtp("");
+    setVerificationId(null);
+    const fullPhone = `+91${phone.trim()}`;
+    fullPhoneRef.current = fullPhone;
+
+    try {
+      // Stop any previous listener
+      try { listenerRef.current?.removeAllListeners?.(); } catch {}
+
+      // verifyPhoneNumber returns a PhoneAuthListener that emits a state
+      // machine. This is the API that supports silent auto-retrieval on
+      // Android (no SMS reading permission required — uses SMS Retriever).
+      const listener = firebaseAuth().verifyPhoneNumber(fullPhone, 60);
+      listenerRef.current = listener;
+
+      listener.on(
+        "state_changed",
+        async (snap: any) => {
+          switch (snap.state) {
+            case PhoneAuthState?.CODE_SENT: {
+              setVerificationId(snap.verificationId);
+              setStage("otp");
+              setResendTimer(45);
+              setBusy(false);
+              break;
+            }
+            case PhoneAuthState?.AUTO_VERIFIED: {
+              // Android silently retrieved the SMS. Show the code briefly
+              // in the input, then sign in via credential.
+              if (snap.code) setOtp(snap.code);
+              setAutoVerified(true);
+              try {
+                const credential = PhoneAuthProvider.credential(
+                  snap.verificationId,
+                  snap.code,
+                );
+                await firebaseAuth().signInWithCredential(credential);
+                // onAuthStateChanged effect will call completeWithSignedInUser
+              } catch (e: any) {
+                console.warn("Auto-verify sign-in failed:", e);
+                Alert.alert("Verification failed", e?.message || "Auto-verification could not complete. Please enter the code manually.");
+                setBusy(false);
+                setAutoVerified(false);
+              }
+              break;
+            }
+            case PhoneAuthState?.AUTO_VERIFY_TIMEOUT: {
+              // Silent auto-retrieve timed out. Stay on OTP screen.
+              setBusy(false);
+              break;
+            }
+            case PhoneAuthState?.ERROR: {
+              const code = snap.error?.code || "";
+              let msg = "Could not send OTP. Please check your number and try again.";
+              if (code === "auth/invalid-phone-number") msg = "The phone number is invalid.";
+              else if (code === "auth/too-many-requests") msg = "Too many requests. Please try again later.";
+              else if (code === "auth/network-request-failed") msg = "Network error. Please check your internet connection.";
+              else if (snap.error?.message) msg = snap.error.message;
+              Alert.alert("Failed to send OTP", msg);
+              setBusy(false);
+              break;
+            }
+            default:
+              break;
+          }
+        },
+        (error: any) => {
+          console.warn("PhoneAuthListener error:", error);
+          Alert.alert("Failed to send OTP", error?.message || "Please try again.");
+          setBusy(false);
+        },
+      );
+    } catch (e: any) {
+      console.warn("verifyPhoneNumber failed:", e);
+      Alert.alert("Failed to send OTP", e?.message || "Please try again.");
+      setBusy(false);
+    }
+  };
+
+  const verifyOtp = async () => {
+    if (autoVerified) return; // already signed in via auto-retrieval
+    if (!/^\d{6}$/.test(otp.trim())) {
+      return Alert.alert("Invalid code", "Enter the 6-digit code sent to your phone.");
+    }
+    if (!verificationId) {
+      return Alert.alert("Session expired", "Please request a new OTP.");
+    }
+    setBusy(true);
+    try {
+      const credential = PhoneAuthProvider.credential(verificationId, otp.trim());
+      await firebaseAuth().signInWithCredential(credential);
+      // onAuthStateChanged will fire and call completeWithSignedInUser
+    } catch (e: any) {
+      console.warn("Manual sign-in failed:", e);
       const code = e?.code || "";
       let msg = "Could not verify the code. Please try again.";
       if (code === "auth/invalid-verification-code") msg = "The OTP you entered is incorrect.";
       else if (code === "auth/code-expired") msg = "OTP expired. Please request a new one.";
       else if (e?.message) msg = e.message;
       Alert.alert("Verification failed", msg);
-    } finally {
       setBusy(false);
     }
   };
 
   const changeNumber = () => {
+    try { listenerRef.current?.removeAllListeners?.(); } catch {}
+    listenerRef.current = null;
     setStage("phone");
     setOtp("");
-    setConfirmation(null);
+    setVerificationId(null);
+    setAutoVerified(false);
     setResendTimer(0);
   };
 
@@ -411,15 +520,17 @@ function PhoneVerification({ onVerified }: { onVerified: (v: PhoneVerified) => v
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.fill}>
         <ScrollView contentContainerStyle={styles.profileWrap} keyboardShouldPersistTaps="handled">
           <View style={styles.profileLogo}>
-            <Ionicons name={stage === "phone" ? "phone-portrait" : "shield-checkmark"} size={36} color={COLORS.surface} />
+            <Ionicons name={stage === "phone" ? "phone-portrait" : (autoVerified ? "checkmark-done" : "shield-checkmark")} size={36} color={COLORS.surface} />
           </View>
           <Text style={styles.profileTitle}>
-            {stage === "phone" ? "Verify your phone" : "Enter OTP"}
+            {stage === "phone" ? "Verify your phone" : (autoVerified ? "Auto-verified" : "Enter OTP")}
           </Text>
           <Text style={styles.profileSubtitle}>
             {stage === "phone"
-              ? "We will send you a one-time SMS code to verify your mobile number."
-              : `Enter the 6-digit code sent to +91 ${phone}`}
+              ? "We will send you a one-time SMS code. On Android the code is read automatically — you usually won't need to type it."
+              : autoVerified
+                ? `Signing you in automatically…`
+                : `Enter the 6-digit code sent to +91 ${phone}`}
           </Text>
           <View style={{ height: 24 }} />
 
@@ -464,26 +575,27 @@ function PhoneVerification({ onVerified }: { onVerified: (v: PhoneVerified) => v
             </>
           ) : (
             <>
-              <Field label="6-digit Code">
+              <Field label={autoVerified ? "Code (auto-read)" : "6-digit Code"}>
                 <TextInput
                   testID="otp-code-input"
-                  style={[styles.input, styles.otpCodeInput]}
+                  style={[styles.input, styles.otpCodeInput, autoVerified && { borderColor: COLORS.success, color: COLORS.success }]}
                   placeholder="••••••"
                   placeholderTextColor={COLORS.textSubtle}
                   value={otp}
                   onChangeText={(t) => setOtp(t.replace(/\D/g, "").slice(0, 6))}
                   keyboardType="number-pad"
                   maxLength={6}
-                  autoFocus
+                  editable={!autoVerified}
+                  autoFocus={!autoVerified}
                 />
               </Field>
               <TouchableOpacity
                 testID="otp-verify-btn"
-                style={[styles.primaryBtn, busy && { opacity: 0.7 }]}
+                style={[styles.primaryBtn, (busy || autoVerified) && { opacity: 0.7 }]}
                 onPress={verifyOtp}
-                disabled={busy}
+                disabled={busy || autoVerified}
               >
-                {busy ? (
+                {busy || autoVerified ? (
                   <ActivityIndicator color={COLORS.surface} />
                 ) : (
                   <>
@@ -493,18 +605,20 @@ function PhoneVerification({ onVerified }: { onVerified: (v: PhoneVerified) => v
                 )}
               </TouchableOpacity>
 
-              <View style={styles.otpFooterRow}>
-                <TouchableOpacity testID="otp-change-btn" onPress={changeNumber} disabled={busy}>
-                  <Text style={styles.otpLinkText}>Change number</Text>
-                </TouchableOpacity>
-                {resendTimer > 0 ? (
-                  <Text style={styles.otpHintMuted}>Resend in {resendTimer}s</Text>
-                ) : (
-                  <TouchableOpacity testID="otp-resend-btn" onPress={sendOtp} disabled={busy}>
-                    <Text style={styles.otpLinkText}>Resend OTP</Text>
+              {!autoVerified && (
+                <View style={styles.otpFooterRow}>
+                  <TouchableOpacity testID="otp-change-btn" onPress={changeNumber} disabled={busy}>
+                    <Text style={styles.otpLinkText}>Change number</Text>
                   </TouchableOpacity>
-                )}
-              </View>
+                  {resendTimer > 0 ? (
+                    <Text style={styles.otpHintMuted}>Resend in {resendTimer}s</Text>
+                  ) : (
+                    <TouchableOpacity testID="otp-resend-btn" onPress={sendOtp} disabled={busy}>
+                      <Text style={styles.otpLinkText}>Resend OTP</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              )}
             </>
           )}
         </ScrollView>
