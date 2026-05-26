@@ -1,28 +1,31 @@
 # Truck Traffic PTL — PRD
 
-## Original problem statement (current iteration)
-Verify two commits (05142fa & 9dcae73) cover:
-1. App-drawer icon getting cut on phones that apply a circular mask
-2. Route input 2nd line font getting cut for long localities
-3. Profile post edit must allow editing images
-
 ## Architecture
 - React Native + Expo (Android-first), expo-router, TypeScript
-- FastAPI + MongoDB backend, hosted at ptl-market.onrender.com
+- FastAPI + MongoDB backend (ptl-market.onrender.com)
 - Native Firebase Phone Auth (Android) for OTP login
+- Centralized design tokens in `frontend/theme/index.ts`
+- Inter font family loaded via `@expo-google-fonts/inter`, applied globally in `_layout.tsx`
 
-## Status of the 3 requested changes
-1. **App icon (drawer cutoff)** — DONE
-   - Regenerated `frontend/assets/images/{icon,adaptive-icon,favicon,splash-image}.png`
-   - `adaptive-icon.png`: 1024×1024, transparent bg, content fits inside 62% center (Android adaptive-icon safe-zone spec)
-   - `icon.png` / `splash-image.png`: 1024×1024, solid black bg, content within 78% center
-   - Verified via simulated circular crop — 0 pixels of visible content lost
-2. **Route input 2nd line — adaptive font** — DONE
-   - `frontend/app/index.tsx` `SmartRouteInput`: replaced unreliable `adjustsFontSizeToFit` with a deterministic length-based size tier (17px → 10px). Short localities match line 1’s 17px; long ones step down to fit on one line.
-3. **Profile post edit — edit images** — Already shipped in commit 9dcae73 (verified)
-   - `EditLoadModal` fetches existing images via `GET /api/loads/{id}/full`, allows add (≤3) / remove, and submits `images` in `PATCH /api/loads/{id}`. Backend `LoadUpdate.images` and PATCH handler are in place.
+## Completed iterations
 
-## Backlog / future
-- Add server-side image compression/resize at upload
-- Persist user-preferred locality language for the 2nd line
-- Auto-screenshot diff for app-icon regression
+### Iter 1 — Polish patches for last two commits (May 26)
+1. **App icon (drawer cutoff)** — icon.png/adaptive-icon.png/favicon.png/splash-image.png regenerated with proper safe-zone padding (62% for adaptive, 78% for legacy). Verified zero pixel-loss against worst-case circular crop.
+2. **Route-input 2nd line adaptive font** — replaced unreliable `adjustsFontSizeToFit` with deterministic length-based size tiers (17px → 10px).
+3. **Profile post — image editable** — confirmed already shipped in commit 9dcae73 (EditLoadModal fetches existing photos, allows add/remove, PATCHes with `images` array).
+
+### Iter 2 — Typography & visual-polish overhaul (May 26)
+- Installed `@expo-google-fonts/inter` (Regular/Medium/SemiBold/Bold)
+- Created `frontend/theme/index.ts` — central tokens for FONTS, TYPO, PALETTE, RADIUS, SPACING
+- Loaded Inter in `_layout.tsx` via `useFonts`; set Inter as the **default fontFamily** for every `<Text>` and `<TextInput>` (via `defaultProps`) so the whole app inherits it
+- Modernized color palette (slate-gray text, soft borders):
+  - text #1A1A1A → **#1F2937**, textMuted #6C757D → **#6B7280**, textSubtle #ADB5BD → **#9CA3AF**
+  - success #248232 → **#16A34A**, danger #DC3545 → **#DC2626**, border #DEE2E6 → **#E5E7EB**, bg #F8F9FA → **#F9FAFB**
+- Mapped every `fontWeight` to an explicit `fontFamily` token (90 entries) — required for Android, which cannot synthesize Inter bold weights
+- Softened corners app-wide: 10→12, 12→14, 14→16
+- Polished hierarchy: bumped line-heights, added letterSpacing on headings/buttons/labels, reduced excessive bolding in body text, increased form/card padding, added subtle card elevation
+
+## Backlog
+- Replace inline COLORS with PALETTE token usage everywhere (currently both coexist)
+- Server-side image compression at upload
+- App-wide haptic feedback on primary actions
