@@ -323,6 +323,59 @@ async def list_loads(
     return out
 
 
+@api_router.get("/loads/{load_id}/full")
+async def get_load_full(load_id: str):
+    """Return one load INCLUDING its inline images as data URIs. Used by the
+    edit screen so the user can add/remove photos without losing the existing
+    ones."""
+    doc = await db.loads.find_one({"id": load_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Load not found")
+    return doc
+
+
+class LoadUpdate(BaseModel):
+    origin_pincode: Optional[str] = None
+    origin_locality: Optional[str] = None
+    origin_city: Optional[str] = None
+    origin_state: Optional[str] = None
+    destination_pincode: Optional[str] = None
+    destination_locality: Optional[str] = None
+    destination_city: Optional[str] = None
+    destination_state: Optional[str] = None
+    cargo_types: Optional[List[str]] = None
+    cargo_placement: Optional[str] = None
+    truck_type: Optional[str] = None
+    weight_tons: Optional[float] = None
+    space_cuft: Optional[float] = None
+    dimension_length: Optional[float] = None
+    dimension_breadth: Optional[float] = None
+    dimension_height: Optional[float] = None
+    price_per_ton: Optional[float] = None
+    loading_date: Optional[str] = None
+    images: Optional[List[str]] = None
+
+
+@api_router.patch("/loads/{load_id}")
+async def update_load(load_id: str, payload: LoadUpdate):
+    update = {k: v for k, v in payload.dict().items() if v is not None}
+    if not update:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    res = await db.loads.update_one({"id": load_id}, {"$set": update})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Load not found")
+    doc = await db.loads.find_one({"id": load_id}, {"_id": 0, "images": 0})
+    return doc
+
+
+@api_router.delete("/loads/{load_id}")
+async def delete_load(load_id: str):
+    res = await db.loads.delete_one({"id": load_id})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Load not found")
+    return {"deleted": True}
+
+
 @api_router.get("/loads/{load_id}/image/{idx}")
 async def get_load_image(load_id: str, idx: int):
     doc = await db.loads.find_one({"id": load_id}, {"_id": 0, "images": 1})

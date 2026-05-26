@@ -651,6 +651,38 @@ function EditLoadModal({ load, visible, onClose, onSaved }: { load: Load; visibl
   const [dimB, setDimB] = useState(load.dimension_breadth ? String(load.dimension_breadth) : "");
   const [dimH, setDimH] = useState(load.dimension_height ? String(load.dimension_height) : "");
   const [pricePerTon, setPricePerTon] = useState(load.price_per_ton ? String(load.price_per_ton) : "");
+  const [images, setImages] = useState<string[]>([]);
+  const [imagesLoaded, setImagesLoaded] = useState(false);
+
+  // Fetch the full load (with inline base64 images) when the modal opens so
+  // the user can add/remove photos without losing existing ones.
+  useEffect(() => {
+    if (!visible) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`${API}/loads/${load.id}/full`);
+        if (!r.ok) return;
+        const j = await r.json();
+        if (!cancelled) setImages(Array.isArray(j?.images) ? j.images : []);
+      } catch {}
+      finally { if (!cancelled) setImagesLoaded(true); }
+    })();
+    return () => { cancelled = true; };
+  }, [visible, load.id]);
+
+  const pickImage = async () => {
+    if (images.length >= 3) { Alert.alert("Limit", "You can attach up to 3 photos."); return; }
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) { Alert.alert("Permission needed", "Please grant photo library access to attach images."); return; }
+    const remaining = 3 - images.length;
+    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: false, allowsMultipleSelection: true, selectionLimit: remaining, quality: 0.5, base64: true });
+    if (!res.canceled && res.assets && res.assets.length > 0) {
+      const newOnes = res.assets.slice(0, remaining).filter((a: any) => !!a.base64).map((a: any) => `data:${a.mimeType || "image/jpeg"};base64,${a.base64}`);
+      setImages((prev) => [...prev, ...newOnes].slice(0, 3));
+    }
+  };
+  const removeImage = (idx: number) => setImages((prev) => prev.filter((_, i) => i !== idx));
 
   const today = useMemo(() => { const d = new Date(); d.setHours(0,0,0,0); return d; }, []);
   const maxDate = useMemo(() => { const d = new Date(today); d.setDate(d.getDate() + 14); return d; }, [today]);
@@ -682,6 +714,7 @@ function EditLoadModal({ load, visible, onClose, onSaved }: { load: Load; visibl
         cargo_placement: placement, truck_type: truckType, weight_tons: weight, space_cuft: null,
         dimension_length: lengthVal, dimension_breadth: breadthVal, dimension_height: heightVal, price_per_ton: priceVal,
         loading_date: date.toISOString().slice(0, 10),
+        images,
       };
       const res = await fetch(`${API}/loads/${load.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       if (!res.ok) throw new Error("Failed");
@@ -897,6 +930,36 @@ function EditLoadModal({ load, visible, onClose, onSaved }: { load: Load; visibl
                     >
                       <Image source={p.image} style={styles.placementImgCompact} resizeMode="contain" />
                       <Text style={[styles.placementLabelCompact, on && (p.key === "Stackable" ? styles.placementLabelGreen : styles.placementLabelRed)]}>{p.label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </CollapsibleSection>
+
+            <CollapsibleSection
+              icon="image-outline"
+              title="Photos"
+              summary={imagesLoaded ? (images.length > 0 ? `${images.length} photo${images.length > 1 ? "s" : ""}` : "") : "Loading…"}
+              testID="edit-opt-photos"
+            >
+              <Text style={styles.label}>Attach up to 3 photos of the truck or available space</Text>
+              <View style={styles.photoRow}>
+                {[0, 1, 2].map((idx) => {
+                  const img = images[idx];
+                  if (img) {
+                    return (
+                      <View key={idx} style={styles.photoCell}>
+                        <Image source={{ uri: img }} style={styles.photoImg} resizeMode="cover" />
+                        <TouchableOpacity testID={`edit-photo-remove-${idx}`} onPress={() => removeImage(idx)} style={styles.photoRemoveBtn}>
+                          <Ionicons name="close" size={14} color={COLORS.surface} />
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  }
+                  return (
+                    <TouchableOpacity key={idx} testID={`edit-photo-add-${idx}`} onPress={pickImage} style={[styles.photoCell, styles.photoEmpty]} activeOpacity={0.7}>
+                      <Ionicons name="add" size={28} color={COLORS.textMuted} />
+                      <Text style={styles.photoAddLabel}>Add</Text>
                     </TouchableOpacity>
                   );
                 })}
@@ -1920,7 +1983,15 @@ function SmartRouteInput({ label, testIDPrefix, text, pin, info, onChange }: {
               const cty = (info.city || "").trim();
               const areaLine = loc && loc.toLowerCase() !== cty.toLowerCase() ? loc : cty;
               return areaLine ? (
-                <Text style={sriStyles.locality} numberOfLines={1}>{areaLine}</Text>
+                <Text
+                  style={sriStyles.locality}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.55}
+                  allowFontScaling={false}
+                >
+                  {areaLine}
+                </Text>
               ) : null;
             })()}
             <Text style={sriStyles.cityState} numberOfLines={1}>
