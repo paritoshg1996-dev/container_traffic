@@ -1982,17 +1982,30 @@ function SmartRouteInput({ label, testIDPrefix, text, pin, info, onChange }: {
               const loc = (info.locality || "").trim();
               const cty = (info.city || "").trim();
               const areaLine = loc && loc.toLowerCase() !== cty.toLowerCase() ? loc : cty;
-              return areaLine ? (
+              if (!areaLine) return null;
+              // Adaptive font size for the 2nd line: short text uses the same
+              // 17px as line 1; long text shrinks down (min 10px) so it always
+              // fits the card width on a single line. Length-based scaling is
+              // used because adjustsFontSizeToFit is unreliable on Android.
+              const len = areaLine.length;
+              const adaptiveSize =
+                len <= 11 ? 17 :
+                len <= 13 ? 16 :
+                len <= 15 ? 15 :
+                len <= 17 ? 14 :
+                len <= 19 ? 13 :
+                len <= 22 ? 12 :
+                len <= 25 ? 11 : 10;
+              return (
                 <Text
-                  style={sriStyles.locality}
+                  style={[sriStyles.locality, { fontSize: adaptiveSize }]}
                   numberOfLines={1}
-                  adjustsFontSizeToFit
-                  minimumFontScale={0.55}
+                  ellipsizeMode="tail"
                   allowFontScaling={false}
                 >
                   {areaLine}
                 </Text>
-              ) : null;
+              );
             })()}
             <Text style={sriStyles.cityState} numberOfLines={1}>
               {info.city}{info.city && info.state ? ", " : ""}{info.state}
