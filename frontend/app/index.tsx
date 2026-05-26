@@ -2250,6 +2250,33 @@ function LoadCard({ load, isMine, distance }: { load: Load; isMine: boolean; dis
   const [viewerStart, setViewerStart] = useState<number | null>(null);
   const [showImages, setShowImages] = useState(false);
   const callPoster = () => Linking.openURL(`tel:${load.poster_phone}`).catch(() => Alert.alert("Error", "Cannot open dialer"));
+  const shareOnWhatsApp = async () => {
+    // Same message format as the "Post & Share" button on the post-truck-space screen.
+    const dateStrShare = (() => {
+      try { return new Date(load.loading_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }); }
+      catch { return load.loading_date; }
+    })();
+    const oLoc = load.origin_locality || load.origin_city || "";
+    const dLoc = load.destination_locality || load.destination_city || "";
+    const originLine = `📍 ${load.origin_pincode}${oLoc ? `, ${oLoc}` : ""}${load.origin_state ? `, ${load.origin_state}` : ""}`;
+    const destLine   = `📍 ${load.destination_pincode}${dLoc ? `, ${dLoc}` : ""}${load.destination_state ? `, ${load.destination_state}` : ""}`;
+    const loadLink = load.id
+      ? `\n\n🔗 More info & pics: https://www.trucktraffic.in?load=${load.id}`
+      : `\n\n🔗 More info & pics: https://www.trucktraffic.in`;
+    const text =
+      `🚛 *Truck Space Available – Truck Traffic PTL*\n\n` +
+      `*Route:*\n${originLine}\n   ⬇️\n${destLine}\n\n` +
+      `🚚 *Truck:* ${load.truck_type}\n` +
+      `⚖️ *Weight:* ${load.weight_tons} Tons\n` +
+      `📅 *Loading:* ${dateStrShare}\n` +
+      (load.cargo_placement ? `🧱 *Placement:* ${load.cargo_placement}` : "") +
+      `\n\n📞 *Contact:* ${load.poster_name}` +
+      (load.poster_company ? ` — ${load.poster_company}` : "") +
+      `\n+91 ${load.poster_phone}` +
+      loadLink;
+    try { await Linking.openURL(`https://wa.me/?text=${encodeURIComponent(text)}`); }
+    catch { Alert.alert("Error", "WhatsApp could not be opened."); }
+  };
   const saveContact = async () => {
     try {
       const { status: cur } = await Contacts.getPermissionsAsync();
@@ -2386,11 +2413,21 @@ function LoadCard({ load, isMine, distance }: { load: Load; isMine: boolean; dis
             <TouchableOpacity testID={`save-contact-${load.id}`} style={cardStyles.saveBtn} onPress={saveContact}>
               <Ionicons name="person-add-outline" size={16} color={COLORS.primary} />
             </TouchableOpacity>
+            <TouchableOpacity testID={`share-wa-${load.id}`} style={cardStyles.shareBtn} onPress={shareOnWhatsApp}>
+              <Ionicons name="logo-whatsapp" size={16} color="#25D366" />
+            </TouchableOpacity>
             <TouchableOpacity testID={`call-btn-${load.id}`} style={[styles.callBtn, { alignSelf: "center" }]} onPress={callPoster}>
               <Ionicons name="call" size={16} color={COLORS.surface} />
               <Text style={styles.callBtnText}>Call</Text>
             </TouchableOpacity>
           </View>
+        )}
+
+        {isMine && (
+          <TouchableOpacity testID={`share-wa-${load.id}`} style={cardStyles.shareWaPill} onPress={shareOnWhatsApp}>
+            <Ionicons name="logo-whatsapp" size={16} color={COLORS.surface} />
+            <Text style={cardStyles.shareWaPillText}>Share</Text>
+          </TouchableOpacity>
         )}
       </View>
 
@@ -2465,6 +2502,9 @@ const cardStyles = StyleSheet.create({
   showImagesBtn: { flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: COLORS.border, backgroundColor: COLORS.bg },
   showImagesBtnText: { color: COLORS.primary, fontFamily: "Inter_700Bold", fontWeight: "700", fontSize: 12 },
   saveBtn: { width: 36, height: 36, borderRadius: 18, borderWidth: 1.5, borderColor: COLORS.primary, backgroundColor: "#EEF2FA", alignItems: "center", justifyContent: "center" },
+  shareBtn: { width: 36, height: 36, borderRadius: 18, borderWidth: 1.5, borderColor: "#25D366", backgroundColor: "#E8F8EE", alignItems: "center", justifyContent: "center" },
+  shareWaPill: { backgroundColor: "#25D366", paddingVertical: 10, paddingHorizontal: 16, borderRadius: 100, flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "center" },
+  shareWaPillText: { color: COLORS.surface, fontFamily: "Inter_600SemiBold", fontWeight: "600", fontSize: 14, letterSpacing: 0.2 },
   noPhotos: { fontSize: 11, color: COLORS.textSubtle, fontStyle: "italic" },
   contactSection: { flex: 1 },
 });
