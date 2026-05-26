@@ -28,6 +28,12 @@
       "expo-router",
       "expo-speech-recognition",
       [
+        "expo-contacts",
+        {
+          "contactsPermission": "Allow Truck Traffic PTL to access your contacts so you can save truck-owner numbers directly to your phonebook."
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "image": "./assets/images/icon.png",

@@ -25,6 +25,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
+import * as Contacts from "expo-contacts";
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from "expo-speech-recognition";
 
 const API = `https://ptl-market.onrender.com/api`;
@@ -139,6 +140,28 @@ export default function Index() {
       setLoaded(true);
     })();
   }, []);
+
+  // Ask for contacts permission once profile is set up (so user can save truck-owner numbers).
+  useEffect(() => {
+    if (!profile) return;
+    (async () => {
+      try {
+        const asked = await AsyncStorage.getItem("contacts_perm_asked");
+        if (asked === "1") return;
+        const { status: cur } = await Contacts.getPermissionsAsync();
+        if (cur === "granted") { await AsyncStorage.setItem("contacts_perm_asked", "1"); return; }
+        const { status } = await Contacts.requestPermissionsAsync();
+        await AsyncStorage.setItem("contacts_perm_asked", "1");
+        if (status !== "granted") {
+          // Soft note — user can also save contacts later from a load card
+          Alert.alert(
+            "Contacts permission",
+            "You can grant contacts access anytime from Settings to save truck-owner numbers directly to your phonebook."
+          );
+        }
+      } catch {}
+    })();
+  }, [profile]);
 
   const saveProfile = async (p: Profile) => {
     await AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(p));
@@ -256,9 +279,6 @@ function ProfileSetup({ onSave, lockedPhone }: { onSave: (p: Profile) => void; l
     <SafeAreaView style={[styles.fill, { backgroundColor: COLORS.bg }]}>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.fill}>
         <ScrollView contentContainerStyle={styles.profileWrap} keyboardShouldPersistTaps="handled">
-          <View style={styles.profileLogo}>
-            <Image source={require("../assets/images/logo.png")} style={{ width: 60, height: 60, borderRadius: 14 }} resizeMode="contain" />
-          </View>
           <Text style={styles.profileTitle}>Welcome to Truck Traffic PTL</Text>
           <Text style={styles.profileSubtitle}>Set up your profile to start posting and finding loads</Text>
           <View style={{ height: 24 }} />
@@ -1498,70 +1518,54 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
     }
   }, [visible]);
 
-  // Name/city search via Mappls places API
+  // Name/city search via Mappls places API (mirrors web autocomplete)
   useEffect(() => {
     if (isPincodeMode) { setResults([]); return; }
     const q = query.trim();
-    if (q.length < 2) { setResults([]); return; }
+    if (q.length < 3) { setResults([]); return; }
     let cancelled = false;
     setSearching(true);
     const t = setTimeout(async () => {
       try {
         const r = await fetch(`${API}/places?query=${encodeURIComponent(q)}`);
         const data = await r.json();
-        // Accept all types — do not filter; extract pincode from address
-    
-	const allLocations = [
-  ...(data.suggestedLocations || []),
-  ...(data.userAddedLocations || []),
-];
 
-// Build a name→pincode index from any result that has a pincode
-const pincodeByName: Record<string, string> = {};
-allLocations.forEach((s: any) => {
-  const match = (s.placeAddress || "").match(/\b(\d{6})\b/);
-  if (match) {
-    // Index by city name words so "Bhiwandi" matches "Bhiwandi Sub Post Office"
-    const words = (s.placeName || "").toLowerCase().split(/\s+/);
-    words.forEach((w: string) => {
-      if (w.length > 3 && !pincodeByName[w]) pincodeByName[w] = match[1];
-    });
-  }
-});
+        const all = [
+          ...(data.suggestedLocations || []),
+          ...(data.userAddedLocations || []),
+        ];
 
-const mapped: CitySuggestion[] = allLocations
-  .map((s: any) => {
-    const parts = (s.placeAddress || "").split(",").map((p: string) => p.trim()).filter(Boolean);
-    const state = parts.length >= 1 ? parts[parts.length - 1] : "";
-    // city is the second-to-last comma-separated segment
-    const city = parts.length >= 2 ? parts[parts.length - 2] : parts[0] || "";
-    // locality is the place's own name (what Mappls returns as placeName — e.g. "Turbhe")
-    const locality = s.placeName || "";
+        // Build a name→pincode index from any result that has a pincode
+        const pincodeByWord: Record<string, string> = {};
+        all.forEach((s: any) => {
+          const m = (s.placeAddress || "").match(/\b(\d{6})\b/);
+          if (m) {
+            (s.placeName || "").toLowerCase().split(/\s+/).forEach((w: string) => {
+              if (w.length > 3 && !pincodeByWord[w]) pincodeByWord[w] = m[1];
+            });
+          }
+        });
 
-    // Try to get pincode from address first, then fall back to name-index
-    const directMatch = (s.placeAddress || "").match(/\b(\d{6})\b/);
-    const nameWords = (s.placeName || "").toLowerCase().split(/\s+/);
-    const lookedUp = nameWords.map((w: string) => pincodeByName[w]).find(Boolean);
-    const pincode = directMatch ? directMatch[1] : (lookedUp || "");
+        // Take top 7 from API order, attach pincode (direct or via name lookup), keep order, no dedup
+        const mapped: CitySuggestion[] = all.slice(0, 7).map((s: any) => {
+          const direct = (s.placeAddress || "").match(/\b(\d{6})\b/);
+          const nameWords = (s.placeName || "").toLowerCase().split(/\s+/);
+          const lookedUp = nameWords.map((w: string) => pincodeByWord[w]).find(Boolean);
+          const pincode = direct ? direct[1] : (lookedUp || "");
 
-    return {
-      name: s.placeName,
-      city,
-      locality,
-      state,
-      pincode,
-    };
-  })
-  .filter((s: CitySuggestion) => s.pincode)
-  // Deduplicate by pincode+name, prefer shorter/simpler names (city over POI)
-  .filter((s, i, arr) => arr.findIndex(x => x.pincode === s.pincode && x.name === s.name) === i)
-  .slice(0, 10);
-		  
-		  
-        if (!cancelled) setResults(mapped.slice(0, 10));
+          // city/state/locality preserved for the existing row UI
+          const parts = (s.placeAddress || "").split(",").map((p: string) => p.trim()).filter(Boolean);
+          const state = parts.length >= 1 ? parts[parts.length - 1] : "";
+          const city = parts.length >= 2 ? parts[parts.length - 2] : parts[0] || "";
+          const locality = s.placeName || "";
+
+          return { name: s.placeName, city, locality, state, pincode };
+        }).filter((s: CitySuggestion) => s.pincode);
+
+        if (!cancelled) setResults(mapped);
       } catch { if (!cancelled) setResults([]); }
       finally { if (!cancelled) setSearching(false); }
-    }, 300);
+    }, 350);
     return () => { cancelled = true; clearTimeout(t); };
   }, [query, isPincodeMode]);
 
@@ -1851,7 +1855,7 @@ const sriStyles = StyleSheet.create({
   },
   cardFilled: { borderColor: COLORS.success, borderWidth: 1.5 },
   pin: { fontSize: 17, fontWeight: "800", color: COLORS.text, marginBottom: 4, letterSpacing: 0.2 },
-  locality: { fontSize: 13, fontWeight: "700", color: COLORS.text, marginBottom: 3 },
+  locality: { fontSize: 17, fontWeight: "800", color: COLORS.text, marginBottom: 3 },
   cityState: { fontSize: 11, color: COLORS.textMuted, fontWeight: "600" },
   city: { fontSize: 15, fontWeight: "800", color: COLORS.text, marginBottom: 3 },
   state: { fontSize: 11, color: COLORS.textMuted, fontStyle: "italic", fontWeight: "500" },
@@ -2048,6 +2052,29 @@ function LoadCard({ load, isMine, distance }: { load: Load; isMine: boolean; dis
   const [viewerStart, setViewerStart] = useState<number | null>(null);
   const [showImages, setShowImages] = useState(false);
   const callPoster = () => Linking.openURL(`tel:${load.poster_phone}`).catch(() => Alert.alert("Error", "Cannot open dialer"));
+  const saveContact = async () => {
+    try {
+      const { status: cur } = await Contacts.getPermissionsAsync();
+      let granted = cur === "granted";
+      if (!granted) {
+        const { status } = await Contacts.requestPermissionsAsync();
+        granted = status === "granted";
+      }
+      if (!granted) {
+        Alert.alert("Permission needed", "Please grant contacts permission to save this number to your phone.");
+        return;
+      }
+      const displayName = load.poster_company ? `${load.poster_name} (${load.poster_company})` : load.poster_name;
+      await Contacts.addContactAsync({
+        [Contacts.Fields.FirstName]: load.poster_name || "Truck Owner",
+        [Contacts.Fields.Company]: load.poster_company || "Truck Traffic PTL",
+        [Contacts.Fields.PhoneNumbers]: [{ label: "mobile", number: `+91${load.poster_phone}`, isPrimary: true }],
+      } as any);
+      Alert.alert("Saved", `${displayName} added to your contacts.`);
+    } catch (e) {
+      Alert.alert("Error", "Could not save contact.");
+    }
+  };
   const dateStr = useMemo(() => { try { return new Date(load.loading_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }); } catch { return load.loading_date; } }, [load.loading_date]);
 
   // Format route location: pincode, city (bold) + state (smaller emphasis)
@@ -2112,17 +2139,21 @@ function LoadCard({ load, isMine, distance }: { load: Load; isMine: boolean; dis
 
       <View style={styles.divider} />
 
-      {/* LINE 2: Truck mini-image · Weight · Dimensions · Price · Date · Placement — single line, horizontal scroll if overflow */}
+      {/* LINE 2: Date · Weight · Truck · Space · Price · Placement — single horizontal row */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={cardStyles.metaScrollContent}>
+        <View style={cardStyles.metaChip}>
+          <Ionicons name="calendar-outline" size={12} color={COLORS.textMuted} />
+          <Text style={cardStyles.metaText}>{dateStr}</Text>
+        </View>
+        <View style={cardStyles.metaChip}>
+          <Ionicons name="barbell-outline" size={12} color={COLORS.textMuted} />
+          <Text style={cardStyles.metaText}>{load.weight_tons}T</Text>
+        </View>
         {truckImg ? (
           <View style={cardStyles.truckMiniWrap}>
             <Image source={truckImg} style={cardStyles.truckMiniImg} resizeMode="contain" />
           </View>
         ) : null}
-        <View style={cardStyles.metaChip}>
-          <Ionicons name="barbell-outline" size={12} color={COLORS.textMuted} />
-          <Text style={cardStyles.metaText}>{load.weight_tons}T</Text>
-        </View>
         {dimStr ? (
           <View style={cardStyles.metaChip}>
             <Ionicons name="resize-outline" size={12} color={COLORS.textMuted} />
@@ -2135,10 +2166,6 @@ function LoadCard({ load, isMine, distance }: { load: Load; isMine: boolean; dis
             <Text style={cardStyles.metaText}>₹{load.price_per_ton}/T</Text>
           </View>
         ) : null}
-        <View style={cardStyles.metaChip}>
-          <Ionicons name="calendar-outline" size={12} color={COLORS.textMuted} />
-          <Text style={cardStyles.metaText}>{dateStr}</Text>
-        </View>
         {load.cargo_placement ? (
           <View style={[cardStyles.metaChip, cardStyles.placementMeta]}>
             <Text style={[cardStyles.metaText, { color: COLORS.secondary }]}>{load.cargo_placement}</Text>
@@ -2157,10 +2184,15 @@ function LoadCard({ load, isMine, distance }: { load: Load; isMine: boolean; dis
         </View>
 
         {!isMine && (
-          <TouchableOpacity testID={`call-btn-${load.id}`} style={[styles.callBtn, { alignSelf: "center" }]} onPress={callPoster}>
-            <Ionicons name="call" size={16} color={COLORS.surface} />
-            <Text style={styles.callBtnText}>Call</Text>
-          </TouchableOpacity>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+            <TouchableOpacity testID={`save-contact-${load.id}`} style={cardStyles.saveBtn} onPress={saveContact}>
+              <Ionicons name="person-add-outline" size={16} color={COLORS.primary} />
+            </TouchableOpacity>
+            <TouchableOpacity testID={`call-btn-${load.id}`} style={[styles.callBtn, { alignSelf: "center" }]} onPress={callPoster}>
+              <Ionicons name="call" size={16} color={COLORS.surface} />
+              <Text style={styles.callBtnText}>Call</Text>
+            </TouchableOpacity>
+          </View>
         )}
       </View>
 
@@ -2234,6 +2266,7 @@ const cardStyles = StyleSheet.create({
   thumbMoreText: { color: COLORS.surface, fontSize: 14, fontWeight: "800" },
   showImagesBtn: { flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: COLORS.border, backgroundColor: COLORS.bg },
   showImagesBtnText: { color: COLORS.primary, fontWeight: "700", fontSize: 12 },
+  saveBtn: { width: 36, height: 36, borderRadius: 18, borderWidth: 1.5, borderColor: COLORS.primary, backgroundColor: "#EEF2FA", alignItems: "center", justifyContent: "center" },
   noPhotos: { fontSize: 11, color: COLORS.textSubtle, fontStyle: "italic" },
   contactSection: { flex: 1 },
 });
@@ -2658,8 +2691,8 @@ stepperUnit: {
   color: COLORS.textMuted,
 },
 stepperDateText: {
-  fontSize: 15,
-  fontWeight: "600",
+  fontSize: 22,
+  fontWeight: "700",
   color: COLORS.text,
   marginLeft: 6,
 },
