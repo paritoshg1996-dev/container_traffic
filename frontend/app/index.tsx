@@ -506,19 +506,29 @@ function EditLoadModal({ load, visible, onClose, onSaved }: { load: Load; visibl
   const [destPin, setDestPin] = useState(load.destination_pincode);
   const [destInfo, setDestInfo] = useState<RouteInfo>({ city: load.destination_city, locality: load.destination_locality || "", state: load.destination_state, valid: true });
   const [weight, setWeight] = useState(load.weight_tons || 1);
-  const [placement, setPlacement] = useState(load.cargo_placement || "Stackable");
+  const [placement, setPlacement] = useState(load.cargo_placement || "");
   const [truckType, setTruckType] = useState(load.truck_type || "");
   const [date, setDate] = useState(new Date(load.loading_date));
+  const [showDatePicker, setShowDatePicker] = useState(false);
   const [busy, setBusy] = useState(false);
   const [weightModalVisible, setWeightModalVisible] = useState(false);
   const [weightInput, setWeightInput] = useState("");
+  const [dimL, setDimL] = useState(load.dimension_length ? String(load.dimension_length) : "");
+  const [dimB, setDimB] = useState(load.dimension_breadth ? String(load.dimension_breadth) : "");
+  const [dimH, setDimH] = useState(load.dimension_height ? String(load.dimension_height) : "");
+  const [pricePerTon, setPricePerTon] = useState(load.price_per_ton ? String(load.price_per_ton) : "");
 
-  const changeDate = (days: number) => {
-    setDate(prev => {
-      const d = new Date(prev); d.setDate(d.getDate() + days);
-      if (d < new Date(new Date().setHours(0,0,0,0))) return prev;
-      return d;
-    });
+  const today = useMemo(() => { const d = new Date(); d.setHours(0,0,0,0); return d; }, []);
+  const maxDate = useMemo(() => { const d = new Date(today); d.setDate(d.getDate() + 14); return d; }, [today]);
+
+  const onDateChange = (event: any, selected?: Date) => {
+    if (Platform.OS !== "ios") setShowDatePicker(false);
+    if (event?.type === "dismissed") return;
+    if (selected) {
+      if (selected < today) setDate(today);
+      else if (selected > maxDate) setDate(maxDate);
+      else setDate(selected);
+    }
   };
 
   const save = async () => {
@@ -528,10 +538,15 @@ function EditLoadModal({ load, visible, onClose, onSaved }: { load: Load; visibl
     if (!weight || weight <= 0) return Alert.alert("Invalid", "Enter valid weight.");
     setBusy(true);
     try {
+      const lengthVal = dimL ? Math.min(40, parseInt(dimL, 10)) : null;
+      const breadthVal = dimB ? Math.min(8, parseInt(dimB, 10)) : null;
+      const heightVal = dimH ? Math.min(9, parseInt(dimH, 10)) : null;
+      const priceVal = pricePerTon ? parseInt(pricePerTon, 10) : null;
       const payload = {
         origin_pincode: originPin, origin_locality: originInfo?.locality || "", origin_city: originInfo?.city || "", origin_state: originInfo?.state || "",
         destination_pincode: destPin, destination_locality: destInfo?.locality || "", destination_city: destInfo?.city || "", destination_state: destInfo?.state || "",
         cargo_placement: placement, truck_type: truckType, weight_tons: weight, space_cuft: null,
+        dimension_length: lengthVal, dimension_breadth: breadthVal, dimension_height: heightVal, price_per_ton: priceVal,
         loading_date: date.toISOString().slice(0, 10),
       };
       const res = await fetch(`${API}/loads/${load.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
@@ -558,23 +573,59 @@ function EditLoadModal({ load, visible, onClose, onSaved }: { load: Load; visibl
                 onChange={(t, p, i) => { setDestText(t); setDestPin(p); setDestInfo(i); }} />
             </View>
 
-            <SectionTitle icon="bus-outline" title="Truck Type" />
-            <View style={styles.truckRow}>
-              {TRUCK_TYPES.map((t) => {
-                const on = truckType === t.name;
-                return (
-                  <TouchableOpacity key={t.name} onPress={() => setTruckType(t.name)} style={[styles.truckCard, on && styles.truckCardOn]} activeOpacity={0.7}>
-                    <Image source={t.image} style={styles.truckImg} resizeMode="contain" />
-                    <Text style={[styles.truckLabel, on && styles.truckLabelOn]}>{t.name}</Text>
-                  </TouchableOpacity>
-                );
-              })}
+            <SectionTitle icon="calendar-outline" title="Loading Date" />
+            <View style={[styles.stepperRow, styles.filledBorder]}>
+              <TouchableOpacity
+                testID="edit-loading-date-minus"
+                style={styles.stepperBtn}
+                onPress={() => {
+                  setDate(prev => {
+                    const d = new Date(prev); d.setDate(d.getDate() - 1);
+                    return d < today ? today : d;
+                  });
+                }}
+              >
+                <Text style={styles.stepperBtnText}>-</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                testID="edit-loading-date-btn"
+                style={styles.stepperCenter}
+                activeOpacity={0.8}
+                onPress={() => setShowDatePicker(true)}
+              >
+                <Ionicons name="calendar" size={14} color={COLORS.primary} />
+                <Text style={styles.stepperDateText}>
+                  {date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                testID="edit-loading-date-plus"
+                style={styles.stepperBtn}
+                onPress={() => {
+                  setDate(prev => {
+                    const d = new Date(prev); d.setDate(d.getDate() + 1);
+                    return d > maxDate ? maxDate : d;
+                  });
+                }}
+              >
+                <Text style={styles.stepperBtnText}>+</Text>
+              </TouchableOpacity>
             </View>
+            {showDatePicker && (
+              <DateTimePicker
+                value={date}
+                mode="date"
+                display={Platform.OS === "ios" ? "spinner" : "default"}
+                minimumDate={today}
+                maximumDate={maxDate}
+                onChange={onDateChange}
+              />
+            )}
 
-            <SectionTitle icon="scale-outline" title="Weight Capacity" />
-            <View style={styles.stepperRow}>
+            <SectionTitle icon="scale-outline" title="Available Load Capacity" />
+            <View style={[styles.stepperRow, weight > 0 && styles.filledBorder]}>
               <TouchableOpacity style={styles.stepperBtn} onPress={() => setWeight(w => Math.max(0.5, parseFloat((w - 0.5).toFixed(1))))}>
-                <Text style={styles.stepperBtnText}>−</Text>
+                <Text style={styles.stepperBtnText}>-</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.stepperCenter} activeOpacity={0.8} onPress={() => { setWeightInput(String(weight)); setWeightModalVisible(true); }}>
                 <Text style={styles.stepperValue}>{weight.toFixed(1)}</Text>
@@ -585,29 +636,138 @@ function EditLoadModal({ load, visible, onClose, onSaved }: { load: Load; visibl
               </TouchableOpacity>
             </View>
 
-            <SectionTitle icon="layers-outline" title="Cargo Placement" />
-            <View style={styles.placementRow}>
-              {PLACEMENT_OPTIONS.map((p) => {
-                const on = placement === p.key;
+            <SectionTitle icon="bus-outline" title="Truck Type" />
+            <View style={styles.truckRow}>
+              {TRUCK_TYPES.map((t) => {
+                const on = truckType === t.name;
                 return (
-                  <TouchableOpacity key={p.key} style={[styles.placementCardCompact, on && (p.key === "Stackable" ? styles.placementCardGreen : styles.placementCardRed)]}
-                    onPress={() => setPlacement(p.key)} activeOpacity={0.7}>
-                    <Image source={p.image} style={styles.placementImgCompact} resizeMode="contain" />
-                    <Text style={[styles.placementLabelCompact, on && (p.key === "Stackable" ? styles.placementLabelGreen : styles.placementLabelRed)]}>{p.label}</Text>
+                  <TouchableOpacity key={t.name} onPress={() => setTruckType(t.name)} style={[styles.truckCard, on && styles.truckCardOn, on && styles.filledBorder]} activeOpacity={0.7}>
+                    <Image source={t.image} style={styles.truckImg} resizeMode="contain" />
+                    <Text style={[styles.truckLabel, on && styles.truckLabelOn]}>{t.name}</Text>
                   </TouchableOpacity>
                 );
               })}
             </View>
 
-            <SectionTitle icon="calendar-outline" title="Loading Date" />
-            <View style={styles.stepperRow}>
-              <TouchableOpacity style={styles.stepperBtn} onPress={() => changeDate(-1)}><Text style={styles.stepperBtnText}>−</Text></TouchableOpacity>
-              <View style={styles.stepperCenter}>
-                <Ionicons name="calendar" size={14} color={COLORS.primary} />
-                <Text style={styles.stepperDateText}>{date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}</Text>
+            <Text style={styles.optionalHeading}>Add more details (optional)</Text>
+
+            <CollapsibleSection
+              icon="resize-outline"
+              title="Available Space"
+              summary={(dimL || dimB || dimH) ? `${dimL || "-"} x ${dimB || "-"} x ${dimH || "-"} ft` : ""}
+              testID="edit-opt-space"
+            >
+              <View style={styles.dimRow}>
+                <View style={styles.dimItem}>
+                  <Text style={styles.dimLabel}>Length</Text>
+                  <View style={[styles.dimInputWrap, dimL && styles.filledBorder]}>
+                    <TextInput
+                      testID="edit-dim-length-input"
+                      style={styles.dimInputText}
+                      value={dimL}
+                      onChangeText={(t) => {
+                        const digits = t.replace(/\D/g, "");
+                        if (!digits) { setDimL(""); return; }
+                        const n = Math.min(40, parseInt(digits, 10));
+                        setDimL(String(n));
+                      }}
+                      keyboardType="number-pad"
+                      maxLength={2}
+                      placeholder="0"
+                      placeholderTextColor={COLORS.textSubtle}
+                    />
+                    <Text style={styles.dimSuffix}>ft</Text>
+                  </View>
+                </View>
+                <View style={styles.dimItem}>
+                  <Text style={styles.dimLabel}>Breadth</Text>
+                  <View style={[styles.dimInputWrap, dimB && styles.filledBorder]}>
+                    <TextInput
+                      testID="edit-dim-breadth-input"
+                      style={styles.dimInputText}
+                      value={dimB}
+                      onChangeText={(t) => {
+                        const digits = t.replace(/\D/g, "");
+                        if (!digits) { setDimB(""); return; }
+                        const n = Math.min(8, parseInt(digits, 10));
+                        setDimB(String(n));
+                      }}
+                      keyboardType="number-pad"
+                      maxLength={1}
+                      placeholder="0"
+                      placeholderTextColor={COLORS.textSubtle}
+                    />
+                    <Text style={styles.dimSuffix}>ft</Text>
+                  </View>
+                </View>
+                <View style={styles.dimItem}>
+                  <Text style={styles.dimLabel}>Height</Text>
+                  <View style={[styles.dimInputWrap, dimH && styles.filledBorder]}>
+                    <TextInput
+                      testID="edit-dim-height-input"
+                      style={styles.dimInputText}
+                      value={dimH}
+                      onChangeText={(t) => {
+                        const digits = t.replace(/\D/g, "");
+                        if (!digits) { setDimH(""); return; }
+                        const n = Math.min(9, parseInt(digits, 10));
+                        setDimH(String(n));
+                      }}
+                      keyboardType="number-pad"
+                      maxLength={1}
+                      placeholder="0"
+                      placeholderTextColor={COLORS.textSubtle}
+                    />
+                    <Text style={styles.dimSuffix}>ft</Text>
+                  </View>
+                </View>
               </View>
-              <TouchableOpacity style={styles.stepperBtn} onPress={() => changeDate(1)}><Text style={styles.stepperBtnText}>+</Text></TouchableOpacity>
-            </View>
+            </CollapsibleSection>
+
+            <CollapsibleSection
+              icon="pricetag-outline"
+              title="Pricing"
+              summary={pricePerTon ? `₹${pricePerTon} / ton` : ""}
+              testID="edit-opt-pricing"
+            >
+              <View style={[styles.priceRow, pricePerTon && styles.filledBorder]}>
+                <Text style={styles.priceSymbol}>₹</Text>
+                <TextInput
+                  testID="edit-price-per-ton-input"
+                  style={styles.priceInput}
+                  value={pricePerTon}
+                  onChangeText={(t) => setPricePerTon(t.replace(/\D/g, "").slice(0, 7))}
+                  keyboardType="number-pad"
+                  placeholder="0"
+                  placeholderTextColor={COLORS.textSubtle}
+                />
+                <Text style={styles.priceSuffix}>/ ton</Text>
+              </View>
+            </CollapsibleSection>
+
+            <CollapsibleSection
+              icon="layers-outline"
+              title="Cargo Placement"
+              summary={placement}
+              testID="edit-opt-placement"
+            >
+              <View style={styles.placementRow}>
+                {PLACEMENT_OPTIONS.map((p) => {
+                  const on = placement === p.key;
+                  return (
+                    <TouchableOpacity
+                      key={p.key}
+                      style={[styles.placementCardCompact, on && (p.key === "Stackable" ? styles.placementCardGreen : styles.placementCardRed)]}
+                      onPress={() => setPlacement(prev => prev === p.key ? "" : p.key)}
+                      activeOpacity={0.7}
+                    >
+                      <Image source={p.image} style={styles.placementImgCompact} resizeMode="contain" />
+                      <Text style={[styles.placementLabelCompact, on && (p.key === "Stackable" ? styles.placementLabelGreen : styles.placementLabelRed)]}>{p.label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </CollapsibleSection>
 
             <View style={[styles.row, { marginTop: 16, gap: 10 }]}>
               <TouchableOpacity style={[styles.outlineBtn, styles.flex1]} onPress={onClose} disabled={busy}>
