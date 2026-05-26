@@ -60,17 +60,21 @@ loading_date, poster_name, poster_phone, poster_company, created_at, images[]
 
 ## Recent Changes (May 2026)
 - Renamed app to "Truck Traffic PTL" with new logo across header / profile / OTP screens.
+- App icon, adaptive icon, splash, favicon and app-image all updated to new logo. App.json `name` set to `Truck Traffic PTL` (device drawer will show this after APK rebuild).
+- Removed logo image from in-app header (now header shows only "Truck Traffic PTL" text + greeting).
 - Tab labels renamed (Post Truck Space / Find Truck Space) with state preserved + swipe gesture.
 - Added Pricing/ton (₹), Dimensions (L/B/H ft) inputs.
-- Loading Date now opens a calendar picker constrained to today → today+14 days.
-- Field re-ordering in Post Truck Space.
+- Loading Date now opens a calendar picker constrained to today → today+14 days. Added matching -/+ stepper buttons (same size as Available Load Capacity).
+- Field re-ordering: Route → Loading Date → Available Load Capacity → Truck Type → optional sections (Available Space / Pricing / Cargo Placement / Photos).
+- All four optional inputs are now **collapsible accordion sections** (dashed border when empty, solid green when filled, with inline summary). The clutter-free "Add more details (optional)" heading sits above them — no `(optional)` repeated on each title.
+- Dimensions inputs: `ft` suffix lives inside each input box; the `(max 40/8/9)` text was removed (constraints still applied).
 - Filled inputs get green borders.
-- Cargo placement supports deselect.
+- Cargo placement supports deselect (tap selected option to clear).
 - Removed "Total ft³" from profile stats.
 - Find Truck Space: Filter modal made full-screen, cargo weight switched to tons, button renamed to "Filter".
 - LoadCard: truck miniature image instead of text chip; dimensions + price displayed; single-line horizontal-scroll meta row.
 - LoadCard: photos lazy-loaded via "Show Images" button to avoid slow list rendering.
-- Backend: added optional fields `dimension_length`, `dimension_breadth`, `dimension_height`, `price_per_ton` to `LoadCreate`. **NOTE: backend on Render needs redeploy for new fields to persist; old backend will silently drop these fields (pydantic ignores extra) — so the frontend keeps working but new dim/price won't be stored until redeploy.**
+- Backend: added optional fields `dimension_length`, `dimension_breadth`, `dimension_height`, `price_per_ton` to `LoadCreate`. **NOTE: backend on Render needs redeploy for new fields to persist; pydantic silently drops unknown extras on old backend.**
 
 ## Backlog / Next Action Items
 - Deploy backend (server.py changes) to Render so dimension/price fields persist.

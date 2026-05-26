@@ -182,7 +182,6 @@ export default function Index() {
     <SafeAreaView style={styles.fill} edges={["top"]}>
       <View style={styles.header} testID="app-header">
         <View style={styles.headerLeft}>
-          <Image source={require("../assets/images/logo.png")} style={styles.logoImg} resizeMode="contain" />
           <View>
             <Text style={styles.headerTitle}>Truck Traffic PTL</Text>
             <Text style={styles.headerSubtitle}>Hi, {profile.name.split(" ")[0]}</Text>
@@ -932,18 +931,43 @@ return (
         </View>
 
         <SectionTitle icon="calendar-outline" title="Loading Date" />
-        <TouchableOpacity
-          testID="loading-date-btn"
-          style={[styles.stepperRow, { justifyContent: "center" }, styles.filledBorder]}
-          activeOpacity={0.8}
-          onPress={() => setShowDatePicker(true)}
-        >
-          <Ionicons name="calendar" size={18} color={COLORS.primary} />
-          <Text style={[styles.stepperDateText, { fontSize: 16 }]}>
-            {date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
-          </Text>
-          <Ionicons name="chevron-down" size={16} color={COLORS.textMuted} style={{ marginLeft: 8 }} />
-        </TouchableOpacity>
+        <View style={[styles.stepperRow, styles.filledBorder]}>
+          <TouchableOpacity
+            testID="loading-date-minus"
+            style={styles.stepperBtn}
+            onPress={() => {
+              setDate(prev => {
+                const d = new Date(prev); d.setDate(d.getDate() - 1);
+                return d < today ? today : d;
+              });
+            }}
+          >
+            <Text style={styles.stepperBtnText}>-</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            testID="loading-date-btn"
+            style={styles.stepperCenter}
+            activeOpacity={0.8}
+            onPress={() => setShowDatePicker(true)}
+          >
+            <Ionicons name="calendar" size={14} color={COLORS.primary} />
+            <Text style={styles.stepperDateText}>
+              {date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            testID="loading-date-plus"
+            style={styles.stepperBtn}
+            onPress={() => {
+              setDate(prev => {
+                const d = new Date(prev); d.setDate(d.getDate() + 1);
+                return d > maxDate ? maxDate : d;
+              });
+            }}
+          >
+            <Text style={styles.stepperBtnText}>+</Text>
+          </TouchableOpacity>
+        </View>
         {showDatePicker && (
           <DateTimePicker
             value={date}
@@ -954,19 +978,6 @@ return (
             onChange={onDateChange}
           />
         )}
-
-        <SectionTitle icon="bus-outline" title="Truck Type" />
-        <View style={styles.truckRow} testID="truck-types-row">
-          {TRUCK_TYPES.map((t) => {
-            const on = truckType === t.name;
-            return (
-              <TouchableOpacity key={t.name} testID={`truck-type-${t.name.replace(/\s+/g, "-")}`} onPress={() => setTruckType(t.name)} style={[styles.truckCard, on && styles.truckCardOn, on && styles.filledBorder]} activeOpacity={0.7}>
-                <Image source={t.image} style={[styles.truckImg, on && styles.truckImgOn]} resizeMode="contain" />
-                <Text style={[styles.truckLabel, on && styles.truckLabelOn]} numberOfLines={1}>{t.name}</Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
 
         <SectionTitle icon="scale-outline" title="Available Load Capacity" />
         <View style={[styles.stepperRow, weight > 0 && styles.filledBorder]}>
@@ -1024,134 +1035,180 @@ return (
           </TouchableOpacity>
         </Modal>
 
-        <SectionTitle icon="resize-outline" title="Available Space (optional)" />
-        <View style={styles.dimRow} testID="dimension-row">
-          <View style={styles.dimItem}>
-            <Text style={styles.dimLabel}>Length</Text>
-            <TextInput
-              testID="dim-length-input"
-              style={[styles.dimInput, dimL && styles.filledBorder]}
-              value={dimL}
-              onChangeText={(t) => {
-                const digits = t.replace(/\D/g, "");
-                if (!digits) { setDimL(""); return; }
-                const n = Math.min(40, parseInt(digits, 10));
-                setDimL(String(n));
-              }}
-              keyboardType="number-pad"
-              maxLength={2}
-              placeholder="0"
-              placeholderTextColor={COLORS.textSubtle}
-            />
-            <Text style={styles.dimUnit}>ft (max 40)</Text>
-          </View>
-          <View style={styles.dimItem}>
-            <Text style={styles.dimLabel}>Breadth</Text>
-            <TextInput
-              testID="dim-breadth-input"
-              style={[styles.dimInput, dimB && styles.filledBorder]}
-              value={dimB}
-              onChangeText={(t) => {
-                const digits = t.replace(/\D/g, "");
-                if (!digits) { setDimB(""); return; }
-                const n = Math.min(8, parseInt(digits, 10));
-                setDimB(String(n));
-              }}
-              keyboardType="number-pad"
-              maxLength={1}
-              placeholder="0"
-              placeholderTextColor={COLORS.textSubtle}
-            />
-            <Text style={styles.dimUnit}>ft (max 8)</Text>
-          </View>
-          <View style={styles.dimItem}>
-            <Text style={styles.dimLabel}>Height</Text>
-            <TextInput
-              testID="dim-height-input"
-              style={[styles.dimInput, dimH && styles.filledBorder]}
-              value={dimH}
-              onChangeText={(t) => {
-                const digits = t.replace(/\D/g, "");
-                if (!digits) { setDimH(""); return; }
-                const n = Math.min(9, parseInt(digits, 10));
-                setDimH(String(n));
-              }}
-              keyboardType="number-pad"
-              maxLength={1}
-              placeholder="0"
-              placeholderTextColor={COLORS.textSubtle}
-            />
-            <Text style={styles.dimUnit}>ft (max 9)</Text>
-          </View>
-        </View>
-
-        <SectionTitle icon="pricetag-outline" title="Pricing (optional)" />
-        <View style={[styles.priceRow, pricePerTon && styles.filledBorder]}>
-          <Text style={styles.priceSymbol}>₹</Text>
-          <TextInput
-            testID="price-per-ton-input"
-            style={styles.priceInput}
-            value={pricePerTon}
-            onChangeText={(t) => setPricePerTon(t.replace(/\D/g, "").slice(0, 7))}
-            keyboardType="number-pad"
-            placeholder="0"
-            placeholderTextColor={COLORS.textSubtle}
-          />
-          <Text style={styles.priceSuffix}>/ ton</Text>
-        </View>
-
-        <SectionTitle icon="layers-outline" title="Cargo Placement (optional)" />
-        <View style={styles.placementRow} testID="placement-segment">
-          {PLACEMENT_OPTIONS.map((p) => {
-            const on = placement === p.key;
+        <SectionTitle icon="bus-outline" title="Truck Type" />
+        <View style={styles.truckRow} testID="truck-types-row">
+          {TRUCK_TYPES.map((t) => {
+            const on = truckType === t.name;
             return (
-              <TouchableOpacity
-                key={p.key}
-                testID={`placement-${p.key.replace(" ", "-")}`}
-                style={[
-                  styles.placementCardCompact,
-                  on && (p.key === "Stackable" ? styles.placementCardGreen : styles.placementCardRed),
-                ]}
-                onPress={() => setPlacement(prev => prev === p.key ? "" : p.key)}
-                activeOpacity={0.7}
-              >
-                <Image source={p.image} style={styles.placementImgCompact} resizeMode="contain" />
-                <Text
-                  style={[
-                    styles.placementLabelCompact,
-                    on && (p.key === "Stackable" ? styles.placementLabelGreen : styles.placementLabelRed),
-                  ]}
-                >
-                  {p.label}
-                </Text>
+              <TouchableOpacity key={t.name} testID={`truck-type-${t.name.replace(/\s+/g, "-")}`} onPress={() => setTruckType(t.name)} style={[styles.truckCard, on && styles.truckCardOn, on && styles.filledBorder]} activeOpacity={0.7}>
+                <Image source={t.image} style={[styles.truckImg, on && styles.truckImgOn]} resizeMode="contain" />
+                <Text style={[styles.truckLabel, on && styles.truckLabelOn]} numberOfLines={1}>{t.name}</Text>
               </TouchableOpacity>
             );
           })}
         </View>
 
-        <SectionTitle icon="image-outline" title="Photos (optional)" />
-        <Text style={styles.label}>Attach up to 3 photos of the truck or available space</Text>
-        <View style={styles.photoRow} testID="photos-row">
-          {[0, 1, 2].map((idx) => {
-            const img = images[idx];
-            if (img) {
+        {/* ===== Optional fields (collapsible) ===== */}
+        <Text style={styles.optionalHeading}>Add more details (optional)</Text>
+
+        <CollapsibleSection
+          icon="resize-outline"
+          title="Available Space"
+          summary={(dimL || dimB || dimH) ? `${dimL || "-"} x ${dimB || "-"} x ${dimH || "-"} ft` : ""}
+          testID="opt-space"
+        >
+          <View style={styles.dimRow} testID="dimension-row">
+            <View style={styles.dimItem}>
+              <Text style={styles.dimLabel}>Length</Text>
+              <View style={[styles.dimInputWrap, dimL && styles.filledBorder]}>
+                <TextInput
+                  testID="dim-length-input"
+                  style={styles.dimInputText}
+                  value={dimL}
+                  onChangeText={(t) => {
+                    const digits = t.replace(/\D/g, "");
+                    if (!digits) { setDimL(""); return; }
+                    const n = Math.min(40, parseInt(digits, 10));
+                    setDimL(String(n));
+                  }}
+                  keyboardType="number-pad"
+                  maxLength={2}
+                  placeholder="0"
+                  placeholderTextColor={COLORS.textSubtle}
+                />
+                <Text style={styles.dimSuffix}>ft</Text>
+              </View>
+            </View>
+            <View style={styles.dimItem}>
+              <Text style={styles.dimLabel}>Breadth</Text>
+              <View style={[styles.dimInputWrap, dimB && styles.filledBorder]}>
+                <TextInput
+                  testID="dim-breadth-input"
+                  style={styles.dimInputText}
+                  value={dimB}
+                  onChangeText={(t) => {
+                    const digits = t.replace(/\D/g, "");
+                    if (!digits) { setDimB(""); return; }
+                    const n = Math.min(8, parseInt(digits, 10));
+                    setDimB(String(n));
+                  }}
+                  keyboardType="number-pad"
+                  maxLength={1}
+                  placeholder="0"
+                  placeholderTextColor={COLORS.textSubtle}
+                />
+                <Text style={styles.dimSuffix}>ft</Text>
+              </View>
+            </View>
+            <View style={styles.dimItem}>
+              <Text style={styles.dimLabel}>Height</Text>
+              <View style={[styles.dimInputWrap, dimH && styles.filledBorder]}>
+                <TextInput
+                  testID="dim-height-input"
+                  style={styles.dimInputText}
+                  value={dimH}
+                  onChangeText={(t) => {
+                    const digits = t.replace(/\D/g, "");
+                    if (!digits) { setDimH(""); return; }
+                    const n = Math.min(9, parseInt(digits, 10));
+                    setDimH(String(n));
+                  }}
+                  keyboardType="number-pad"
+                  maxLength={1}
+                  placeholder="0"
+                  placeholderTextColor={COLORS.textSubtle}
+                />
+                <Text style={styles.dimSuffix}>ft</Text>
+              </View>
+            </View>
+          </View>
+        </CollapsibleSection>
+
+        <CollapsibleSection
+          icon="pricetag-outline"
+          title="Pricing"
+          summary={pricePerTon ? `₹${pricePerTon} / ton` : ""}
+          testID="opt-pricing"
+        >
+          <View style={[styles.priceRow, pricePerTon && styles.filledBorder]}>
+            <Text style={styles.priceSymbol}>₹</Text>
+            <TextInput
+              testID="price-per-ton-input"
+              style={styles.priceInput}
+              value={pricePerTon}
+              onChangeText={(t) => setPricePerTon(t.replace(/\D/g, "").slice(0, 7))}
+              keyboardType="number-pad"
+              placeholder="0"
+              placeholderTextColor={COLORS.textSubtle}
+            />
+            <Text style={styles.priceSuffix}>/ ton</Text>
+          </View>
+        </CollapsibleSection>
+
+        <CollapsibleSection
+          icon="layers-outline"
+          title="Cargo Placement"
+          summary={placement}
+          testID="opt-placement"
+        >
+          <View style={styles.placementRow} testID="placement-segment">
+            {PLACEMENT_OPTIONS.map((p) => {
+              const on = placement === p.key;
               return (
-                <View key={idx} style={styles.photoCell} testID={`photo-${idx}`}>
-                  <Image source={{ uri: img }} style={styles.photoImg} resizeMode="cover" />
-                  <TouchableOpacity testID={`photo-remove-${idx}`} onPress={() => removeImage(idx)} style={styles.photoRemoveBtn}>
-                    <Ionicons name="close" size={14} color={COLORS.surface} />
-                  </TouchableOpacity>
-                </View>
+                <TouchableOpacity
+                  key={p.key}
+                  testID={`placement-${p.key.replace(" ", "-")}`}
+                  style={[
+                    styles.placementCardCompact,
+                    on && (p.key === "Stackable" ? styles.placementCardGreen : styles.placementCardRed),
+                  ]}
+                  onPress={() => setPlacement(prev => prev === p.key ? "" : p.key)}
+                  activeOpacity={0.7}
+                >
+                  <Image source={p.image} style={styles.placementImgCompact} resizeMode="contain" />
+                  <Text
+                    style={[
+                      styles.placementLabelCompact,
+                      on && (p.key === "Stackable" ? styles.placementLabelGreen : styles.placementLabelRed),
+                    ]}
+                  >
+                    {p.label}
+                  </Text>
+                </TouchableOpacity>
               );
-            }
-            return (
-              <TouchableOpacity key={idx} testID={`photo-add-${idx}`} onPress={pickImage} style={[styles.photoCell, styles.photoEmpty]} activeOpacity={0.7}>
-                <Ionicons name="add" size={28} color={COLORS.textMuted} />
-                <Text style={styles.photoAddLabel}>Add</Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
+            })}
+          </View>
+        </CollapsibleSection>
+
+        <CollapsibleSection
+          icon="image-outline"
+          title="Photos"
+          summary={images.length > 0 ? `${images.length} photo${images.length > 1 ? "s" : ""}` : ""}
+          testID="opt-photos"
+        >
+          <Text style={styles.label}>Attach up to 3 photos of the truck or available space</Text>
+          <View style={styles.photoRow} testID="photos-row">
+            {[0, 1, 2].map((idx) => {
+              const img = images[idx];
+              if (img) {
+                return (
+                  <View key={idx} style={styles.photoCell} testID={`photo-${idx}`}>
+                    <Image source={{ uri: img }} style={styles.photoImg} resizeMode="cover" />
+                    <TouchableOpacity testID={`photo-remove-${idx}`} onPress={() => removeImage(idx)} style={styles.photoRemoveBtn}>
+                      <Ionicons name="close" size={14} color={COLORS.surface} />
+                    </TouchableOpacity>
+                  </View>
+                );
+              }
+              return (
+                <TouchableOpacity key={idx} testID={`photo-add-${idx}`} onPress={pickImage} style={[styles.photoCell, styles.photoEmpty]} activeOpacity={0.7}>
+                  <Ionicons name="add" size={28} color={COLORS.textMuted} />
+                  <Text style={styles.photoAddLabel}>Add</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </CollapsibleSection>
 
         <View style={[styles.row, { marginTop: 24 }]}>
           <TouchableOpacity testID="submit-load-btn" style={[styles.primaryBtn, styles.flex1, { marginTop: 0 }]} onPress={() => submit(false)} disabled={loadingPost}>
@@ -1165,6 +1222,32 @@ return (
         <View style={{ height: 40 }} />
       </ScrollView>
     </KeyboardAvoidingView>
+  );
+}
+
+// ============== CollapsibleSection ==============
+function CollapsibleSection({ icon, title, summary, children, testID }: { icon: any; title: string; summary?: string; children: React.ReactNode; testID?: string }) {
+  const [open, setOpen] = useState(false);
+  const filled = !!(summary && summary.trim().length > 0);
+  return (
+    <View style={styles.collapseWrap} testID={testID}>
+      <TouchableOpacity
+        testID={testID ? `${testID}-toggle` : undefined}
+        style={[styles.collapseHeader, filled && styles.collapseHeaderFilled, open && styles.collapseHeaderOpen]}
+        onPress={() => setOpen(o => !o)}
+        activeOpacity={0.7}
+      >
+        <Ionicons name={icon} size={16} color={filled ? COLORS.success : COLORS.primary} />
+        <Text style={[styles.collapseTitle, filled && { color: COLORS.success }]}>{title}</Text>
+        {filled ? (
+          <Text style={styles.collapseSummary} numberOfLines={1}>{summary}</Text>
+        ) : (
+          <Text style={styles.collapseAdd}>Tap to add</Text>
+        )}
+        <Ionicons name={open ? "chevron-up" : "chevron-down"} size={16} color={COLORS.textMuted} />
+      </TouchableOpacity>
+      {open ? <View style={styles.collapseBody}>{children}</View> : null}
+    </View>
   );
 }
 
@@ -2279,12 +2362,24 @@ const styles = StyleSheet.create({
   modalSubtitle: { fontSize: 13, color: COLORS.textMuted, marginBottom: 20, lineHeight: 18 },
   inputError: { borderColor: COLORS.danger },
   filledBorder: { borderColor: COLORS.success, borderWidth: 1.5 },
-  dimRow: { flexDirection: "row", gap: 10, marginBottom: 14 },
+  optionalHeading: { fontSize: 12, fontWeight: "700", color: COLORS.textMuted, textTransform: "uppercase", letterSpacing: 0.6, marginTop: 22, marginBottom: 10 },
+  collapseWrap: { marginBottom: 10 },
+  collapseHeader: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 14, paddingVertical: 14, borderRadius: 12, borderWidth: 1, borderStyle: "dashed", borderColor: COLORS.border, backgroundColor: COLORS.surface },
+  collapseHeaderFilled: { borderStyle: "solid", borderColor: COLORS.success, backgroundColor: "#F1F8F1" },
+  collapseHeaderOpen: { borderBottomLeftRadius: 0, borderBottomRightRadius: 0, borderBottomWidth: 0 },
+  collapseTitle: { fontSize: 14, fontWeight: "700", color: COLORS.text },
+  collapseSummary: { flex: 1, textAlign: "right", fontSize: 12, color: COLORS.success, fontWeight: "700" },
+  collapseAdd: { flex: 1, textAlign: "right", fontSize: 12, color: COLORS.textSubtle, fontStyle: "italic" },
+  collapseBody: { padding: 14, borderWidth: 1, borderTopWidth: 0, borderColor: COLORS.border, borderBottomLeftRadius: 12, borderBottomRightRadius: 12, backgroundColor: COLORS.surface },
+  dimRow: { flexDirection: "row", gap: 10 },
   dimItem: { flex: 1 },
   dimLabel: { fontSize: 11, fontWeight: "700", color: COLORS.textMuted, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6, textAlign: "center" },
+  dimInputWrap: { flexDirection: "row", alignItems: "center", justifyContent: "center", backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border, borderRadius: 10, paddingVertical: 12, paddingHorizontal: 8 },
+  dimInputText: { fontSize: 20, fontWeight: "700", color: COLORS.text, textAlign: "center", padding: 0, minWidth: 30 },
+  dimSuffix: { fontSize: 13, color: COLORS.textMuted, fontWeight: "700", marginLeft: 4 },
   dimInput: { backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border, borderRadius: 10, paddingVertical: 14, paddingHorizontal: 10, fontSize: 20, fontWeight: "700", color: COLORS.text, textAlign: "center" },
   dimUnit: { fontSize: 10, color: COLORS.textSubtle, textAlign: "center", marginTop: 4 },
-  priceRow: { flexDirection: "row", alignItems: "center", backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 4, marginBottom: 14 },
+  priceRow: { flexDirection: "row", alignItems: "center", backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 4 },
   priceSymbol: { fontSize: 22, fontWeight: "700", color: COLORS.primary, marginRight: 6 },
   priceInput: { flex: 1, fontSize: 20, fontWeight: "700", color: COLORS.text, paddingVertical: 14 },
   priceSuffix: { fontSize: 14, color: COLORS.textMuted, fontWeight: "600", marginLeft: 6 },
