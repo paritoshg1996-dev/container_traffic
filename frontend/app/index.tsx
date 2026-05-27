@@ -2663,7 +2663,7 @@ const styles = StyleSheet.create({
   phoneInputRow: { flexDirection: "row", alignItems: "stretch", backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border, borderRadius: 12, overflow: "hidden", minHeight: 64 },
   phonePrefix: { backgroundColor: "#EEF2FA", paddingHorizontal: 14, alignItems: "center", justifyContent: "center", borderRightWidth: 1, borderRightColor: COLORS.border },
   phonePrefixText: { fontSize: 16, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.primary },
-  phoneInput: { flex: 1, paddingHorizontal: 14, fontSize: 18, color: COLORS.text, letterSpacing: 1 },
+  phoneInput: { flex: 1, paddingHorizontal: 14, fontSize: 18, color: COLORS.text, letterSpacing: 1,fontFamily: "Inter_600SemiBold", fontSize: 16, letterSpacing: 0.2 },
   otpCodeInput: { fontSize: 28, letterSpacing: 12, textAlign: "center", fontFamily: "Inter_700Bold", fontWeight: "700" },
   otpHint: { fontSize: 12, color: COLORS.textMuted, marginTop: 16, textAlign: "center", lineHeight: 18 },
   otpFooterRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 24, paddingHorizontal: 4 },
