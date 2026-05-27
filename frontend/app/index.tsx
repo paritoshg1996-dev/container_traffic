@@ -2277,30 +2277,7 @@ function LoadCard({ load, isMine, distance }: { load: Load; isMine: boolean; dis
     try { await Linking.openURL(`https://wa.me/?text=${encodeURIComponent(text)}`); }
     catch { Alert.alert("Error", "WhatsApp could not be opened."); }
   };
-  const saveContact = async () => {
-    try {
-      const { status: cur } = await Contacts.getPermissionsAsync();
-      let granted = cur === "granted";
-      if (!granted) {
-        const { status } = await Contacts.requestPermissionsAsync();
-        granted = status === "granted";
-      }
-      if (!granted) {
-        Alert.alert("Permission needed", "Please grant contacts permission to save this number to your phone.");
-        return;
-      }
-      const displayName = load.poster_company ? `${load.poster_name} (${load.poster_company})` : load.poster_name;
-      await Contacts.addContactAsync({
-        [Contacts.Fields.FirstName]: load.poster_name || "Truck Owner",
-        [Contacts.Fields.Company]: load.poster_company || "Truck Traffic PTL",
-        [Contacts.Fields.PhoneNumbers]: [{ label: "mobile", number: `+91${load.poster_phone}`, isPrimary: true }],
-      } as any);
-      Alert.alert("Saved", `${displayName} added to your contacts.`);
-    } catch (e) {
-      Alert.alert("Error", "Could not save contact.");
-    }
-  };
-  const dateStr = useMemo(() => { try { return new Date(load.loading_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }); } catch { return load.loading_date; } }, [load.loading_date]);
+   const dateStr = useMemo(() => { try { return new Date(load.loading_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }); } catch { return load.loading_date; } }, [load.loading_date]);
 
   // Format route location: pincode, city (bold) + state (smaller emphasis)
   // shows recognizable city instead of locality for instant recognition.
@@ -2410,10 +2387,7 @@ function LoadCard({ load, isMine, distance }: { load: Load; isMine: boolean; dis
 
         {!isMine && (
           <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-            <TouchableOpacity testID={`save-contact-${load.id}`} style={cardStyles.saveBtn} onPress={saveContact}>
-              <Ionicons name="person-add-outline" size={16} color={COLORS.primary} />
-            </TouchableOpacity>
-            <TouchableOpacity testID={`share-wa-${load.id}`} style={cardStyles.shareBtn} onPress={shareOnWhatsApp}>
+              <TouchableOpacity testID={`share-wa-${load.id}`} style={cardStyles.shareBtn} onPress={shareOnWhatsApp}>
               <Ionicons name="logo-whatsapp" size={16} color="#25D366" />
             </TouchableOpacity>
             <TouchableOpacity testID={`call-btn-${load.id}`} style={[styles.callBtn, { alignSelf: "center" }]} onPress={callPoster}>
