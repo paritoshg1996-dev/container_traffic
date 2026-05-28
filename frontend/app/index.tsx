@@ -2263,6 +2263,39 @@ function trackDistancesKm(start: { lat: number; lon: number }, end: { lat: numbe
 type ActiveFilter = { origin: string; dest: string; weightKg: number; volumeCuft: number | null; originCoord: { lat: number; lon: number }; destCoord: { lat: number; lon: number } };
 type Distances = Record<string, { origin: number; dest: number; offRoute: boolean }>;
 
+// Map of 10-digit phone -> saved contact name from the user's address book.
+// Loaded once per app session if contacts permission is granted, so we can
+// show a "Saved" badge next to load posters the user already knows.
+function useContactsMap(): Map<string, string> {
+  const [map, setMap] = useState<Map<string, string>>(new Map());
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const perm = await Contacts.getPermissionsAsync();
+        if (perm.status !== "granted") return;
+        const { data } = await Contacts.getContactsAsync({
+          fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name],
+        });
+        const m = new Map<string, string>();
+        for (const c of data) {
+          const nums = (c as any).phoneNumbers || [];
+          for (const n of nums) {
+            const digits = String(n?.number || "").replace(/\D/g, "");
+            if (digits.length >= 10) {
+              const local = digits.slice(-10);
+              if (!m.has(local)) m.set(local, (c.name || "").trim());
+            }
+          }
+        }
+        if (!cancelled) setMap(m);
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, []);
+  return map;
+}
+
 function LoadMarketScreen({ profile }: { profile: Profile }) {
   const [allLoads, setAllLoads] = useState<Load[]>([]);
   const [loading, setLoading] = useState(true);
@@ -2271,6 +2304,7 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
   const [activeFilter, setActiveFilter] = useState<ActiveFilter | null>(null);
   const [filteredLoads, setFilteredLoads] = useState<Load[] | null>(null);
   const [distances, setDistances] = useState<Distances>({});
+  const contactsMap = useContactsMap();
 
   const fetchLoads = useCallback(async () => {
     try { const r = await fetch(`${API}/loads`); const j = await r.json(); setAllLoads(j); }
@@ -2345,7 +2379,7 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
               <Text style={styles.emptySub}>{isFiltered ? "Try adjusting your cargo details or search within a wider area." : "Be the first to post a load!"}</Text>
             </View>
           }
-          renderItem={({ item }) => <LoadCard load={item} isMine={item.poster_phone === profile.phone} distance={isFiltered ? distances[item.id] : undefined} />}
+          renderItem={({ item }) => <LoadCard load={item} isMine={item.poster_phone === profile.phone} distance={isFiltered ? distances[item.id] : undefined} contactName={contactsMap.get(item.poster_phone)} />}
         />
       )}
       <FindSpaceModal visible={showFilter} initial={activeFilter} onClose={() => setShowFilter(false)} onApply={onApplyFilter} />
@@ -2409,7 +2443,7 @@ const ivStyles = StyleSheet.create({
   counterText: { color: "#fff", fontFamily: "Inter_700Bold", fontWeight: "700", fontSize: 13 },
 });
 
-function LoadCard({ load, isMine, distance }: { load: Load; isMine: boolean; distance?: { origin: number; dest: number; offRoute: boolean } }) {
+function LoadCard({ load, isMine, distance, contactName }: { load: Load; isMine: boolean; distance?: { origin: number; dest: number; offRoute: boolean }; contactName?: string }) {
   const [viewerStart, setViewerStart] = useState<number | null>(null);
   const [showImages, setShowImages] = useState(false);
   const callPoster = () => Linking.openURL(`tel:${load.poster_phone}`).catch(() => Alert.alert("Error", "Cannot open dialer"));
@@ -2467,9 +2501,25 @@ function LoadCard({ load, isMine, distance }: { load: Load; isMine: boolean; dis
 
   return (
     <View style={styles.card} testID={`load-card-${load.id}`}>
+      {/* Share-to-WhatsApp button pinned to top-right of the card. The
+          combined "share-social" icon + "Share to" label + WhatsApp logo makes
+          it unambiguous that this *forwards* the load details to a WhatsApp
+          chat (it does NOT start a direct chat with the poster). */}
+      <TouchableOpacity
+        testID={`share-wa-${load.id}`}
+        style={cardStyles.shareTopPill}
+        onPress={shareOnWhatsApp}
+        activeOpacity={0.85}
+        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+      >
+        <Ionicons name="share-social" size={13} color="#25D366" />
+        <Text style={cardStyles.shareTopPillText}>Share to</Text>
+        <Ionicons name="logo-whatsapp" size={14} color="#25D366" />
+      </TouchableOpacity>
+
       {/* LINE 1: Route */}
       <View style={styles.cardRouteRow}>
-        <View style={styles.flex1}>
+        <View style={[styles.flex1, { paddingRight: 110 }]}>
           <View style={cardStyles.routeEndpoint}>
             <Ionicons name="location" size={13} color={COLORS.secondary} style={{ marginTop: 3 }} />
             <View style={{ flex: 1 }}>
@@ -2543,27 +2593,30 @@ function LoadCard({ load, isMine, distance }: { load: Load; isMine: boolean; dis
       {/* LINE 3: Contact + Call */}
       <View style={cardStyles.line3Row}>
         <View style={cardStyles.contactSection}>
-          <Text style={styles.posterName} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>{load.poster_name}{isMine && <Text style={styles.youTag}> · You</Text>}</Text>
+          <View style={cardStyles.posterNameRow}>
+            <Text style={styles.posterName} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>
+              {load.poster_name}{isMine && <Text style={styles.youTag}> · You</Text>}
+            </Text>
+            {!isMine && contactName ? (
+              <View
+                style={cardStyles.savedBadge}
+                testID={`contact-saved-${load.id}`}
+              >
+                <Ionicons name="person" size={10} color={COLORS.primary} />
+                <Text style={cardStyles.savedBadgeText} numberOfLines={1}>
+                  {contactName ? `Saved · ${contactName}` : "In contacts"}
+                </Text>
+              </View>
+            ) : null}
+          </View>
           {load.poster_company ? <Text style={styles.posterCompany} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>{load.poster_company}</Text> : null}
           <Text style={styles.posterPhone}>+91 {load.poster_phone}</Text>
         </View>
 
         {!isMine && (
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-              <TouchableOpacity testID={`share-wa-${load.id}`} style={cardStyles.shareBtn} onPress={shareOnWhatsApp}>
-              <Ionicons name="logo-whatsapp" size={16} color="#25D366" />
-            </TouchableOpacity>
-            <TouchableOpacity testID={`call-btn-${load.id}`} style={[styles.callBtn, { alignSelf: "center" }]} onPress={callPoster}>
-              <Ionicons name="call" size={16} color={COLORS.surface} />
-              <Text style={styles.callBtnText}>Call</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {isMine && (
-          <TouchableOpacity testID={`share-wa-${load.id}`} style={cardStyles.shareWaPill} onPress={shareOnWhatsApp}>
-            <Ionicons name="logo-whatsapp" size={16} color={COLORS.surface} />
-            <Text style={cardStyles.shareWaPillText}>Share</Text>
+          <TouchableOpacity testID={`call-btn-${load.id}`} style={[styles.callBtn, { alignSelf: "center" }]} onPress={callPoster}>
+            <Ionicons name="call" size={16} color={COLORS.surface} />
+            <Text style={styles.callBtnText}>Call</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -2642,6 +2695,36 @@ const cardStyles = StyleSheet.create({
   shareBtn: { width: 36, height: 36, borderRadius: 18, borderWidth: 1.5, borderColor: "#25D366", backgroundColor: "#E8F8EE", alignItems: "center", justifyContent: "center" },
   shareWaPill: { backgroundColor: "#25D366", paddingVertical: 10, paddingHorizontal: 16, borderRadius: 100, flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "center" },
   shareWaPillText: { color: COLORS.surface, fontFamily: "Inter_600SemiBold", fontWeight: "600", fontSize: 14, letterSpacing: 0.2 },
+  shareTopPill: {
+    position: "absolute",
+    top: 10,
+    right: 10,
+    zIndex: 5,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingVertical: 5,
+    paddingHorizontal: 9,
+    borderRadius: 100,
+    borderWidth: 1,
+    borderColor: "#25D366",
+    backgroundColor: "#E8F8EE",
+  },
+  shareTopPillText: { color: "#0F6B36", fontFamily: "Inter_700Bold", fontWeight: "700", fontSize: 11, letterSpacing: 0.2 },
+  posterNameRow: { flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" },
+  savedBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    paddingVertical: 2,
+    paddingHorizontal: 7,
+    borderRadius: 100,
+    backgroundColor: "#EEF2FA",
+    borderWidth: 1,
+    borderColor: COLORS.primary,
+    maxWidth: 160,
+  },
+  savedBadgeText: { fontSize: 10, color: COLORS.primary, fontFamily: "Inter_700Bold", fontWeight: "700", letterSpacing: 0.2 },
   noPhotos: { fontSize: 11, color: COLORS.textSubtle, fontStyle: "italic" },
   contactSection: { flex: 1 },
 });
