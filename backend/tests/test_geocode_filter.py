@@ -4,7 +4,7 @@ import time
 import requests
 import pytest
 
-BASE_URL = os.environ.get("EXPO_PUBLIC_BACKEND_URL", "https://mobile-layout-adapt.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("EXPO_PUBLIC_BACKEND_URL", "https://profile-backend-sync.preview.emergentagent.com").rstrip("/")
 API = f"{BASE_URL}/api"
 
 
