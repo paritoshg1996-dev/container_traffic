@@ -1,38 +1,48 @@
-# Truck Traffic PTL — PRD
+# Truck Traffic PTL — Product Requirements
+
+## Original problem statement (this session)
+> Is info of the user being stored in the backend, If not ensure that the user profile info gets stored.
+
+## App overview
+Truck Traffic PTL is a React Native / Expo Android app + FastAPI backend + MongoDB. Truckers and load posters can:
+- Verify phone via Firebase Phone OTP
+- Set up a profile (name, phone, company)
+- Post truck loads (origin/destination pincodes, cargo, weight, photos, price)
+- Browse the marketplace and contact posters
+
+The frontend is hard-coded to call the production backend at `https://ptl-market.onrender.com/api`; the preview pod hosts an equivalent backend at `http://localhost:8001/api` for development/testing.
 
 ## Architecture
-- React Native + Expo (Android-first), expo-router, TypeScript
-- FastAPI + MongoDB backend (ptl-market.onrender.com)
-- Native Firebase Phone Auth (Android) for OTP login
-- Centralized design tokens in `frontend/theme/index.ts`
-- Inter font family loaded via `@expo-google-fonts/inter`, applied globally in `_layout.tsx`
+- **Backend**: FastAPI (`/app/backend/server.py`), Motor (async Mongo driver), Firebase Admin for OTP token verification.
+- **Frontend**: Expo Router app (`/app/frontend/app/index.tsx`), React Native 0.81, Firebase Auth (native), AsyncStorage for local state.
+- **DB collections**: `loads`, `pincode_geo`, `short_urls`, **`users`** (new this session).
 
-## Completed iterations
+## User personas
+- **Load poster** — wants to advertise an outgoing load. Needs name + company shown to truckers.
+- **Truck owner / driver** — browses loads and calls the poster.
 
-### Iter 1 — Polish patches for last two commits (May 26)
-1. **App icon (drawer cutoff)** — icon.png/adaptive-icon.png/favicon.png/splash-image.png regenerated with proper safe-zone padding (62% for adaptive, 78% for legacy). Verified zero pixel-loss against worst-case circular crop.
-2. **Route-input 2nd line adaptive font** — replaced unreliable `adjustsFontSizeToFit` with deterministic length-based size tiers (17px → 10px).
-3. **Profile post — image editable** — confirmed already shipped in commit 9dcae73 (EditLoadModal fetches existing photos, allows add/remove, PATCHes with `images` array).
+## Core (static) requirements
+- Phone-OTP login (Firebase, native Android).
+- Profile (name, 10-digit phone, optional company) — phone is verified and locked.
+- Loads must be searchable by origin/destination pincode and auto-purged after the loading date.
 
-### Iter 2 — Typography & visual-polish overhaul (May 26)
-- Installed `@expo-google-fonts/inter` (Regular/Medium/SemiBold/Bold)
-- Created `frontend/theme/index.ts` — central tokens for FONTS, TYPO, PALETTE, RADIUS, SPACING
-- Loaded Inter in `_layout.tsx` via `useFonts`; set Inter as the **default fontFamily** for every `<Text>` and `<TextInput>` (via `defaultProps`) so the whole app inherits it
-- Modernized color palette (slate-gray text, soft borders):
-  - text #1A1A1A → **#1F2937**, textMuted #6C757D → **#6B7280**, textSubtle #ADB5BD → **#9CA3AF**
-  - success #248232 → **#16A34A**, danger #DC3545 → **#DC2626**, border #DEE2E6 → **#E5E7EB**, bg #F8F9FA → **#F9FAFB**
-- Mapped every `fontWeight` to an explicit `fontFamily` token (90 entries) — required for Android, which cannot synthesize Inter bold weights
-- Softened corners app-wide: 10→12, 12→14, 14→16
-- Polished hierarchy: bumped line-heights, added letterSpacing on headings/buttons/labels, reduced excessive bolding in body text, increased form/card padding, added subtle card elevation
+## What's implemented
+- **2026-05-28** Added backend user persistence:
+  - `POST /api/users` — upsert profile keyed by normalised 10-digit phone. Validates phone (10 digits) and name (≥2 chars).
+  - `GET /api/users/{phone}` — fetch profile (404 if absent, 400 if phone invalid).
+  - `/api/auth/verify-token` now also upserts a `users` row on first phone verification (records uid + last_verified_at without overwriting an existing name/company).
+  - Frontend `saveProfile` POSTs to `/api/users` on every save/edit; `saveVerification` fetches `/api/users/{phone}` after OTP so a reinstalled user gets their name & company restored.
+  - Restored corrupted `/app/backend/.env` (MONGO_URL, DB_NAME) and `/app/frontend/.env`.
+  - 16/16 backend tests pass (creation, upsert, validation, phone normalisation, persistence, regression on existing endpoints).
+- Pre-existing (not changed): Loads CRUD, pincode/city lookup, geocode cache, Mappls places proxy, URL shortener, Firebase ID-token verification.
 
-### Iter 3 — Responsive UI for all Indian smartphone widths (Jan 26, 2026)
-- New `frontend/theme/responsive.ts` exports `rs(n)` (sizes/padding) and `rf(n)` (fonts) that scale every dimension relative to a 360dp baseline, clamped to 0.78×–1.15× so we never grow on tablets nor shrink to unreadability on tiny phones. Reads `Dimensions.get('window').width` once at module load.
-- Applied `rs()` to `header`, `tabs`, `formWrap`, `stepperRow`, `stepperBtn`, `truckCard`, `truckImg`, `routeInputsRow`, `profileWrap`, `collapseHeader`, `optionalHeading`, `input` padding, etc. and `rf()` to every fixed `fontSize`/`lineHeight` that appeared in the user-reported overflow screenshot.
-- Added `numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6-0.8} allowFontScaling={false}` on critical text that was overflowing: header title "Truck Traffic PTL", tab labels "Post Truck Space" / "Find Truck Space", stepper date "07-Jun-2026", stepper weight value, truck type labels, section titles, field labels, SmartRouteInput pin/locality/cityState, LoadCard route pin-city composite text, poster name & company.
-- Added `flexShrink: 1` / `minWidth: 0` to tab buttons, stepper centers, tabText and primary button text so they can compress inside their containers rather than overflowing.
-- Reduced fixed padding/minHeight on `SmartRouteInput` card (104→96), `stepperRow` (padding 10→8), and `input` (minHeight 56→52) so cards don't stretch the layout on narrow screens.
+## Backlog / future work
+- **P1** Gate `POST /api/users` behind a verified Firebase id_token so only the phone owner can edit its profile.
+- **P1** Add a unique index on `users.phone` to prevent race-condition duplicates.
+- **P2** Have `GET /api/users/{phone}` return 404 when `name` is empty (verify-token side-effect creates an empty profile shell). Frontend already guards.
+- **P2** Return 201 vs 200 on create vs update from `POST /api/users`.
+- **P2** Split `server.py` (~600 lines) into routers (users, loads, geo, shorten, auth).
+- **P3** Profile picture upload, per-user load history (`GET /api/users/{phone}/loads`).
 
-## Backlog
-- Replace inline COLORS with PALETTE token usage everywhere (currently both coexist)
-- Server-side image compression at upload
-- App-wide haptic feedback on primary actions
+## Next tasks
+- Add Firebase id_token auth gate + unique index on `users.phone` (P1).
