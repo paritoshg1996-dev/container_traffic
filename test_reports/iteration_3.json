@@ -1,0 +1,41 @@
+{
+  "summary": "Backend-only testing of new user profile persistence (POST /api/users, GET /api/users/{phone}) plus regression on existing endpoints. 16/16 pytest cases pass on localhost:8001.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/users", "issue": "Returns HTTP 200 on create; conventionally a resource creation should return 201. Not a bug — upsert semantics make 200 reasonable — flag only."},
+      {"endpoint": "POST /api/users", "issue": "There is no DB unique index on the 'phone' field of the users collection. Two concurrent POSTs for the same new phone could race and insert duplicate docs. Recommend creating a unique index: db.users.create_index('phone', unique=True)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_users_api.py",
+    "/app/test_reports/pytest/pytest_users_results.xml"
+  ],
+  "action_items": [
+    "(Optional) Return 201 from POST /api/users on first create vs 200 on update for clearer semantics.",
+    "(Optional) Add a unique index on users.phone in MongoDB at startup to prevent race-condition duplicates.",
+    "(Optional) The /api/auth/verify-token endpoint also upserts users with empty name/company on first verification — this means a GET /api/users/{phone} immediately after OTP verify will return a profile with name=''. Frontend already handles this by treating empty-name docs as 'not yet onboarded', but consider making GET return 404 when name is empty so the existing-profile-restore logic in index.tsx is simpler."
+  ],
+  "critical_code_review_comments": [
+    "server.py is ~600 lines and mixes user profile, loads, geocode, places, shortener, firebase auth — consider splitting into routers/{users,loads,geo,shorten,auth}.py for maintainability.",
+    "_norm_phone trims only the trailing 10 digits — good for +91/91 prefixes, but it will silently truncate a 12-digit non-Indian number. Acceptable since this is an India-only app, but worth a comment.",
+    "verify-token endpoint upserts user with empty name/company; combined with GET /api/users/{phone} returning 200 on that empty doc, this slightly contradicts the 'restore profile only if it exists' contract. The frontend currently guards via name length, but it is a subtle coupling.",
+    "No rate limiting on POST /api/users — anyone with a phone number can overwrite the name/company tied to that phone (no auth required). For production, this endpoint should be gated by a verified Firebase id_token so only the owner of the phone can edit its profile.",
+    "Mongo _id is correctly excluded via projection {'_id': 0} — good."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_users_api.py (new)"
+  ],
+  "success_rate": {"backend": "100% (16/16)", "frontend": "not tested (skipped per request)"},
+  "test_credentials": "none required",
+  "seed_data_creation": "Test creates and cleans up users with phones 9876543210, 9876543211, 9000000099, 9000000088 and a TEST_ load row (deleted after test).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend was tested against http://localhost:8001 because frontend/.env points to a separate prod Render deployment (EXPO_PUBLIC_BACKEND_URL=https://ptl-market.onrender.com). Reuse /app/backend/tests/test_users_api.py for regression — it covers POST /api/users (create/upsert/normalisation/validation), GET /api/users/{phone} (200/404/400), Mongo persistence, and basic regression on /api/, /api/pincode, /api/loads, /api/auth/verify-token. Firebase Admin is NOT initialised in this preview pod (no service-account env vars), so verify-token returns 500 for any token — only assert the endpoint exists.",
+  "rca of the issue": "Original problem: backend did not persist user profile; only Firebase OTP verification existed. Main agent added UserProfile model, POST /api/users (upsert keyed by 10-digit normalised phone) and GET /api/users/{phone}, plus an upsert side-effect in /api/auth/verify-token. All flows verified working end-to-end against MongoDB."
+}

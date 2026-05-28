@@ -200,11 +200,47 @@ useEffect(() => {
   const saveProfile = async (p: Profile) => {
     await AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(p));
     setProfile(p);
+    // Persist to backend (best-effort; doesn't block UX if offline).
+    try {
+      await fetch(`${API}/users`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          phone: p.phone,
+          name: p.name,
+          company: p.company || "",
+        }),
+      });
+    } catch (e) {
+      console.log("Failed to sync profile to backend:", e);
+    }
   };
 
   const saveVerification = async (v: PhoneVerified) => {
     await AsyncStorage.setItem(PHONE_VERIFIED_KEY, JSON.stringify(v));
     setPhoneVerified(v);
+    // If we don't have a local profile yet, try to restore one from the
+    // backend so a returning/reinstalled user keeps their name & company.
+    try {
+      const existing = await AsyncStorage.getItem(PROFILE_KEY);
+      if (!existing) {
+        const res = await fetch(`${API}/users/${encodeURIComponent(v.phone)}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.name && (data.name as string).trim().length >= 2) {
+            const restored: Profile = {
+              name: data.name,
+              phone: data.phone,
+              company: data.company || "",
+            };
+            await AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(restored));
+            setProfile(restored);
+          }
+        }
+      }
+    } catch (e) {
+      console.log("Failed to restore profile from backend:", e);
+    }
   };
 
   if (!loaded) {

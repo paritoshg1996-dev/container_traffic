@@ -402,6 +402,70 @@ async def get_load_image(load_id: str, idx: int):
     )
 
 
+# ===== User Profile =====
+class UserProfile(BaseModel):
+    phone: str                     # 10-digit local form, e.g. "9876543210"
+    name: str
+    company: Optional[str] = ""
+
+
+class UserProfileOut(UserProfile):
+    phone_full: Optional[str] = None
+    uid: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+def _norm_phone(p: str) -> str:
+    digits = "".join(ch for ch in (p or "") if ch.isdigit())
+    return digits[-10:] if len(digits) >= 10 else digits
+
+
+@api_router.post("/users", response_model=UserProfileOut)
+async def upsert_user(payload: UserProfile):
+    """Create or update a user profile keyed by 10-digit phone."""
+    phone = _norm_phone(payload.phone)
+    if len(phone) != 10:
+        raise HTTPException(status_code=400, detail="phone must be a 10-digit number")
+    name = (payload.name or "").strip()
+    if len(name) < 2:
+        raise HTTPException(status_code=400, detail="name is required")
+    company = (payload.company or "").strip()
+    now = datetime.now(timezone.utc).isoformat()
+
+    existing = await db.users.find_one({"phone": phone}, {"_id": 0})
+    if existing:
+        await db.users.update_one(
+            {"phone": phone},
+            {"$set": {"name": name, "company": company, "updated_at": now}},
+        )
+        doc = await db.users.find_one({"phone": phone}, {"_id": 0})
+    else:
+        doc = {
+            "phone": phone,
+            "phone_full": f"+91{phone}",
+            "name": name,
+            "company": company,
+            "uid": None,
+            "created_at": now,
+            "updated_at": now,
+        }
+        await db.users.insert_one(doc)
+        doc.pop("_id", None)
+    return UserProfileOut(**doc)
+
+
+@api_router.get("/users/{phone}", response_model=UserProfileOut)
+async def get_user(phone: str):
+    phone = _norm_phone(phone)
+    if len(phone) != 10:
+        raise HTTPException(status_code=400, detail="phone must be a 10-digit number")
+    doc = await db.users.find_one({"phone": phone}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="User not found")
+    return UserProfileOut(**doc)
+
+
 class ShortenRequest(BaseModel):
     url: str
 
@@ -483,6 +547,31 @@ async def verify_firebase_token(payload: VerifyTokenRequest):
     # Strip "+91" prefix to get the 10-digit local form used by the app/profile.
     digits = "".join(ch for ch in phone if ch.isdigit())
     phone_local = digits[-10:] if len(digits) >= 10 else digits
+
+    # Track this verified phone in the users collection so we can later attach
+    # a profile (name/company) to it. We do NOT overwrite an existing profile.
+    now_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        await db.users.update_one(
+            {"phone": phone_local},
+            {
+                "$set": {
+                    "uid": uid,
+                    "phone_full": phone or f"+91{phone_local}",
+                    "last_verified_at": now_iso,
+                    "updated_at": now_iso,
+                },
+                "$setOnInsert": {
+                    "phone": phone_local,
+                    "name": "",
+                    "company": "",
+                    "created_at": now_iso,
+                },
+            },
+            upsert=True,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to upsert user on verify: {e}")
 
     return VerifyTokenResponse(
         uid=uid,
