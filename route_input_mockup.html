@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Route Input – Display Mockup</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", Roboto, Inter, sans-serif;
+         background:#F4F6FA; padding:32px; color:#111827; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  .sub { color:#6B7280; font-size:13px; margin:0 0 24px; }
+  h2 { font-size:14px; color:#374151; margin:28px 0 10px; letter-spacing:.4px; text-transform:uppercase; }
+  .row { display:flex; gap:16px; align-items:stretch; }
+  .arrow { display:flex; align-items:center; color:#16A34A; font-size:22px; }
+  .label { font-size:11px; font-weight:700; color:#6B7280;
+           letter-spacing:.5px; text-transform:uppercase; margin-bottom:6px; }
+  .card { flex:1; min-width:0; background:#fff; border:1.5px solid #16A34A;
+          border-radius:16px; padding:14px 14px 12px; min-height:108px;
+          display:flex; flex-direction:column; justify-content:center; position:relative; }
+  .empty { border-color:#E5E7EB; color:#9CA3AF; align-items:center; flex-direction:row;
+           justify-content:flex-start; gap:6px; }
+  /* The three display lines */
+  .l1 { font-weight:800; color:#111827; line-height:1.15;
+        white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-bottom:2px; }
+  .l2 { font-weight:700; color:#1F2937; line-height:1.15;
+        white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-bottom:2px; }
+  .l3 { font-weight:600; color:#6B7280; letter-spacing:.5px; line-height:1.15;
+        white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .clear { position:absolute; top:8px; right:8px; color:#9CA3AF; font-size:16px; }
+  .note { font-size:12px; color:#6B7280; margin-top:6px; }
+  .group { background:#fff; padding:18px; border-radius:14px;
+           box-shadow:0 1px 2px rgba(0,0,0,.04); margin-bottom:18px; }
+</style>
+</head>
+<body>
+
+<h1>SmartRouteInput — proposed 3-line display</h1>
+<p class="sub">Line 1 = Area/City &nbsp;·&nbsp; Line 2 = State &nbsp;·&nbsp; Line 3 = Pincode.
+Each line shrinks independently if its own text overflows.</p>
+
+<!-- ============ EXAMPLE 1: short text ============ -->
+<div class="group">
+  <h2>Example 1 — short text (default sizes)</h2>
+  <div class="row">
+    <div style="flex:1; min-width:0;">
+      <div class="label">Origin</div>
+      <div class="card">
+        <div class="l1" style="font-size:20px;">Indore</div>
+        <div class="l2" style="font-size:15px;">Madhya Pradesh</div>
+        <div class="l3" style="font-size:12px;">452001</div>
+        <span class="clear">✕</span>
+      </div>
+    </div>
+    <div class="arrow">→</div>
+    <div style="flex:1; min-width:0;">
+      <div class="label">Destination</div>
+      <div class="card">
+        <div class="l1" style="font-size:20px;">Pune</div>
+        <div class="l2" style="font-size:15px;">Maharashtra</div>
+        <div class="l3" style="font-size:12px;">411001</div>
+        <span class="clear">✕</span>
+      </div>
+    </div>
+  </div>
+  <p class="note">Default font sizes: L1 = 20px, L2 = 15px, L3 = 12px.</p>
+</div>
+
+<!-- ============ EXAMPLE 2: only line 1 overflows ============ -->
+<div class="group">
+  <h2>Example 2 — long Area name only (Line 1 shrinks, others stay default)</h2>
+  <div class="row">
+    <div style="flex:1; min-width:0;">
+      <div class="label">Origin</div>
+      <div class="card">
+        <div class="l1" style="font-size:13px;">Visakhapatnam Port Area</div>
+        <div class="l2" style="font-size:15px;">Andhra Pradesh</div>
+        <div class="l3" style="font-size:12px;">530001</div>
+        <span class="clear">✕</span>
+      </div>
+    </div>
+    <div class="arrow">→</div>
+    <div style="flex:1; min-width:0;">
+      <div class="label">Destination</div>
+      <div class="card">
+        <div class="l1" style="font-size:20px;">Delhi</div>
+        <div class="l2" style="font-size:15px;">Delhi</div>
+        <div class="l3" style="font-size:12px;">110001</div>
+        <span class="clear">✕</span>
+      </div>
+    </div>
+  </div>
+  <p class="note">Notice only the long Area on the left shrank (20 → 13px). State and Pincode kept their normal size.</p>
+</div>
+
+<!-- ============ EXAMPLE 3: only line 2 overflows ============ -->
+<div class="group">
+  <h2>Example 3 — long State name (Line 2 shrinks independently)</h2>
+  <div class="row">
+    <div style="flex:1; min-width:0;">
+      <div class="label">Origin</div>
+      <div class="card">
+        <div class="l1" style="font-size:20px;">Itanagar</div>
+        <div class="l2" style="font-size:11px;">Arunachal Pradesh</div>
+        <div class="l3" style="font-size:12px;">791111</div>
+        <span class="clear">✕</span>
+      </div>
+    </div>
+    <div class="arrow">→</div>
+    <div style="flex:1; min-width:0;">
+      <div class="label">Destination</div>
+      <div class="card">
+        <div class="l1" style="font-size:20px;">Port Blair</div>
+        <div class="l2" style="font-size:9.5px;">Andaman &amp; Nicobar Islands</div>
+        <div class="l3" style="font-size:12px;">744101</div>
+        <span class="clear">✕</span>
+      </div>
+    </div>
+  </div>
+  <p class="note">State line shrinks per-card as needed. Area and Pincode untouched.</p>
+</div>
+
+<!-- ============ EXAMPLE 4: empty / placeholder ============ -->
+<div class="group">
+  <h2>Example 4 — empty placeholder (unchanged)</h2>
+  <div class="row">
+    <div style="flex:1; min-width:0;">
+      <div class="label">Origin</div>
+      <div class="card empty">🔍 &nbsp; Pincode or city…</div>
+    </div>
+    <div class="arrow">→</div>
+    <div style="flex:1; min-width:0;">
+      <div class="label">Destination</div>
+      <div class="card empty">🔍 &nbsp; Pincode or city…</div>
+    </div>
+  </div>
+</div>
+
+<h2>Adaptive font ladder (per line)</h2>
+<ul style="font-size:13px; color:#374151; line-height:1.7;">
+  <li><b>Line 1 (Area/City)</b>: 20 → 18 → 16 → 14 → 13 → 12px (based on char length)</li>
+  <li><b>Line 2 (State)</b>: 15 → 14 → 13 → 12 → 11 → 10 → 9.5px</li>
+  <li><b>Line 3 (Pincode)</b>: 12 → 11px (always 6 digits, rarely needs shrinking)</li>
+</ul>
+<p class="note">Each line is measured independently, so only the overflowing line shrinks — the hierarchy
+L1 &gt; L2 &gt; L3 is always preserved.</p>
+
+</body>
+</html>
