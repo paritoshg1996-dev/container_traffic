@@ -2122,30 +2122,39 @@ function SmartRouteInput({ label, testIDPrefix, text, pin, info, onChange }: {
             {(() => {
               const loc = (info.locality || "").trim();
               const cty = (info.city || "").trim();
-              // Line 1 = locality (fall back to city if locality is missing or
-              // identical to city). Line 2 = district (city). If locality and
-              // city are the same, we collapse to a single big line so we
-              // don't show duplicate text.
+              const stateName = (info.state || "").trim();
+              // Line 1 = locality (fall back to city if locality is missing
+              // or identical to city). Line 2 = full state name.
+              // Line 3 = pincode.
               const sameLocCity = !!loc && !!cty && loc.toLowerCase() === cty.toLowerCase();
-              const line1 = loc && !sameLocCity ? loc : cty;
-              const line2 = sameLocCity ? "" : (loc ? cty : "");
+              const line1 = loc && !sameLocCity ? loc : (loc || cty);
+              const line2 = stateName;
+              const line3 = pin || "";
 
-              // Length-based adaptive scaling (Android's adjustsFontSizeToFit
-              // is unreliable, so we precompute the size from text length).
-              const adapt = (len: number) =>
-                len <= 11 ? 17 :
-                len <= 13 ? 16 :
-                len <= 15 ? 15 :
+              // Per-line adaptive font ladder (length-based). Android's
+              // adjustsFontSizeToFit is unreliable, so we precompute size
+              // from text length so each line shrinks independently.
+              const adaptL1 = (len: number) =>
+                len <= 8  ? 20 :
+                len <= 11 ? 18 :
+                len <= 14 ? 16 :
                 len <= 17 ? 14 :
-                len <= 19 ? 13 :
-                len <= 22 ? 12 :
-                len <= 25 ? 11 : 10;
+                len <= 20 ? 13 : 12;
+              const adaptL2 = (len: number) =>
+                len <= 10 ? 15 :
+                len <= 13 ? 14 :
+                len <= 16 ? 13 :
+                len <= 19 ? 12 :
+                len <= 22 ? 11 :
+                len <= 25 ? 10 : 9.5;
+              const adaptL3 = (len: number) => (len <= 6 ? 12 : 11);
 
               return (
                 <>
                   {line1 ? (
                     <Text
-                      style={[sriStyles.locality, { fontSize: rf(adapt(line1.length)) }]}
+                      testID={`${testIDPrefix}-line1-area`}
+                      style={[sriStyles.line1, { fontSize: rf(adaptL1(line1.length)) }]}
                       numberOfLines={1}
                       ellipsizeMode="tail"
                       allowFontScaling={false}
@@ -2157,7 +2166,8 @@ function SmartRouteInput({ label, testIDPrefix, text, pin, info, onChange }: {
                   ) : null}
                   {line2 ? (
                     <Text
-                      style={[sriStyles.locality, { fontSize: rf(adapt(line2.length)) }]}
+                      testID={`${testIDPrefix}-line2-state`}
+                      style={[sriStyles.line2, { fontSize: rf(adaptL2(line2.length)) }]}
                       numberOfLines={1}
                       ellipsizeMode="tail"
                       allowFontScaling={false}
@@ -2167,12 +2177,22 @@ function SmartRouteInput({ label, testIDPrefix, text, pin, info, onChange }: {
                       {line2}
                     </Text>
                   ) : null}
+                  {line3 ? (
+                    <Text
+                      testID={`${testIDPrefix}-line3-pincode`}
+                      style={[sriStyles.line3, { fontSize: rf(adaptL3(line3.length)) }]}
+                      numberOfLines={1}
+                      ellipsizeMode="tail"
+                      allowFontScaling={false}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.7}
+                    >
+                      {line3}
+                    </Text>
+                  ) : null}
                 </>
               );
             })()}
-            <Text style={sriStyles.cityState} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>
-              {stateAbbr(info.state)}{stateAbbr(info.state) && pin ? " · " : ""}{pin}
-            </Text>
           </>
         ) : (
           <View style={sriStyles.placeholder}>
@@ -2215,6 +2235,10 @@ const sriStyles = StyleSheet.create({
     justifyContent: "center",
   },
   cardFilled: { borderColor: COLORS.success, borderWidth: 1.5 },
+  // 3-line display: L1 = Area/City (largest), L2 = State (medium), L3 = Pincode (smallest)
+  line1: { fontFamily: "Inter_700Bold", fontWeight: "800", color: COLORS.text, marginBottom: 3, lineHeight: rf(22) },
+  line2: { fontFamily: "Inter_600SemiBold", fontWeight: "700", color: COLORS.text, marginBottom: 2, lineHeight: rf(18) },
+  line3: { fontFamily: "Inter_600SemiBold", fontWeight: "600", color: COLORS.textMuted, letterSpacing: 0.5, lineHeight: rf(15) },
   pin: { fontSize: rf(17), fontFamily: "Inter_700Bold", fontWeight: "800", color: COLORS.text, marginBottom: 4, letterSpacing: 0.2 },
   locality: { fontSize: rf(17), fontFamily: "Inter_700Bold", fontWeight: "800", color: COLORS.text, marginBottom: 3 },
   cityState: { fontSize: rf(11), color: COLORS.textMuted, fontFamily: "Inter_600SemiBold", fontWeight: "600" },
