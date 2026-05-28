@@ -130,6 +130,62 @@ function extractPincode(address: string): string {
   return match ? match[1] : "";
 }
 
+// Indian state / UT name → 2-letter abbreviation (per RTO codes).
+const IN_STATE_ABBR: Record<string, string> = {
+  "andhra pradesh": "AP",
+  "arunachal pradesh": "AR",
+  "assam": "AS",
+  "bihar": "BR",
+  "chhattisgarh": "CG",
+  "chattisgarh": "CG",
+  "goa": "GA",
+  "gujarat": "GJ",
+  "haryana": "HR",
+  "himachal pradesh": "HP",
+  "jharkhand": "JH",
+  "karnataka": "KA",
+  "kerala": "KL",
+  "madhya pradesh": "MP",
+  "maharashtra": "MH",
+  "manipur": "MN",
+  "meghalaya": "ML",
+  "mizoram": "MZ",
+  "nagaland": "NL",
+  "odisha": "OD",
+  "orissa": "OD",
+  "punjab": "PB",
+  "rajasthan": "RJ",
+  "sikkim": "SK",
+  "tamil nadu": "TN",
+  "telangana": "TS",
+  "tripura": "TR",
+  "uttar pradesh": "UP",
+  "uttarakhand": "UK",
+  "uttaranchal": "UK",
+  "west bengal": "WB",
+  // Union Territories
+  "andaman and nicobar islands": "AN",
+  "andaman & nicobar islands": "AN",
+  "chandigarh": "CH",
+  "dadra and nagar haveli and daman and diu": "DN",
+  "dadra and nagar haveli": "DN",
+  "daman and diu": "DD",
+  "delhi": "DL",
+  "nct of delhi": "DL",
+  "jammu and kashmir": "JK",
+  "jammu & kashmir": "JK",
+  "ladakh": "LA",
+  "lakshadweep": "LD",
+  "puducherry": "PY",
+  "pondicherry": "PY",
+};
+
+function stateAbbr(state: string): string {
+  const s = (state || "").trim().toLowerCase();
+  if (!s) return "";
+  return IN_STATE_ABBR[s] || state.trim().slice(0, 2).toUpperCase();
+}
+
 // ============== Root ==============
 export default function Index() {
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -2063,18 +2119,20 @@ function SmartRouteInput({ label, testIDPrefix, text, pin, info, onChange }: {
       >
         {hasValue ? (
           <>
-            <Text style={sriStyles.pin} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>{pin}</Text>
             {(() => {
               const loc = (info.locality || "").trim();
               const cty = (info.city || "").trim();
-              const areaLine = loc && loc.toLowerCase() !== cty.toLowerCase() ? loc : cty;
-              if (!areaLine) return null;
-              // Adaptive font size for the 2nd line: short text uses the same
-              // 17px as line 1; long text shrinks down (min 10px) so it always
-              // fits the card width on a single line. Length-based scaling is
-              // used because adjustsFontSizeToFit is unreliable on Android.
-              const len = areaLine.length;
-              const adaptiveSize =
+              // Line 1 = locality (fall back to city if locality is missing or
+              // identical to city). Line 2 = district (city). If locality and
+              // city are the same, we collapse to a single big line so we
+              // don't show duplicate text.
+              const sameLocCity = !!loc && !!cty && loc.toLowerCase() === cty.toLowerCase();
+              const line1 = loc && !sameLocCity ? loc : cty;
+              const line2 = sameLocCity ? "" : (loc ? cty : "");
+
+              // Length-based adaptive scaling (Android's adjustsFontSizeToFit
+              // is unreliable, so we precompute the size from text length).
+              const adapt = (len: number) =>
                 len <= 11 ? 17 :
                 len <= 13 ? 16 :
                 len <= 15 ? 15 :
@@ -2082,21 +2140,38 @@ function SmartRouteInput({ label, testIDPrefix, text, pin, info, onChange }: {
                 len <= 19 ? 13 :
                 len <= 22 ? 12 :
                 len <= 25 ? 11 : 10;
+
               return (
-                <Text
-                  style={[sriStyles.locality, { fontSize: rf(adaptiveSize) }]}
-                  numberOfLines={1}
-                  ellipsizeMode="tail"
-                  allowFontScaling={false}
-                  adjustsFontSizeToFit
-                  minimumFontScale={0.7}
-                >
-                  {areaLine}
-                </Text>
+                <>
+                  {line1 ? (
+                    <Text
+                      style={[sriStyles.locality, { fontSize: rf(adapt(line1.length)) }]}
+                      numberOfLines={1}
+                      ellipsizeMode="tail"
+                      allowFontScaling={false}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.7}
+                    >
+                      {line1}
+                    </Text>
+                  ) : null}
+                  {line2 ? (
+                    <Text
+                      style={[sriStyles.locality, { fontSize: rf(adapt(line2.length)) }]}
+                      numberOfLines={1}
+                      ellipsizeMode="tail"
+                      allowFontScaling={false}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.7}
+                    >
+                      {line2}
+                    </Text>
+                  ) : null}
+                </>
               );
             })()}
             <Text style={sriStyles.cityState} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>
-              {info.city}{info.city && info.state ? ", " : ""}{info.state}
+              {stateAbbr(info.state)}{stateAbbr(info.state) && pin ? " · " : ""}{pin}
             </Text>
           </>
         ) : (
