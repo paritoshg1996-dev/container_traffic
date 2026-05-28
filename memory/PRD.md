@@ -25,6 +25,13 @@
 - Softened corners app-wide: 10→12, 12→14, 14→16
 - Polished hierarchy: bumped line-heights, added letterSpacing on headings/buttons/labels, reduced excessive bolding in body text, increased form/card padding, added subtle card elevation
 
+### Iter 3 — Responsive UI for all Indian smartphone widths (Jan 26, 2026)
+- New `frontend/theme/responsive.ts` exports `rs(n)` (sizes/padding) and `rf(n)` (fonts) that scale every dimension relative to a 360dp baseline, clamped to 0.78×–1.15× so we never grow on tablets nor shrink to unreadability on tiny phones. Reads `Dimensions.get('window').width` once at module load.
+- Applied `rs()` to `header`, `tabs`, `formWrap`, `stepperRow`, `stepperBtn`, `truckCard`, `truckImg`, `routeInputsRow`, `profileWrap`, `collapseHeader`, `optionalHeading`, `input` padding, etc. and `rf()` to every fixed `fontSize`/`lineHeight` that appeared in the user-reported overflow screenshot.
+- Added `numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6-0.8} allowFontScaling={false}` on critical text that was overflowing: header title "Truck Traffic PTL", tab labels "Post Truck Space" / "Find Truck Space", stepper date "07-Jun-2026", stepper weight value, truck type labels, section titles, field labels, SmartRouteInput pin/locality/cityState, LoadCard route pin-city composite text, poster name & company.
+- Added `flexShrink: 1` / `minWidth: 0` to tab buttons, stepper centers, tabText and primary button text so they can compress inside their containers rather than overflowing.
+- Reduced fixed padding/minHeight on `SmartRouteInput` card (104→96), `stepperRow` (padding 10→8), and `input` (minHeight 56→52) so cards don't stretch the layout on narrow screens.
+
 ## Backlog
 - Replace inline COLORS with PALETTE token usage everywhere (currently both coexist)
 - Server-side image compression at upload

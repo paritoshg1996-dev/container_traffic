@@ -22,6 +22,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { rs, rf } from "../theme/responsive";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
@@ -217,9 +218,17 @@ export default function Index() {
     <SafeAreaView style={styles.fill} edges={["top"]}>
       <View style={styles.header} testID="app-header">
         <View style={styles.headerLeft}>
-          <View>
-            <Text style={styles.headerTitle}>Truck Traffic PTL</Text>
-            <Text style={styles.headerSubtitle}>Hi, {profile.name.split(" ")[0]}</Text>
+          <View style={{ flex: 1 }}>
+            <Text
+              style={styles.headerTitle}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.7}
+              allowFontScaling={false}
+            >
+              Truck Traffic PTL
+            </Text>
+            <Text style={styles.headerSubtitle} numberOfLines={1}>Hi, {profile.name.split(" ")[0]}</Text>
           </View>
         </View>
         <TouchableOpacity testID="open-profile-btn" onPress={() => setShowProfile(true)} style={styles.iconBtn}>
@@ -268,8 +277,16 @@ function SwipeableTabs({ tab, setTab, children }: { tab: "post" | "market"; setT
 function TabButton({ label, icon, active, onPress, testID }: any) {
   return (
     <TouchableOpacity testID={testID} onPress={onPress} style={[styles.tabBtn, active && styles.tabBtnActive]}>
-      <Ionicons name={icon} size={18} color={active ? COLORS.primary : COLORS.textMuted} />
-      <Text style={[styles.tabText, active && styles.tabTextActive]}>{label}</Text>
+      <Ionicons name={icon} size={rf(16)} color={active ? COLORS.primary : COLORS.textMuted} />
+      <Text
+        style={[styles.tabText, active && styles.tabTextActive]}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.7}
+        allowFontScaling={false}
+      >
+        {label}
+      </Text>
     </TouchableOpacity>
   );
 }
@@ -761,7 +778,13 @@ function EditLoadModal({ load, visible, onClose, onSaved }: { load: Load; visibl
                 onPress={() => setShowDatePicker(true)}
               >
                 <Ionicons name="calendar" size={14} color={COLORS.primary} />
-                <Text style={styles.stepperDateText}>
+                <Text
+                  style={styles.stepperDateText}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.6}
+                  allowFontScaling={false}
+                >
                   {date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
                 </Text>
               </TouchableOpacity>
@@ -795,8 +818,8 @@ function EditLoadModal({ load, visible, onClose, onSaved }: { load: Load; visibl
                 <Text style={styles.stepperBtnText}>-</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.stepperCenter} activeOpacity={0.8} onPress={() => { setWeightInput(String(weight)); setWeightModalVisible(true); }}>
-                <Text style={styles.stepperValue}>{weight.toFixed(1)}</Text>
-                <Text style={styles.stepperUnit}>tons</Text>
+                <Text style={styles.stepperValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6} allowFontScaling={false}>{weight.toFixed(1)}</Text>
+                <Text style={styles.stepperUnit} numberOfLines={1} allowFontScaling={false}>tons</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.stepperBtn} onPress={() => setWeight(w => parseFloat((w + 0.5).toFixed(1)))}>
                 <Text style={styles.stepperBtnText}>+</Text>
@@ -810,7 +833,7 @@ function EditLoadModal({ load, visible, onClose, onSaved }: { load: Load; visibl
                 return (
                   <TouchableOpacity key={t.name} onPress={() => setTruckType(t.name)} style={[styles.truckCard, on && styles.truckCardOn, on && styles.filledBorder]} activeOpacity={0.7}>
                     <Image source={t.image} style={styles.truckImg} resizeMode="contain" />
-                    <Text style={[styles.truckLabel, on && styles.truckLabelOn]}>{t.name}</Text>
+                    <Text style={[styles.truckLabel, on && styles.truckLabelOn]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>{t.name}</Text>
                   </TouchableOpacity>
                 );
               })}
@@ -1308,7 +1331,13 @@ return (
             onPress={() => setShowDatePicker(true)}
           >
             <Ionicons name="calendar" size={14} color={COLORS.primary} />
-            <Text style={styles.stepperDateText}>
+            <Text
+              style={styles.stepperDateText}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.6}
+              allowFontScaling={false}
+            >
               {date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
             </Text>
           </TouchableOpacity>
@@ -1349,8 +1378,8 @@ return (
             activeOpacity={0.8}
             onPress={() => { setWeightInput(String(weight)); setWeightModalVisible(true); }}
           >
-            <Text style={styles.stepperValue}>{weight.toFixed(1)}</Text>
-            <Text style={styles.stepperUnit}>tons</Text>
+            <Text style={styles.stepperValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6} allowFontScaling={false}>{weight.toFixed(1)}</Text>
+            <Text style={styles.stepperUnit} numberOfLines={1} allowFontScaling={false}>tons</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.stepperBtn}
@@ -1399,7 +1428,7 @@ return (
             return (
               <TouchableOpacity key={t.name} testID={`truck-type-${t.name.replace(/\s+/g, "-")}`} onPress={() => setTruckType(t.name)} style={[styles.truckCard, on && styles.truckCardOn, on && styles.filledBorder]} activeOpacity={0.7}>
                 <Image source={t.image} style={[styles.truckImg, on && styles.truckImgOn]} resizeMode="contain" />
-                <Text style={[styles.truckLabel, on && styles.truckLabelOn]} numberOfLines={1}>{t.name}</Text>
+                <Text style={[styles.truckLabel, on && styles.truckLabelOn]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>{t.name}</Text>
               </TouchableOpacity>
             );
           })}
@@ -1977,7 +2006,7 @@ function SmartRouteInput({ label, testIDPrefix, text, pin, info, onChange }: {
       >
         {hasValue ? (
           <>
-            <Text style={sriStyles.pin} numberOfLines={1}>{pin}</Text>
+            <Text style={sriStyles.pin} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>{pin}</Text>
             {(() => {
               const loc = (info.locality || "").trim();
               const cty = (info.city || "").trim();
@@ -1998,16 +2027,18 @@ function SmartRouteInput({ label, testIDPrefix, text, pin, info, onChange }: {
                 len <= 25 ? 11 : 10;
               return (
                 <Text
-                  style={[sriStyles.locality, { fontSize: adaptiveSize }]}
+                  style={[sriStyles.locality, { fontSize: rf(adaptiveSize) }]}
                   numberOfLines={1}
                   ellipsizeMode="tail"
                   allowFontScaling={false}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.7}
                 >
                   {areaLine}
                 </Text>
               );
             })()}
-            <Text style={sriStyles.cityState} numberOfLines={1}>
+            <Text style={sriStyles.cityState} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>
               {info.city}{info.city && info.state ? ", " : ""}{info.state}
             </Text>
           </>
@@ -2039,27 +2070,27 @@ function SmartRouteInput({ label, testIDPrefix, text, pin, info, onChange }: {
 }
 
 const sriStyles = StyleSheet.create({
-  wrap: { flex: 1 },
-  label: { fontSize: 11, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.textMuted, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 },
+  wrap: { flex: 1, minWidth: 0 },
+  label: { fontSize: rf(11), fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.textMuted, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 },
   card: {
     backgroundColor: COLORS.surface,
     borderWidth: 1,
     borderColor: COLORS.border,
     borderRadius: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
-    minHeight: 104,
+    paddingHorizontal: rs(12),
+    paddingVertical: rs(12),
+    minHeight: rs(96),
     justifyContent: "center",
   },
   cardFilled: { borderColor: COLORS.success, borderWidth: 1.5 },
-  pin: { fontSize: 17, fontFamily: "Inter_700Bold", fontWeight: "800", color: COLORS.text, marginBottom: 4, letterSpacing: 0.2 },
-  locality: { fontSize: 17, fontFamily: "Inter_700Bold", fontWeight: "800", color: COLORS.text, marginBottom: 3 },
-  cityState: { fontSize: 11, color: COLORS.textMuted, fontFamily: "Inter_600SemiBold", fontWeight: "600" },
-  city: { fontSize: 15, fontFamily: "Inter_700Bold", fontWeight: "800", color: COLORS.text, marginBottom: 3 },
-  state: { fontSize: 11, color: COLORS.textMuted, fontStyle: "italic", fontFamily: "Inter_500Medium", fontWeight: "500" },
+  pin: { fontSize: rf(17), fontFamily: "Inter_700Bold", fontWeight: "800", color: COLORS.text, marginBottom: 4, letterSpacing: 0.2 },
+  locality: { fontSize: rf(17), fontFamily: "Inter_700Bold", fontWeight: "800", color: COLORS.text, marginBottom: 3 },
+  cityState: { fontSize: rf(11), color: COLORS.textMuted, fontFamily: "Inter_600SemiBold", fontWeight: "600" },
+  city: { fontSize: rf(15), fontFamily: "Inter_700Bold", fontWeight: "800", color: COLORS.text, marginBottom: 3 },
+  state: { fontSize: rf(11), color: COLORS.textMuted, fontStyle: "italic", fontFamily: "Inter_500Medium", fontWeight: "500" },
   placeholder: { flexDirection: "row", alignItems: "center" },
-  placeholderText: { fontSize: 14, color: COLORS.textSubtle },
-  clearBtn: { position: "absolute", top: 10, right: 10 },
+  placeholderText: { fontSize: rf(13), color: COLORS.textSubtle, flexShrink: 1 },
+  clearBtn: { position: "absolute", top: 8, right: 8 },
 });
 // ============== Load Market ==============
 const geoCache = new Map<string, { lat: number; lon: number; found: boolean }>();
@@ -2310,7 +2341,7 @@ function LoadCard({ load, isMine, distance }: { load: Load; isMine: boolean; dis
           <View style={cardStyles.routeEndpoint}>
             <Ionicons name="location" size={13} color={COLORS.secondary} style={{ marginTop: 3 }} />
             <View style={{ flex: 1 }}>
-              <Text style={cardStyles.routePinCity} numberOfLines={1}>
+              <Text style={cardStyles.routePinCity} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>
                 <Text style={cardStyles.routePin}>{load.origin_pincode}</Text>
                 <Text style={cardStyles.routeComma}>, </Text>
                 <Text style={cardStyles.routeCity}>{oCity}</Text>
@@ -2321,7 +2352,7 @@ function LoadCard({ load, isMine, distance }: { load: Load; isMine: boolean; dis
           <View style={[cardStyles.routeEndpoint, { marginTop: 8 }]}>
             <Ionicons name="flag" size={13} color={COLORS.primary} style={{ marginTop: 3 }} />
             <View style={{ flex: 1 }}>
-              <Text style={cardStyles.routePinCity} numberOfLines={1}>
+              <Text style={cardStyles.routePinCity} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>
                 <Text style={cardStyles.routePin}>{load.destination_pincode}</Text>
                 <Text style={cardStyles.routeComma}>, </Text>
                 <Text style={cardStyles.routeCity}>{dCity}</Text>
@@ -2380,8 +2411,8 @@ function LoadCard({ load, isMine, distance }: { load: Load; isMine: boolean; dis
       {/* LINE 3: Contact + Call */}
       <View style={cardStyles.line3Row}>
         <View style={cardStyles.contactSection}>
-          <Text style={styles.posterName} numberOfLines={1}>{load.poster_name}{isMine && <Text style={styles.youTag}> · You</Text>}</Text>
-          {load.poster_company ? <Text style={styles.posterCompany} numberOfLines={1}>{load.poster_company}</Text> : null}
+          <Text style={styles.posterName} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>{load.poster_name}{isMine && <Text style={styles.youTag}> · You</Text>}</Text>
+          {load.poster_company ? <Text style={styles.posterCompany} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>{load.poster_company}</Text> : null}
           <Text style={styles.posterPhone}>+91 {load.poster_phone}</Text>
         </View>
 
@@ -2596,7 +2627,7 @@ function FindSpaceModal({ visible, initial, onClose, onApply }: {
 function Field({ label, children }: any) {
   return (
     <View style={styles.fieldWrap}>
-      <Text style={styles.label}>{label}</Text>
+      <Text style={styles.label} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8} allowFontScaling={false}>{label}</Text>
       {children}
     </View>
   );
@@ -2606,7 +2637,7 @@ function SectionTitle({ icon, title }: { icon: any; title: string }) {
   return (
     <View style={styles.sectionTitleRow}>
       <Ionicons name={icon} size={16} color={COLORS.primary} />
-      <Text style={styles.sectionTitle}>{title}</Text>
+      <Text style={styles.sectionTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8} allowFontScaling={false}>{title}</Text>
     </View>
   );
 }
@@ -2617,22 +2648,22 @@ const styles = StyleSheet.create({
   center: { alignItems: "center", justifyContent: "center" },
   flex1: { flex: 1 },
   row: { flexDirection: "row" },
-  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingVertical: 14, backgroundColor: COLORS.surface, borderBottomWidth: 1, borderBottomColor: COLORS.border },
-  headerLeft: { flexDirection: "row", alignItems: "center", gap: 12 },
+  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: rs(20), paddingVertical: rs(14), backgroundColor: COLORS.surface, borderBottomWidth: 1, borderBottomColor: COLORS.border },
+  headerLeft: { flexDirection: "row", alignItems: "center", gap: rs(12), flex: 1, marginRight: rs(8) },
   logoBox: { width: 40, height: 40, backgroundColor: COLORS.primary, borderRadius: 12, alignItems: "center", justifyContent: "center" },
   logoImg: { width: 44, height: 44, borderRadius: 12 },
-  headerTitle: { fontSize: 18, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.text, lineHeight: 24, letterSpacing: -0.2 },
-  headerSubtitle: { fontSize: 13, color: COLORS.textMuted, marginTop: 2, lineHeight: 18, letterSpacing: 0.1 },
+  headerTitle: { fontSize: rf(18), fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.text, lineHeight: rf(24), letterSpacing: -0.2 },
+  headerSubtitle: { fontSize: rf(13), color: COLORS.textMuted, marginTop: 2, lineHeight: rf(18), letterSpacing: 0.1 },
   iconBtn: { padding: 4 },
-  tabs: { flexDirection: "row", backgroundColor: COLORS.surface, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: COLORS.border, gap: 8 },
-  tabBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", paddingVertical: 12, borderRadius: 12, backgroundColor: COLORS.bg, gap: 6 },
+  tabs: { flexDirection: "row", backgroundColor: COLORS.surface, paddingHorizontal: rs(12), paddingTop: rs(10), paddingBottom: rs(10), borderBottomWidth: 1, borderBottomColor: COLORS.border, gap: rs(8) },
+  tabBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", paddingVertical: rs(12), paddingHorizontal: rs(6), borderRadius: 12, backgroundColor: COLORS.bg, gap: rs(4), minWidth: 0 },
   tabBtnActive: { backgroundColor: "#EEF2FA" },
-  tabText: { color: COLORS.textMuted, fontFamily: "Inter_500Medium", fontWeight: "500", fontSize: 14, letterSpacing: 0.1 },
+  tabText: { color: COLORS.textMuted, fontFamily: "Inter_500Medium", fontWeight: "500", fontSize: rf(13), letterSpacing: 0.1, flexShrink: 1 },
   tabTextActive: { color: COLORS.primary, fontFamily: "Inter_600SemiBold", fontWeight: "600" },
-  profileWrap: { padding: 24, paddingTop: 60 },
-  profileLogo: { width: 72, height: 72, backgroundColor: COLORS.primary, borderRadius: 18, alignItems: "center", justifyContent: "center", marginBottom: 16 },
-  profileTitle: { fontSize: 24, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.text, lineHeight: 32, letterSpacing: -0.3 },
-  profileSubtitle: { fontSize: 15, color: COLORS.textMuted, marginTop: 8, lineHeight: 22, letterSpacing: 0.1 },
+  profileWrap: { padding: rs(20), paddingTop: rs(48) },
+  profileLogo: { width: rs(72), height: rs(72), backgroundColor: COLORS.primary, borderRadius: 18, alignItems: "center", justifyContent: "center", marginBottom: 16 },
+  profileTitle: { fontSize: rf(24), fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.text, lineHeight: rf(32), letterSpacing: -0.3 },
+  profileSubtitle: { fontSize: rf(15), color: COLORS.textMuted, marginTop: 8, lineHeight: rf(22), letterSpacing: 0.1 },
   // ===== OTP / Phone-verify styles =====
   phoneInputRow: { flexDirection: "row", alignItems: "stretch", backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border, borderRadius: 12, overflow: "hidden", minHeight: 64 },
   phonePrefix: { backgroundColor: "#EEF2FA", paddingHorizontal: 14, alignItems: "center", justifyContent: "center", borderRightWidth: 1, borderRightColor: COLORS.border },
@@ -2646,21 +2677,21 @@ const styles = StyleSheet.create({
   lockedPhoneRow: { flexDirection: "row", alignItems: "center", backgroundColor: "#F0F8F2", borderWidth: 1, borderColor: COLORS.success, borderRadius: 12, paddingHorizontal: 14, minHeight: 64 },
   lockedPhonePrefix: { fontSize: 16, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.success, marginRight: 10 },
   lockedPhoneText: { fontSize: 18, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.text, letterSpacing: 1 },
-  formWrap: { padding: 20, paddingBottom: 40 },
-  fieldWrap: { marginBottom: 18 },
-  label: { fontSize: 13, fontFamily: "Inter_500Medium", fontWeight: "500", color: COLORS.textMuted, marginBottom: 8, lineHeight: 18, letterSpacing: 0.3 },
+  formWrap: { padding: rs(16), paddingBottom: rs(40) },
+  fieldWrap: { marginBottom: rs(16) },
+  label: { fontSize: rf(13), fontFamily: "Inter_500Medium", fontWeight: "500", color: COLORS.textMuted, marginBottom: 8, lineHeight: rf(18), letterSpacing: 0.3 },
   input: {
   backgroundColor: COLORS.surface,
   borderWidth: 1,
   borderColor: COLORS.border,
   borderRadius: 14,
-  padding: 14,
-  fontSize: 18,
+  padding: rs(14),
+  fontSize: rf(17),
   color: COLORS.text,
-  minHeight: 56,
-  paddingVertical: 16,
+  minHeight: rs(52),
+  paddingVertical: rs(14),
   fontFamily: "Inter_700Bold",
-  lineHeight: 24,
+  lineHeight: rf(22),
   letterSpacing: 0.2,
 },  
   hintMuted: { fontSize: 12, color: COLORS.textMuted, marginTop: 6 },
@@ -2696,8 +2727,8 @@ const styles = StyleSheet.create({
   suggestSub: { fontSize: 12, color: COLORS.textMuted, marginTop: 2 },
   suggestPin: { fontSize: 13, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.primary },
   suggestMore: { fontSize: 11, color: COLORS.textSubtle, paddingVertical: 8, paddingHorizontal: 14, fontStyle: "italic", textAlign: "center" },
-  sectionTitleRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 14, marginBottom: 12 },
-  sectionTitle: { fontSize: 13, fontFamily: "Inter_600SemiBold", fontWeight: "600", color: COLORS.primary, textTransform: "uppercase", letterSpacing: 0.8 },
+  sectionTitleRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: rs(12), marginBottom: rs(10) },
+  sectionTitle: { fontSize: rf(13), fontFamily: "Inter_600SemiBold", fontWeight: "600", color: COLORS.primary, textTransform: "uppercase", letterSpacing: 0.8, flexShrink: 1 },
   segment: { flexDirection: "row", backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border, borderRadius: 12, padding: 4 },
   segmentBtn: { flex: 1, paddingVertical: 12, borderRadius: 8, alignItems: "center" },
   segmentBtnOn: { backgroundColor: COLORS.primary },
@@ -2705,11 +2736,11 @@ const styles = StyleSheet.create({
   segmentTextOn: { color: COLORS.surface },
  
   
-  primaryBtn: { backgroundColor: COLORS.primary, paddingVertical: 16, paddingHorizontal: 24, borderRadius: 14, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 16 },
-  primaryBtnText: { color: COLORS.surface, fontSize: 16, fontFamily: "Inter_600SemiBold", fontWeight: "600", lineHeight: 22, letterSpacing: 0.2 },
-  whatsappBtn: { backgroundColor: "#25D366", paddingVertical: 16, paddingHorizontal: 16, borderRadius: 14, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
-  outlineBtn: { paddingVertical: 16, paddingHorizontal: 24, borderRadius: 14, borderWidth: 1.5, borderColor: COLORS.border, alignItems: "center", justifyContent: "center" },
-  outlineBtnText: { color: COLORS.text, fontSize: 16, fontFamily: "Inter_600SemiBold", fontWeight: "600", lineHeight: 22, letterSpacing: 0.2 },
+  primaryBtn: { backgroundColor: COLORS.primary, paddingVertical: rs(14), paddingHorizontal: rs(20), borderRadius: 14, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 16 },
+  primaryBtnText: { color: COLORS.surface, fontSize: rf(16), fontFamily: "Inter_600SemiBold", fontWeight: "600", lineHeight: rf(22), letterSpacing: 0.2, flexShrink: 1 },
+  whatsappBtn: { backgroundColor: "#25D366", paddingVertical: rs(14), paddingHorizontal: rs(14), borderRadius: 14, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
+  outlineBtn: { paddingVertical: rs(14), paddingHorizontal: rs(20), borderRadius: 14, borderWidth: 1.5, borderColor: COLORS.border, alignItems: "center", justifyContent: "center" },
+  outlineBtnText: { color: COLORS.text, fontSize: rf(16), fontFamily: "Inter_600SemiBold", fontWeight: "600", lineHeight: rf(22), letterSpacing: 0.2, flexShrink: 1 },
   marketTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingVertical: 12 },
   marketCount: { fontSize: 14, color: COLORS.textMuted, fontFamily: "Inter_600SemiBold", fontWeight: "600" },
   filterBtn: { flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 8, paddingHorizontal: 14, borderRadius: 100, borderWidth: 1.5, borderColor: COLORS.primary },
@@ -2742,11 +2773,11 @@ const styles = StyleSheet.create({
   miniChipText: { fontSize: 11, color: COLORS.primary, fontFamily: "Inter_600SemiBold", fontWeight: "600" },
   truckChip: { backgroundColor: COLORS.primary, paddingHorizontal: 10 },
   truckRow: { flexDirection: "row", marginHorizontal: -4 },
-  truckCard: { flex: 1, marginHorizontal: 4, backgroundColor: COLORS.surface, borderWidth: 1.5, borderColor: COLORS.border, borderRadius: 14, paddingVertical: 14, paddingHorizontal: 8, alignItems: "center" },
+  truckCard: { flex: 1, marginHorizontal: 4, backgroundColor: COLORS.surface, borderWidth: 1.5, borderColor: COLORS.border, borderRadius: 14, paddingVertical: rs(12), paddingHorizontal: rs(4), alignItems: "center", minWidth: 0 },
   truckCardOn: { borderColor: COLORS.primary, backgroundColor: "#F0F4FB" },
-  truckImg: { width: 88, height: 50 },
+  truckImg: { width: rs(72), height: rs(42), maxWidth: "100%" },
   truckImgOn: {},
-  truckLabel: { fontSize: 12, fontFamily: "Inter_600SemiBold", fontWeight: "600", color: COLORS.textMuted, textAlign: "center", marginTop: 8 },
+  truckLabel: { fontSize: rf(12), fontFamily: "Inter_600SemiBold", fontWeight: "600", color: COLORS.textMuted, textAlign: "center", marginTop: rs(6) },
   truckLabelOn: { color: COLORS.primary, fontFamily: "Inter_700Bold", fontWeight: "700" },
   posterRow: { flexDirection: "row", alignItems: "center" },
   posterName: { fontSize: 15, fontFamily: "Inter_600SemiBold", fontWeight: "600", color: COLORS.text, lineHeight: 20, letterSpacing: -0.1 },
@@ -2780,14 +2811,14 @@ const styles = StyleSheet.create({
   modalSubtitle: { fontSize: 14, color: COLORS.textMuted, marginBottom: 20, lineHeight: 20, letterSpacing: 0.1 },
   inputError: { borderColor: COLORS.danger },
   filledBorder: { borderColor: COLORS.success, borderWidth: 1.5 },
-  optionalHeading: { fontSize: 12, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.textMuted, textTransform: "uppercase", letterSpacing: 0.6, marginTop: 22, marginBottom: 10 },
-  collapseWrap: { marginBottom: 10 },
-  collapseHeader: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 14, paddingVertical: 14, borderRadius: 14, borderWidth: 1, borderStyle: "dashed", borderColor: COLORS.border, backgroundColor: COLORS.surface },
+  optionalHeading: { fontSize: rf(12), fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.textMuted, textTransform: "uppercase", letterSpacing: 0.6, marginTop: rs(20), marginBottom: rs(10) },
+  collapseWrap: { marginBottom: rs(10) },
+  collapseHeader: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: rs(12), paddingVertical: rs(12), borderRadius: 14, borderWidth: 1, borderStyle: "dashed", borderColor: COLORS.border, backgroundColor: COLORS.surface },
   collapseHeaderFilled: { borderStyle: "solid", borderColor: COLORS.success, backgroundColor: "#F1F8F1" },
   collapseHeaderOpen: { borderBottomLeftRadius: 0, borderBottomRightRadius: 0, borderBottomWidth: 0 },
-  collapseTitle: { fontSize: 14, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.text },
-  collapseSummary: { flex: 1, textAlign: "right", fontSize: 12, color: COLORS.success, fontFamily: "Inter_700Bold", fontWeight: "700" },
-  collapseAdd: { flex: 1, textAlign: "right", fontSize: 12, color: COLORS.textSubtle, fontStyle: "italic" },
+  collapseTitle: { fontSize: rf(14), fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.text, flexShrink: 1 },
+  collapseSummary: { flex: 1, textAlign: "right", fontSize: rf(12), color: COLORS.success, fontFamily: "Inter_700Bold", fontWeight: "700" },
+  collapseAdd: { flex: 1, textAlign: "right", fontSize: rf(12), color: COLORS.textSubtle, fontStyle: "italic" },
   collapseBody: { padding: 14, borderWidth: 1, borderTopWidth: 0, borderColor: COLORS.border, borderBottomLeftRadius: 12, borderBottomRightRadius: 12, backgroundColor: COLORS.surface },
   dimRow: { flexDirection: "row", gap: 10 },
   dimItem: { flex: 1 },
@@ -2879,14 +2910,15 @@ stepperRow: {
   borderWidth: 1,
   borderColor: COLORS.border,
   borderRadius: 14,
-  padding: 10,
-  marginBottom: 14,
-  gap: 12,
+  paddingVertical: rs(8),
+  paddingHorizontal: rs(8),
+  marginBottom: rs(14),
+  gap: rs(8),
 },
 stepperBtn: {
-  width: 36,
-  height: 36,
-  borderRadius: 18,
+  width: rs(36),
+  height: rs(36),
+  borderRadius: rs(18),
   borderWidth: 1,
   borderColor: COLORS.border,
   backgroundColor: COLORS.bg,
@@ -2895,9 +2927,9 @@ stepperBtn: {
   flexShrink: 0,
 },
 stepperBtnText: {
-  fontSize: 22,
+  fontSize: rf(22),
   color: COLORS.text,
-  lineHeight: 26,
+  lineHeight: rf(26),
 },
 stepperCenter: {
   flex: 1,
@@ -2905,28 +2937,30 @@ stepperCenter: {
   alignItems: "baseline",
   justifyContent: "center",
   gap: 6,
+  minWidth: 0,
 },
 stepperValue: {
-  fontSize: 22,
+  fontSize: rf(22),
   fontFamily: "Inter_700Bold", fontWeight: "700",
   color: COLORS.text,
 },
 stepperUnit: {
-  fontSize: 13,
+  fontSize: rf(13),
   color: COLORS.textMuted,
 },
 stepperDateText: {
-  fontSize: 22,
+  fontSize: rf(20),
   fontFamily: "Inter_700Bold", fontWeight: "700",
   color: COLORS.text,
   marginLeft: 6,
+  flexShrink: 1,
 },
 	
 	routeInputsRow: {
   flexDirection: "row",
   alignItems: "flex-start",
-  marginBottom: 14,
-  gap: 0,
+  marginBottom: rs(14),
+  gap: rs(4),
 },
 
 
