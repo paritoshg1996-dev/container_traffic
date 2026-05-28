@@ -153,7 +153,28 @@ export default function Index() {
       setLoaded(true);
     })();
   }, []);
+	
+useEffect(() => {
+  if (!firebaseAuth) {
+    console.log("Firebase Auth module NOT loaded");
+    return;
+  }
 
+  try {
+    console.log("===== FIREBASE APP CONFIG =====");
+    console.log("App Name:", firebaseAuth().app.name);
+    console.log("App Options:", firebaseAuth().app.options);
+    console.log("App ID:", firebaseAuth().app.options.appId);
+    console.log("Project ID:", firebaseAuth().app.options.projectId);
+    console.log("Storage Bucket:", firebaseAuth().app.options.storageBucket);
+    console.log("Package:", "com.ptlmarket.trucktraffic");
+    console.log("================================");
+  } catch (e) {
+    console.log("Firebase config read failed:", e);
+  }
+}, []);
+
+	
   // Ask for contacts permission once profile is set up (so user can save truck-owner numbers).
   useEffect(() => {
     if (!profile) return;
