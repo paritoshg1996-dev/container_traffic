@@ -45,12 +45,51 @@ Root cause: `RouteSearchModal` was deriving `state` by splitting `placeAddress` 
 - Sanitization handles legacy bad records (state=pincode).
 - TypeScript compiles cleanly (no new errors).
 
+## What's been implemented (2026-01)
+
+### Mappls Autosuggest client-side ranking + Saved Pickups removal
+Mappls returned POIs (Kolkata Airport, Kolkata Port) before the actual city
+(Kolkata) for plain city queries. Backend storage is unchanged — this is a
+display-only re-ranking using the `type` and `addressTokens` fields already in
+the response.
+
+- **New helpers in `RouteSearchModal`**: `mapplsRankTier`, `mapplsNameMatchScore`,
+  `rankMapplsSuggestions` — three-tier stable sort:
+  - **P1** — `type === City | District | SubDistrict | State | Country`, or
+    `placeName` exactly matches the query (case-insensitive).
+  - **P2** — Localities/sub-localities/villages/towns.
+  - **P3** — POIs / Airports / Ports / Railway Stations / Landmarks / unknown.
+  - Within a tier: exact placeName → exact token match → prefix → substring →
+    original Mappls index. Stable, so Mappls' own ordering wins ties.
+- **Dev-only logging** (`__DEV__` guarded `console.log`) of every Mappls item's
+  `type` so result classifications can be verified during tuning. Stripped from
+  production bundles automatically by Metro.
+- **Saved Pickups section removed** (UI + storage) — the recent-search list
+  serves the same purpose. Removed: `SAVED_PICKUPS_KEY`, `SavedPickup` type,
+  `getSavedPickups`, `bumpSavedPickup`, `savedPickupKey`, `savedPickups` state,
+  `useCountPill` / `useCountText` styles, and all `section === "saved"` branches
+  in row rendering.
+
+### Files touched
+- `/app/frontend/app/index.tsx` — `RouteSearchModal` ranking/dev-log added,
+  Saved Pickups infrastructure deleted.
+
+### Verified
+- Unit-tested ranking with synthetic Mappls payload: queries "kolkata" with
+  POI-first response returns `[Kolkata, Kolkata Salt Lake (Locality),
+  New Kolkata Township (SubLocality), Kolkata Airport (POI), Kolkata Port (POI)]`
+  — exactly the spec example.
+- TypeScript: no new errors introduced (one pre-existing duplicate-key error
+  on line 3248 in `phoneInput` style is unrelated).
+
 ## Next action items
-1. **Manual visual verification on device** — install/hot-reload Expo build and confirm:
-   - Post Truck Space → select a Mappls POI (factory/warehouse) → card shows `Locality / City, ST / Pincode`
-   - Find Truck Space → same input/display, plus the Load list cards show the same layout
-   - Edit an existing load → precision fields preserved
-2. **Optional Phase 2 — Mappls Place Detail API** for even richer precision when the autosuggest item has eLoc but lacks `addressTokens`.
+1. **Manual visual verification on device** — install/hot-reload Expo build and:
+   - Search "kolkata", "mumbai", "delhi" → confirm city appears first.
+   - Confirm Saved Pickups section no longer appears below the search bar.
+   - Watch Metro logs for `[Mappls] q="…" types=[…]` while searching to verify
+     the actual `type` classifications Mappls returns in production.
+2. **Optional Phase 2 — Mappls Place Detail API** for richer precision when an
+   autosuggest item has `eLoc` but lacks `addressTokens`.
 
 ## Backlog / future
 - Route matching, truck-load matching, distance/off-route — all unblocked by the precision tier now available in storage.

@@ -1903,53 +1903,52 @@ function VoiceListenOverlay({ visible, onCancel, status }: { visible: boolean; o
 
 // ============== RouteSearchModal ==============
 const RECENT_KEY_PREFIX = "recent_routes_";
-// "Saved Pickups" — usage-ranked locations shared across origin & destination
-// pickers. Deduped by eLoc (when present) else pincode+placeName. Auto-tracked
-// on every user selection; the user never has to tap "save" explicitly.
-const SAVED_PICKUPS_KEY = "saved_pickups_v1";
-const SAVED_PICKUPS_MAX = 5;
 
-type SavedPickup = CitySuggestion & { useCount: number; lastUsedAt: string };
-
-// Stable identity for a pickup — eLoc when Mappls gave us one (preferred),
-// otherwise pincode+placeName so manual pincode entries are deduped sensibly.
-function savedPickupKey(s: CitySuggestion): string {
-  const eloc = (s.eLoc || "").trim();
-  if (eloc) return `eloc:${eloc}`;
-  const name = (s.placeName || s.name || s.locality || "").trim().toLowerCase();
-  return `pin:${s.pincode}|${name}`;
+// Mappls Autosuggest ranking for logistics workflows.
+// Mappls returns results ordered by their internal relevance, but for trucking
+// the city itself almost always outranks a POI — searching "kolkata" should
+// surface "Kolkata" first, then "Kolkata Airport" / "Kolkata Port", not the
+// other way round. We re-rank client-side in three priority tiers using the
+// `type` and `addressTokens` fields already in the response.
+//
+// P1: City matches            (type === "City", or placeName ≈ query)
+// P2: Localities/sub-localities (Locality, SubLocality, Village, etc.)
+// P3: POIs / landmarks         (POI, Airport, Port, Railway Station, …)
+//
+// Within a tier, exact-name matches beat prefix matches beat substring matches,
+// then we fall back to the original Mappls order (stable sort).
+function mapplsRankTier(item: any): number {
+  const t = String(item?.type || "").toLowerCase();
+  if (t === "city" || t === "subdistrict" || t === "district" || t === "state" || t === "country") return 1;
+  if (t === "locality" || t === "sublocality" || t === "village" || t === "town" || t === "suburb") return 2;
+  // POI, Airport, Port, RailwayStation, Landmark, Hospital, etc., or unknown → tier 3.
+  return 3;
 }
 
-async function getSavedPickups(): Promise<SavedPickup[]> {
-  try {
-    const raw = await AsyncStorage.getItem(SAVED_PICKUPS_KEY);
-    const arr = raw ? JSON.parse(raw) : [];
-    if (!Array.isArray(arr)) return [];
-    return arr;
-  } catch { return []; }
+// 0 = exact placeName match, 1 = exact city/locality token match,
+// 2 = prefix match, 3 = substring match, 4 = no name match.
+function mapplsNameMatchScore(item: any, q: string): number {
+  const query = q.trim().toLowerCase();
+  if (!query) return 4;
+  const placeName = String(item?.placeName || "").trim().toLowerCase();
+  const tokens = item?.addressTokens || {};
+  const city = String(tokens.city || "").trim().toLowerCase();
+  const locality = String(tokens.locality || "").trim().toLowerCase();
+  const subLocality = String(tokens.subLocality || "").trim().toLowerCase();
+
+  if (placeName === query) return 0;
+  if (city === query || locality === query || subLocality === query) return 1;
+  if (placeName.startsWith(query)) return 2;
+  if (placeName.includes(query)) return 3;
+  return 4;
 }
 
-// Increment usage on selection — most-used + recently-used wins ranking.
-async function bumpSavedPickup(s: CitySuggestion) {
-  try {
-    const all = await getSavedPickups();
-    const key = savedPickupKey(s);
-    const idx = all.findIndex((p) => savedPickupKey(p) === key);
-    const now = new Date().toISOString();
-    let next: SavedPickup;
-    if (idx >= 0) {
-      next = { ...all[idx], ...s, useCount: (all[idx].useCount || 0) + 1, lastUsedAt: now };
-      all.splice(idx, 1);
-    } else {
-      next = { ...s, useCount: 1, lastUsedAt: now };
-    }
-    // Sort: most-used first, then most-recent; cap at MAX so storage stays tiny.
-    const merged = [next, ...all].sort((a, b) => {
-      if ((b.useCount || 0) !== (a.useCount || 0)) return (b.useCount || 0) - (a.useCount || 0);
-      return (b.lastUsedAt || "").localeCompare(a.lastUsedAt || "");
-    }).slice(0, SAVED_PICKUPS_MAX);
-    await AsyncStorage.setItem(SAVED_PICKUPS_KEY, JSON.stringify(merged));
-  } catch {}
+// Stable sort by (tier, nameMatch, originalIndex). Ties preserve Mappls order.
+function rankMapplsSuggestions<T extends any>(items: T[], q: string): T[] {
+  return items
+    .map((item, idx) => ({ item, idx, tier: mapplsRankTier(item), name: mapplsNameMatchScore(item, q) }))
+    .sort((a, b) => (a.tier - b.tier) || (a.name - b.name) || (a.idx - b.idx))
+    .map((x) => x.item);
 }
 
 async function getRecentSearches(prefix: string): Promise<CitySuggestion[]> {
@@ -1978,7 +1977,6 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<CitySuggestion[]>([]);
   const [recents, setRecents] = useState<CitySuggestion[]>([]);
-  const [savedPickups, setSavedPickups] = useState<SavedPickup[]>([]);
   const [searching, setSearching] = useState(false);
   const [listening, setListening] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState("Speak the city name or pincode");
@@ -1992,7 +1990,6 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
       setResults([]);
       setListening(false);
       getRecentSearches(testIDPrefix).then(setRecents);
-      getSavedPickups().then(setSavedPickups);
       setTimeout(() => inputRef.current?.focus(), 120);
     }
   }, [visible]);
@@ -2014,11 +2011,27 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
           ...(data.userAddedLocations || []),
         ];
 
+        // Dev-only: log Mappls `type` classifications so we can verify how
+        // results are being categorised (City vs Locality vs POI vs …) while
+        // tuning the ranking tiers. Stripped from production builds.
+        if (__DEV__) {
+          // eslint-disable-next-line no-console
+          console.log(
+            `[Mappls] q="${q}" types=`,
+            all.map((s: any) => ({ type: s?.type, name: s?.placeName }))
+          );
+        }
+
+        // Rank BEFORE mapping so the original Mappls payload (with `type` and
+        // `addressTokens`) drives the sort. Truck-Traffic priority:
+        //   P1 City / exact placeName  →  P2 Localities  →  P3 POIs / landmarks
+        const ranked = rankMapplsSuggestions(all, q);
+
         // Map Mappls autosuggest items to CitySuggestion using the structured
         // `addressTokens` payload (the canonical source). Comma-splitting the
         // placeAddress is fragile and was the root cause of state==pincode
         // bugs — we only fall back to it when tokens are missing.
-        const mapped: CitySuggestion[] = all.slice(0, 7).map((s: any) => {
+        const mapped: CitySuggestion[] = ranked.slice(0, 7).map((s: any) => {
           const tokens = s.addressTokens || {};
 
           // Pincode: prefer tokens, then regex on address string.
@@ -2161,8 +2174,6 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
       locality: finalLocality,
     };
     await saveRecentSearch(testIDPrefix, enriched);
-    // Auto-track in shared "Saved Pickups" (usage-ranked, dedup by eLoc).
-    await bumpSavedPickup(enriched);
     onSelect(enriched.name, enriched.pincode, {
       city: finalCity,
       locality: finalLocality,
@@ -2213,20 +2224,18 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
   };
 
   const showRecents = query.length === 0 && recents.length > 0;
-  const showSaved = query.length === 0 && savedPickups.length > 0;
-  // When the input is empty, show both sections via FlatList sections.
+  // When the input is empty, show recents only.
   // When the user types, show live results.
-  type Section = { label?: string; icon?: any; items: CitySuggestion[]; kind: "saved" | "recent" | "results" };
+  type Section = { label?: string; icon?: any; items: CitySuggestion[]; kind: "recent" | "results" };
   const sections: Section[] = query.length === 0
     ? [
-        ...(showSaved   ? [{ label: "Saved Pickups",   icon: "bookmark" as const, items: savedPickups as CitySuggestion[], kind: "saved" as const }]   : []),
         ...(showRecents ? [{ label: "Recent Searches", icon: "time-outline" as const, items: recents, kind: "recent" as const }] : []),
       ]
     : [{ items: results, kind: "results" as const }];
   // Flatten to a single list with optional section headers.
   type Row =
     | { kind: "header"; label: string; sectionKey: string }
-    | { kind: "row"; data: CitySuggestion; section: "saved" | "recent" | "results"; useCount?: number };
+    | { kind: "row"; data: CitySuggestion; section: "recent" | "results" };
   const rows: Row[] = [];
   sections.forEach((sec) => {
     if (sec.label) rows.push({ kind: "header", label: sec.label, sectionKey: sec.kind });
@@ -2235,7 +2244,6 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
         kind: "row",
         data: it,
         section: sec.kind,
-        useCount: sec.kind === "saved" ? (it as SavedPickup).useCount : undefined,
       })
     );
   });
@@ -2305,9 +2313,9 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
               return (
                 <View style={srm.sectionHeaderRow}>
                   <Ionicons
-                    name={item.sectionKey === "saved" ? "bookmark" : "time-outline"}
+                    name="time-outline"
                     size={13}
-                    color={item.sectionKey === "saved" ? COLORS.primary : COLORS.textMuted}
+                    color={COLORS.textMuted}
                   />
                   <Text style={srm.sectionLabel}>{item.label}</Text>
                 </View>
@@ -2320,35 +2328,22 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
             const subLine = cleanCity && abbr ? `${cleanCity}, ${abbr}` : (cleanCity || abbr || "");
             return (
               <TouchableOpacity
-                testID={
-                  item.section === "saved"
-                    ? `${testIDPrefix}-modal-saved-${s.pincode}`
-                    : `${testIDPrefix}-modal-suggest-${s.pincode}`
-                }
+                testID={`${testIDPrefix}-modal-suggest-${s.pincode}`}
                 style={srm.row}
                 onPress={() => pick(s)}
                 activeOpacity={0.7}
               >
                 <View style={srm.rowIcon}>
                   <Ionicons
-                    name={
-                      item.section === "saved" ? "bookmark"
-                      : item.section === "recent" ? "time-outline"
-                      : "location-outline"
-                    }
+                    name={item.section === "recent" ? "time-outline" : "location-outline"}
                     size={20}
-                    color={item.section === "saved" ? COLORS.primary : COLORS.textMuted}
+                    color={COLORS.textMuted}
                   />
                 </View>
                 <View style={srm.rowBody}>
                   <Text style={srm.rowName} numberOfLines={1}>{s.placeName || s.name}</Text>
                   {subLine ? <Text style={srm.rowSub} numberOfLines={1}>{subLine}</Text> : null}
                 </View>
-                {item.section === "saved" && item.useCount && item.useCount > 1 ? (
-                  <View style={srm.useCountPill}>
-                    <Text style={srm.useCountText}>×{item.useCount}</Text>
-                  </View>
-                ) : null}
                 <Text style={srm.rowPin}>{s.pincode}</Text>
               </TouchableOpacity>
             );
@@ -2384,8 +2379,6 @@ const srm = StyleSheet.create({
   voiceText: { fontSize: 13, color: COLORS.primary },
   sectionLabel: { fontSize: 12, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.textMuted, textTransform: "uppercase", letterSpacing: 0.5, paddingTop: 0, paddingBottom: 0 },
   sectionHeaderRow: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 16, paddingTop: 16, paddingBottom: 6 },
-  useCountPill: { backgroundColor: "#EEF2FA", paddingHorizontal: 7, paddingVertical: 2, borderRadius: 100, marginRight: 8 },
-  useCountText: { fontSize: 11, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.primary, letterSpacing: 0.2 },
   noResultText: { fontSize: 14, color: COLORS.danger, paddingHorizontal: 16, paddingTop: 20, textAlign: "center" },
   searchingRow: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingTop: 20 },
   searchingText: { fontSize: 14, color: COLORS.textMuted },
