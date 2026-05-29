@@ -75,15 +75,33 @@ def _init_firebase_admin():
 _init_firebase_admin()
 
 # ===== Models =====
+# Route locations are stored in two coordinated tiers:
+#   1. Display tier — locality / city / state / pincode (used by the route card)
+#   2. Precision tier — place_name / full_address / lat / lon / eLoc
+# The precision tier is preserved EXACTLY from Mappls and is intended for
+# future route matching, distance & off-route calculations, map views and
+# warehouse/factory-level search. The display tier is what the UI renders;
+# it must NEVER be derived from the storage tier in a lossy way.
 class LoadCreate(BaseModel):
     origin_pincode: str
     origin_locality: Optional[str] = ""
     origin_city: Optional[str] = ""
     origin_state: Optional[str] = ""
+    # --- Mappls-precision fields (Phase 1 — optional, additive) ---
+    origin_place_name: Optional[str] = ""
+    origin_full_address: Optional[str] = ""
+    origin_latitude: Optional[float] = None
+    origin_longitude: Optional[float] = None
+    origin_eloc: Optional[str] = ""
     destination_pincode: str
     destination_locality: Optional[str] = ""
     destination_city: Optional[str] = ""
     destination_state: Optional[str] = ""
+    destination_place_name: Optional[str] = ""
+    destination_full_address: Optional[str] = ""
+    destination_latitude: Optional[float] = None
+    destination_longitude: Optional[float] = None
+    destination_eloc: Optional[str] = ""
     cargo_types: List[str] = []
     cargo_placement: str = ""
     truck_type: str = ""
@@ -339,10 +357,20 @@ class LoadUpdate(BaseModel):
     origin_locality: Optional[str] = None
     origin_city: Optional[str] = None
     origin_state: Optional[str] = None
+    origin_place_name: Optional[str] = None
+    origin_full_address: Optional[str] = None
+    origin_latitude: Optional[float] = None
+    origin_longitude: Optional[float] = None
+    origin_eloc: Optional[str] = None
     destination_pincode: Optional[str] = None
     destination_locality: Optional[str] = None
     destination_city: Optional[str] = None
     destination_state: Optional[str] = None
+    destination_place_name: Optional[str] = None
+    destination_full_address: Optional[str] = None
+    destination_latitude: Optional[float] = None
+    destination_longitude: Optional[float] = None
+    destination_eloc: Optional[str] = None
     cargo_types: Optional[List[str]] = None
     cargo_placement: Optional[str] = None
     truck_type: Optional[str] = None

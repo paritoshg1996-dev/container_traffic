@@ -1,48 +1,59 @@
-# Truck Traffic PTL — Product Requirements
+# Truck Traffic PTL — PRD
 
-## Original problem statement (this session)
-> Is info of the user being stored in the backend, If not ensure that the user profile info gets stored.
-
-## App overview
-Truck Traffic PTL is a React Native / Expo Android app + FastAPI backend + MongoDB. Truckers and load posters can:
-- Verify phone via Firebase Phone OTP
-- Set up a profile (name, phone, company)
-- Post truck loads (origin/destination pincodes, cargo, weight, photos, price)
-- Browse the marketplace and contact posters
-
-The frontend is hard-coded to call the production backend at `https://ptl-market.onrender.com/api`; the preview pod hosts an equivalent backend at `http://localhost:8001/api` for development/testing.
+## Original problem statement (latest)
+Route Location Normalization & Storage Refactor — separate storage model (exact Mappls data) from display model (standardized 3-line UI), fix `Vashi / 400703 / 400703` bug, preserve precision for future route matching.
 
 ## Architecture
-- **Backend**: FastAPI (`/app/backend/server.py`), Motor (async Mongo driver), Firebase Admin for OTP token verification.
-- **Frontend**: Expo Router app (`/app/frontend/app/index.tsx`), React Native 0.81, Firebase Auth (native), AsyncStorage for local state.
-- **DB collections**: `loads`, `pincode_geo`, `short_urls`, **`users`** (new this session).
+- **Frontend**: Expo / React Native (`/app/frontend/app/index.tsx`)
+- **Backend**: FastAPI (`/app/backend/server.py`) + MongoDB (`db.loads`)
+- **Mappls**: Autosuggest proxied through `/api/places`; pincode enrichment via postalpincode.in proxied through `/api/pincode/{pin}`.
 
-## User personas
-- **Load poster** — wants to advertise an outgoing load. Needs name + company shown to truckers.
-- **Truck owner / driver** — browses loads and calls the poster.
+## What's been implemented (2026-05-29)
 
-## Core (static) requirements
-- Phone-OTP login (Firebase, native Android).
-- Profile (name, 10-digit phone, optional company) — phone is verified and locked.
-- Loads must be searchable by origin/destination pincode and auto-purged after the loading date.
+### Storage model — Mappls precision tier (new, additive)
+Each `Load` document now stores both:
+- **Display tier** (existing): `origin_locality`, `origin_city`, `origin_state`, `origin_pincode` and dest equivalents
+- **Precision tier** (new optional fields): `origin_place_name`, `origin_full_address`, `origin_latitude`, `origin_longitude`, `origin_eloc` and dest equivalents
 
-## What's implemented
-- **2026-05-28** Added backend user persistence:
-  - `POST /api/users` — upsert profile keyed by normalised 10-digit phone. Validates phone (10 digits) and name (≥2 chars).
-  - `GET /api/users/{phone}` — fetch profile (404 if absent, 400 if phone invalid).
-  - `/api/auth/verify-token` now also upserts a `users` row on first phone verification (records uid + last_verified_at without overwriting an existing name/company).
-  - Frontend `saveProfile` POSTs to `/api/users` on every save/edit; `saveVerification` fetches `/api/users/{phone}` after OTP so a reinstalled user gets their name & company restored.
-  - Restored corrupted `/app/backend/.env` (MONGO_URL, DB_NAME) and `/app/frontend/.env`.
-  - 16/16 backend tests pass (creation, upsert, validation, phone normalisation, persistence, regression on existing endpoints).
-- Pre-existing (not changed): Loads CRUD, pincode/city lookup, geocode cache, Mappls places proxy, URL shortener, Firebase ID-token verification.
+Models updated: `LoadCreate`, `LoadUpdate`, `Load` — all new fields Optional → no migration needed.
 
-## Backlog / future work
-- **P1** Gate `POST /api/users` behind a verified Firebase id_token so only the phone owner can edit its profile.
-- **P1** Add a unique index on `users.phone` to prevent race-condition duplicates.
-- **P2** Have `GET /api/users/{phone}` return 404 when `name` is empty (verify-token side-effect creates an empty profile shell). Frontend already guards.
-- **P2** Return 201 vs 200 on create vs update from `POST /api/users`.
-- **P2** Split `server.py` (~600 lines) into routers (users, loads, geo, shorten, auth).
-- **P3** Profile picture upload, per-user load history (`GET /api/users/{phone}/loads`).
+### Display model — standardized 3-line route card
+Layout used consistently in `SmartRouteInput` (post & find) and `LoadCard`:
+- **L1 — Locality/Area** (largest, bold)
+- **L2 — `City, ST`** (medium, with state abbreviation via `stateAbbr()` helper)
+- **L3 — Pincode** (smallest, muted)
 
-## Next tasks
-- Add Firebase id_token auth gate + unique index on `users.phone` (P1).
+Per-line adaptive font shrinking on overflow (length-based ladder, since Android `adjustsFontSizeToFit` is unreliable).
+
+### Mappls autosuggest parser — rewritten
+- Now uses **`addressTokens`** (the canonical Mappls structured payload) as the primary source for locality/city/state/pincode.
+- Comma-split of `placeAddress` is only a last-resort fallback, with hard guards: state can never equal the pincode.
+- `placeName`, `placeAddress`, `latitude`, `longitude`, `eLoc` are now captured into `RouteInfo` and forwarded into the load payload on save.
+
+### Legacy data sanitization
+`sanitizeStateForDisplay()` and `sanitizeCityForDisplay()` defend against legacy Mongo docs where `state == pincode` (root cause of the original bug). Bad fields are simply dropped at the display layer so the corrupted L2 line collapses gracefully.
+
+### Bug fix — `Vashi / 400703 / 400703`
+Root cause: `RouteSearchModal` was deriving `state` by splitting `placeAddress` on commas and taking the last segment, which for `"Vashi, Navi Mumbai, 400703"` produced `state="400703"`. The pincode-API fallback didn't always overwrite when postalpincode returned `valid:false`. Fixed by: (a) using `addressTokens.state` first, (b) explicit `state ≠ pincode` guard at every layer.
+
+### Files touched
+- `/app/backend/server.py` — `LoadCreate`, `LoadUpdate` extended with precision fields.
+- `/app/frontend/app/index.tsx` — `Load`/`RouteInfo`/`CitySuggestion` types extended; `RouteSearchModal` parser & `pick()` rewritten; `SmartRouteInput` display rewritten to L1/L2/L3 with `City, ST` on L2; `LoadCard` route block rewritten to render same standardized layout; Post Load & Edit Load `save()` updated to send the new fields; WhatsApp share text updated to the same 3-line format.
+
+## Verified end-to-end
+- Backend round-trips full payload incl. lat/lon/eLoc/place_name/full_address (`POST /api/loads` → `GET /api/loads`).
+- Sanitization handles legacy bad records (state=pincode).
+- TypeScript compiles cleanly (no new errors).
+
+## Next action items
+1. **Manual visual verification on device** — install/hot-reload Expo build and confirm:
+   - Post Truck Space → select a Mappls POI (factory/warehouse) → card shows `Locality / City, ST / Pincode`
+   - Find Truck Space → same input/display, plus the Load list cards show the same layout
+   - Edit an existing load → precision fields preserved
+2. **Optional Phase 2 — Mappls Place Detail API** for even richer precision when the autosuggest item has eLoc but lacks `addressTokens`.
+
+## Backlog / future
+- Route matching, truck-load matching, distance/off-route — all unblocked by the precision tier now available in storage.
+- Map view using stored `latitude`/`longitude`.
+- Warehouse/factory-level search using `place_name`/`full_address`.
+- Historical data migration (one-time job) to flag/clear bad legacy state==pincode records.

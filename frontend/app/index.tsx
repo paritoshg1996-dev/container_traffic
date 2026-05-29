@@ -96,10 +96,21 @@ type Load = {
   origin_locality: string;
   origin_city: string;
   origin_state: string;
+  // Mappls-precision fields (optional; preserved exactly from autosuggest).
+  origin_place_name?: string;
+  origin_full_address?: string;
+  origin_latitude?: number | null;
+  origin_longitude?: number | null;
+  origin_eloc?: string;
   destination_pincode: string;
   destination_locality: string;
   destination_city: string;
   destination_state: string;
+  destination_place_name?: string;
+  destination_full_address?: string;
+  destination_latitude?: number | null;
+  destination_longitude?: number | null;
+  destination_eloc?: string;
   cargo_types: string[];
   cargo_placement: string;
   weight_tons: number;
@@ -758,17 +769,84 @@ function PhoneVerification({ onVerified }: { onVerified: (v: PhoneVerified) => v
 }
 
 // ============== Shared types ==============
-type CitySuggestion = { name: string; city: string; locality: string; state: string; pincode: string };
-type RouteInfo = { city: string; locality: string; state: string; valid: boolean } | null;
+type CitySuggestion = {
+  name: string;
+  city: string;
+  locality: string;
+  state: string;
+  pincode: string;
+  // Mappls-precision (preserved through selection → storage). Optional so
+  // legacy code paths (manual pincode lookup) continue to work.
+  placeName?: string;
+  fullAddress?: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  eLoc?: string;
+};
+// RouteInfo is the display+storage payload carried by the route input.
+// It always reflects the user's selection — including the exact Mappls
+// place_name, full_address, coordinates and eLoc so the backend can
+// reconstruct precise location data later.
+type RouteInfo = {
+  city: string;
+  locality: string;
+  state: string;
+  valid: boolean;
+  placeName?: string;
+  fullAddress?: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  eLoc?: string;
+} | null;
+
+// Defensive sanitizer: if a legacy DB record accidentally stored the pincode
+// in `state` (or `city`), treat that field as empty for display purposes.
+// Mappls/postalpincode garbage is filtered at the boundary; never trusted.
+function sanitizeStateForDisplay(state: string, pincode: string): string {
+  const s = (state || "").trim();
+  if (!s) return "";
+  if (/^\d{6}$/.test(s)) return "";          // state can never be a 6-digit pincode
+  if (pincode && s === pincode) return "";   // exact match with pincode
+  return s;
+}
+function sanitizeCityForDisplay(city: string, pincode: string, state: string): string {
+  const c = (city || "").trim();
+  if (!c) return "";
+  if (/^\d{6}$/.test(c)) return "";
+  if (pincode && c === pincode) return "";
+  // Avoid "Pune, MH" duplicating to "Maharashtra, MH"
+  if (state && c.toLowerCase() === state.trim().toLowerCase()) return "";
+  return c;
+}
 
 // ============== EditLoadModal ==============
 function EditLoadModal({ load, visible, onClose, onSaved }: { load: Load; visible: boolean; onClose: () => void; onSaved: () => void }) {
   const [originText, setOriginText] = useState(load.origin_locality || load.origin_city || load.origin_pincode);
   const [originPin, setOriginPin] = useState(load.origin_pincode);
-  const [originInfo, setOriginInfo] = useState<RouteInfo>({ city: load.origin_city, locality: load.origin_locality || "", state: load.origin_state, valid: true });
+  const [originInfo, setOriginInfo] = useState<RouteInfo>({
+    city: load.origin_city,
+    locality: load.origin_locality || "",
+    state: load.origin_state,
+    valid: true,
+    placeName: load.origin_place_name || "",
+    fullAddress: load.origin_full_address || "",
+    latitude: load.origin_latitude ?? null,
+    longitude: load.origin_longitude ?? null,
+    eLoc: load.origin_eloc || "",
+  });
   const [destText, setDestText] = useState(load.destination_locality || load.destination_city || load.destination_pincode);
   const [destPin, setDestPin] = useState(load.destination_pincode);
-  const [destInfo, setDestInfo] = useState<RouteInfo>({ city: load.destination_city, locality: load.destination_locality || "", state: load.destination_state, valid: true });
+  const [destInfo, setDestInfo] = useState<RouteInfo>({
+    city: load.destination_city,
+    locality: load.destination_locality || "",
+    state: load.destination_state,
+    valid: true,
+    placeName: load.destination_place_name || "",
+    fullAddress: load.destination_full_address || "",
+    latitude: load.destination_latitude ?? null,
+    longitude: load.destination_longitude ?? null,
+    eLoc: load.destination_eloc || "",
+  });
   const [weight, setWeight] = useState(load.weight_tons || 1);
   const [placement, setPlacement] = useState(load.cargo_placement || "");
   const [truckType, setTruckType] = useState(load.truck_type || "");
@@ -840,7 +918,17 @@ function EditLoadModal({ load, visible, onClose, onSaved }: { load: Load; visibl
       const priceVal = pricePerTon ? parseInt(pricePerTon, 10) : null;
       const payload = {
         origin_pincode: originPin, origin_locality: originInfo?.locality || "", origin_city: originInfo?.city || "", origin_state: originInfo?.state || "",
+        origin_place_name: originInfo?.placeName || "",
+        origin_full_address: originInfo?.fullAddress || "",
+        origin_latitude: originInfo?.latitude ?? null,
+        origin_longitude: originInfo?.longitude ?? null,
+        origin_eloc: originInfo?.eLoc || "",
         destination_pincode: destPin, destination_locality: destInfo?.locality || "", destination_city: destInfo?.city || "", destination_state: destInfo?.state || "",
+        destination_place_name: destInfo?.placeName || "",
+        destination_full_address: destInfo?.fullAddress || "",
+        destination_latitude: destInfo?.latitude ?? null,
+        destination_longitude: destInfo?.longitude ?? null,
+        destination_eloc: destInfo?.eLoc || "",
         cargo_placement: placement, truck_type: truckType, weight_tons: weight, space_cuft: null,
         dimension_length: lengthVal, dimension_breadth: breadthVal, dimension_height: heightVal, price_per_ton: priceVal,
         loading_date: date.toISOString().slice(0, 10),
@@ -1329,7 +1417,17 @@ if (!w || w <= 0) return Alert.alert("Invalid", "Enter valid weight in tons");
       const priceVal = pricePerTon ? parseInt(pricePerTon, 10) : null;
       const payload = {
         origin_pincode: originPin, origin_locality: originInfo?.locality || "", origin_city: originInfo?.city || "", origin_state: originInfo?.state || "",
+        origin_place_name: originInfo?.placeName || "",
+        origin_full_address: originInfo?.fullAddress || "",
+        origin_latitude: originInfo?.latitude ?? null,
+        origin_longitude: originInfo?.longitude ?? null,
+        origin_eloc: originInfo?.eLoc || "",
         destination_pincode: destPin, destination_locality: destInfo?.locality || "", destination_city: destInfo?.city || "", destination_state: destInfo?.state || "",
+        destination_place_name: destInfo?.placeName || "",
+        destination_full_address: destInfo?.fullAddress || "",
+        destination_latitude: destInfo?.latitude ?? null,
+        destination_longitude: destInfo?.longitude ?? null,
+        destination_eloc: destInfo?.eLoc || "",
         cargo_types: [], cargo_placement: placement, truck_type: truckType, weight_tons: w, space_cuft: null,
         dimension_length: lengthVal, dimension_breadth: breadthVal, dimension_height: heightVal, price_per_ton: priceVal,
         loading_date: date.toISOString().slice(0, 10), poster_name: profile.name, poster_phone: profile.phone,
@@ -1348,10 +1446,22 @@ if (!w || w <= 0) return Alert.alert("Invalid", "Enter valid weight in tons");
 
       if (alsoShare) {
         const dateStr = date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
-        const oLocality = originInfo?.locality || originInfo?.city || "";
-        const dLocality = destInfo?.locality || destInfo?.city || "";
-        const originLine = `📍 ${originPin}${oLocality ? `, ${oLocality}` : ""}${originInfo?.state ? `, ${originInfo.state}` : ""}`;
-        const destLine   = `📍 ${destPin}${dLocality ? `, ${dLocality}` : ""}${destInfo?.state ? `, ${destInfo.state}` : ""}`;
+        const oStateName = sanitizeStateForDisplay(originInfo?.state || "", originPin);
+        const dStateName = sanitizeStateForDisplay(destInfo?.state || "", destPin);
+        const oCityClean = sanitizeCityForDisplay(originInfo?.city || "", originPin, oStateName);
+        const dCityClean = sanitizeCityForDisplay(destInfo?.city || "", destPin, dStateName);
+        const oLocClean = (originInfo?.locality || originInfo?.city || "").trim();
+        const dLocClean = (destInfo?.locality || destInfo?.city || "").trim();
+        const oAbbr = stateAbbr(oStateName);
+        const dAbbr = stateAbbr(dStateName);
+        const originLine =
+          `📍 ${oLocClean || oCityClean || originPin}` +
+          (oCityClean && oAbbr ? `\n   ${oCityClean}, ${oAbbr}` : (oCityClean ? `\n   ${oCityClean}` : (oAbbr ? `\n   ${oAbbr}` : ""))) +
+          `\n   ${originPin}`;
+        const destLine =
+          `📍 ${dLocClean || dCityClean || destPin}` +
+          (dCityClean && dAbbr ? `\n   ${dCityClean}, ${dAbbr}` : (dCityClean ? `\n   ${dCityClean}` : (dAbbr ? `\n   ${dAbbr}` : ""))) +
+          `\n   ${destPin}`;
         const loadLink = created?.id
           ? `\n\n🔗 More info & pics: https://www.trucktraffic.in?load=${created.id}`
           : `\n\n🔗 More info & pics: https://www.trucktraffic.in`;
@@ -1854,31 +1964,61 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
           ...(data.userAddedLocations || []),
         ];
 
-        // Build a name→pincode index from any result that has a pincode
-        const pincodeByWord: Record<string, string> = {};
-        all.forEach((s: any) => {
-          const m = (s.placeAddress || "").match(/\b(\d{6})\b/);
-          if (m) {
-            (s.placeName || "").toLowerCase().split(/\s+/).forEach((w: string) => {
-              if (w.length > 3 && !pincodeByWord[w]) pincodeByWord[w] = m[1];
-            });
-          }
-        });
-
-        // Take top 7 from API order, attach pincode (direct or via name lookup), keep order, no dedup
+        // Map Mappls autosuggest items to CitySuggestion using the structured
+        // `addressTokens` payload (the canonical source). Comma-splitting the
+        // placeAddress is fragile and was the root cause of state==pincode
+        // bugs — we only fall back to it when tokens are missing.
         const mapped: CitySuggestion[] = all.slice(0, 7).map((s: any) => {
-          const direct = (s.placeAddress || "").match(/\b(\d{6})\b/);
-          const nameWords = (s.placeName || "").toLowerCase().split(/\s+/);
-          const lookedUp = nameWords.map((w: string) => pincodeByWord[w]).find(Boolean);
-          const pincode = direct ? direct[1] : (lookedUp || "");
+          const tokens = s.addressTokens || {};
 
-          // city/state/locality preserved for the existing row UI
-          const parts = (s.placeAddress || "").split(",").map((p: string) => p.trim()).filter(Boolean);
-          const state = parts.length >= 1 ? parts[parts.length - 1] : "";
-          const city = parts.length >= 2 ? parts[parts.length - 2] : parts[0] || "";
-          const locality = s.placeName || "";
+          // Pincode: prefer tokens, then regex on address string.
+          const directPin = (s.placeAddress || "").match(/\b(\d{6})\b/);
+          const pincode: string =
+            (tokens.pincode && /^\d{6}$/.test(tokens.pincode) ? tokens.pincode : "") ||
+            (directPin ? directPin[1] : "");
 
-          return { name: s.placeName, city, locality, state, pincode };
+          // State: ONLY from tokens. Never from address tail (that's often
+          // a pincode and caused the Vashi/400703/400703 bug).
+          let state: string = (tokens.state || "").trim();
+          // Final safety: if tokens.state is somehow a 6-digit number, drop it.
+          if (/^\d{6}$/.test(state)) state = "";
+
+          // City: tokens.city → district → locality.
+          let city: string =
+            (tokens.city || tokens.district || tokens.locality || "").trim();
+
+          // Locality: most specific available — subLocality → locality →
+          // village → POI → city. The user's spec.
+          const poiName = (s.poi || s.placeName || "").trim();
+          let locality: string =
+            (tokens.subLocality || tokens.locality || tokens.village || poiName || city).trim();
+
+          // Address tail fallback ONLY when tokens are absent.
+          if (!state || !city) {
+            const parts = (s.placeAddress || "")
+              .split(",")
+              .map((p: string) => p.trim())
+              .filter(Boolean);
+            // Drop a trailing pincode segment, if present.
+            const cleaned = parts.filter((p: string) => !/^\d{6}$/.test(p));
+            if (!state && cleaned.length >= 1) state = cleaned[cleaned.length - 1];
+            if (!city && cleaned.length >= 2) city = cleaned[cleaned.length - 2];
+            if (/^\d{6}$/.test(state)) state = "";
+            if (/^\d{6}$/.test(city)) city = "";
+          }
+
+          return {
+            name: s.placeName,
+            city,
+            locality,
+            state,
+            pincode,
+            placeName: s.placeName || "",
+            fullAddress: s.placeAddress || "",
+            latitude: typeof s.latitude === "number" ? s.latitude : (s.latitude ? parseFloat(s.latitude) : null),
+            longitude: typeof s.longitude === "number" ? s.longitude : (s.longitude ? parseFloat(s.longitude) : null),
+            eLoc: s.eLoc || "",
+          };
         }).filter((s: CitySuggestion) => s.pincode);
 
         if (!cancelled) setResults(mapped);
@@ -1898,7 +2038,18 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
         const r = await fetch(`${API}/pincode/${query}`);
         const j = await r.json();
         if (!cancelled && j.valid) {
-          const s: CitySuggestion = { name: j.locality || j.city || query, city: j.city || "", locality: j.locality || j.city || "", state: j.state || "", pincode: query };
+          const s: CitySuggestion = {
+            name: j.locality || j.city || query,
+            city: j.city || "",
+            locality: j.locality || j.city || "",
+            state: j.state || "",
+            pincode: query,
+            placeName: j.locality || j.city || query,
+            fullAddress: [j.locality || j.city, j.city, j.state, query].filter(Boolean).join(", "),
+            latitude: null,
+            longitude: null,
+            eLoc: "",
+          };
           setResults([s]);
         } else if (!cancelled) setResults([]);
       } catch { if (!cancelled) setResults([]); }
@@ -1919,19 +2070,27 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
     // Always fetch the authoritative city/state from the pincode endpoint
     // so the UI shows the instantly-recognizable district name (e.g., Rewari,
     // Thane), even if the search result's parsed city/state was incomplete.
-    let finalCity = s.city;
-    let finalState = s.state;
-    let finalLocality = s.locality || s.name;
+    let finalCity = s.city || "";
+    let finalState = s.state || "";
+    let finalLocality = s.locality || s.name || "";
+
+    // Hard guard: state must never equal the pincode (frequent Mappls quirk).
+    if (finalState && /^\d{6}$/.test(finalState.trim())) finalState = "";
+    if (finalCity  && /^\d{6}$/.test(finalCity.trim()))  finalCity  = "";
+    if (finalState && s.pincode && finalState.trim() === s.pincode) finalState = "";
+
     try {
       const r = await fetch(`${API}/pincode/${s.pincode}`);
       const j = await r.json();
       if (j && j.valid) {
-        if (j.city) finalCity = j.city;
+        // Prefer pincode-API city/state — these are authoritative & match the
+        // RTO naming the UI uses for the abbreviation lookup.
+        if (j.city)  finalCity  = j.city;
         if (j.state) finalState = j.state;
-        // Preserve original locality if richer than backend's; else use city.
         if (!finalLocality) finalLocality = j.city || s.name;
       }
     } catch {}
+
     // Guard: if city ended up identical to state (e.g., "Haryana"/"Haryana"),
     // fall back to the locality from the original search.
     if (finalCity && finalState && finalCity.trim().toLowerCase() === finalState.trim().toLowerCase()) {
@@ -1940,9 +2099,30 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
         finalCity = fallback;
       }
     }
-    const enriched: CitySuggestion = { ...s, city: finalCity, state: finalState, locality: finalLocality };
+
+    // Repeat the state≠pincode guard AFTER all enrichment, just in case.
+    if (finalState && /^\d{6}$/.test(finalState.trim())) finalState = "";
+    if (finalCity  && /^\d{6}$/.test(finalCity.trim()))  finalCity  = "";
+
+    const enriched: CitySuggestion = {
+      ...s,
+      city: finalCity,
+      state: finalState,
+      locality: finalLocality,
+    };
     await saveRecentSearch(testIDPrefix, enriched);
-    onSelect(enriched.name, enriched.pincode, { city: finalCity, locality: finalLocality, state: finalState, valid: true });
+    onSelect(enriched.name, enriched.pincode, {
+      city: finalCity,
+      locality: finalLocality,
+      state: finalState,
+      valid: true,
+      // Precision tier — preserved exactly for backend storage.
+      placeName: s.placeName || s.name || "",
+      fullAddress: s.fullAddress || "",
+      latitude: s.latitude ?? null,
+      longitude: s.longitude ?? null,
+      eLoc: s.eLoc || "",
+    });
     onClose();
   };
 
@@ -2121,14 +2301,21 @@ function SmartRouteInput({ label, testIDPrefix, text, pin, info, onChange }: {
           <>
             {(() => {
               const loc = (info.locality || "").trim();
-              const cty = (info.city || "").trim();
-              const stateName = (info.state || "").trim();
-              // Line 1 = locality (fall back to city if locality is missing
-              // or identical to city). Line 2 = full state name.
-              // Line 3 = pincode.
-              const sameLocCity = !!loc && !!cty && loc.toLowerCase() === cty.toLowerCase();
-              const line1 = loc && !sameLocCity ? loc : (loc || cty);
-              const line2 = stateName;
+              const ctyRaw = (info.city || "").trim();
+              const stRaw = (info.state || "").trim();
+              // Sanitize legacy bad data: state/city must not be a pincode.
+              const stClean = sanitizeStateForDisplay(stRaw, pin);
+              const ctyClean = sanitizeCityForDisplay(ctyRaw, pin, stClean);
+              const abbr = stateAbbr(stClean);
+
+              // L1 = Locality/Area (falls back to city if no locality).
+              const sameLocCity = !!loc && !!ctyClean && loc.toLowerCase() === ctyClean.toLowerCase();
+              const line1 = (loc && !sameLocCity) ? loc : (loc || ctyClean);
+              // L2 = "city, ST" — collapse intelligently when one side is empty.
+              const line2 = ctyClean && abbr
+                ? `${ctyClean}, ${abbr}`
+                : (ctyClean || abbr || "");
+              // L3 = Pincode.
               const line3 = pin || "";
 
               // Per-line adaptive font ladder (length-based). Android's
@@ -2141,12 +2328,11 @@ function SmartRouteInput({ label, testIDPrefix, text, pin, info, onChange }: {
                 len <= 17 ? 14 :
                 len <= 20 ? 13 : 12;
               const adaptL2 = (len: number) =>
-                len <= 10 ? 15 :
-                len <= 13 ? 14 :
-                len <= 16 ? 13 :
-                len <= 19 ? 12 :
-                len <= 22 ? 11 :
-                len <= 25 ? 10 : 9.5;
+                len <= 10 ? 14 :
+                len <= 13 ? 13 :
+                len <= 16 ? 12 :
+                len <= 19 ? 11 :
+                len <= 22 ? 10 : 9.5;
               const adaptL3 = (len: number) => (len <= 6 ? 12 : 11);
 
               return (
@@ -2477,10 +2663,23 @@ function LoadCard({ load, isMine, distance, contactName }: { load: Load; isMine:
       try { return new Date(load.loading_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }); }
       catch { return load.loading_date; }
     })();
-    const oLoc = load.origin_locality || load.origin_city || "";
-    const dLoc = load.destination_locality || load.destination_city || "";
-    const originLine = `📍 ${load.origin_pincode}${oLoc ? `, ${oLoc}` : ""}${load.origin_state ? `, ${load.origin_state}` : ""}`;
-    const destLine   = `📍 ${load.destination_pincode}${dLoc ? `, ${dLoc}` : ""}${load.destination_state ? `, ${load.destination_state}` : ""}`;
+    const oLocClean = (load.origin_locality || load.origin_city || "").trim();
+    const dLocClean = (load.destination_locality || load.destination_city || "").trim();
+    const oStateName = sanitizeStateForDisplay(load.origin_state || "", load.origin_pincode || "");
+    const dStateName = sanitizeStateForDisplay(load.destination_state || "", load.destination_pincode || "");
+    const oCityClean = sanitizeCityForDisplay(load.origin_city || "", load.origin_pincode || "", oStateName);
+    const dCityClean = sanitizeCityForDisplay(load.destination_city || "", load.destination_pincode || "", dStateName);
+    const oAbbr = stateAbbr(oStateName);
+    const dAbbr = stateAbbr(dStateName);
+    // 3-line block: Locality / City, ST / Pincode
+    const originLine =
+      `📍 ${oLocClean || oCityClean || load.origin_pincode}` +
+      (oCityClean && oAbbr ? `\n   ${oCityClean}, ${oAbbr}` : (oCityClean ? `\n   ${oCityClean}` : (oAbbr ? `\n   ${oAbbr}` : ""))) +
+      `\n   ${load.origin_pincode}`;
+    const destLine   =
+      `📍 ${dLocClean || dCityClean || load.destination_pincode}` +
+      (dCityClean && dAbbr ? `\n   ${dCityClean}, ${dAbbr}` : (dCityClean ? `\n   ${dCityClean}` : (dAbbr ? `\n   ${dAbbr}` : ""))) +
+      `\n   ${load.destination_pincode}`;
     const loadLink = load.id
       ? `\n\n🔗 More info & pics: https://www.trucktraffic.in?load=${load.id}`
       : `\n\n🔗 More info & pics: https://www.trucktraffic.in`;
@@ -2500,10 +2699,46 @@ function LoadCard({ load, isMine, distance, contactName }: { load: Load; isMine:
   };
    const dateStr = useMemo(() => { try { return new Date(load.loading_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }); } catch { return load.loading_date; } }, [load.loading_date]);
 
-  // Format route location: pincode, city (bold) + state (smaller emphasis)
-  // shows recognizable city instead of locality for instant recognition.
-  const oCity = load.origin_city || load.origin_locality || "";
-  const dCity = load.destination_city || load.destination_locality || "";
+  // Standardized 3-line route display (locality / "city, ST" / pincode).
+  // Sanitization protects against legacy DB records that accidentally stored
+  // the pincode in `state`/`city` (the Vashi/400703/400703 class of bugs).
+  const renderEndpoint = (
+    iconName: any, iconColor: string,
+    locality: string, city: string, state: string, pincode: string,
+  ) => {
+    const stClean = sanitizeStateForDisplay(state, pincode);
+    const ctyClean = sanitizeCityForDisplay(city, pincode, stClean);
+    const locClean = (locality || "").trim();
+    const abbr = stateAbbr(stClean);
+
+    const sameLocCity = !!locClean && !!ctyClean && locClean.toLowerCase() === ctyClean.toLowerCase();
+    const line1 = (locClean && !sameLocCity) ? locClean : (locClean || ctyClean);
+    const line2 = ctyClean && abbr ? `${ctyClean}, ${abbr}` : (ctyClean || abbr || "");
+    const line3 = pincode || "";
+
+    return (
+      <View style={cardStyles.routeEndpoint}>
+        <Ionicons name={iconName} size={13} color={iconColor} style={{ marginTop: 3 }} />
+        <View style={{ flex: 1 }}>
+          {line1 ? (
+            <Text style={cardStyles.routeL1} numberOfLines={1} ellipsizeMode="tail" adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>
+              {line1}
+            </Text>
+          ) : null}
+          {line2 ? (
+            <Text style={cardStyles.routeL2} numberOfLines={1} ellipsizeMode="tail" adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>
+              {line2}
+            </Text>
+          ) : null}
+          {line3 ? (
+            <Text style={cardStyles.routeL3} numberOfLines={1} ellipsizeMode="tail" adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>
+              {line3}
+            </Text>
+          ) : null}
+        </View>
+      </View>
+    );
+  };
 
   // Fix: use API constant (not process.env) for image URLs
   const getImageUri = (i: number) => `${API}/loads/${load.id}/image/${i}`;
@@ -2544,28 +2779,15 @@ function LoadCard({ load, isMine, distance, contactName }: { load: Load; isMine:
       {/* LINE 1: Route */}
       <View style={styles.cardRouteRow}>
         <View style={[styles.flex1, { paddingRight: 110 }]}>
-          <View style={cardStyles.routeEndpoint}>
-            <Ionicons name="location" size={13} color={COLORS.secondary} style={{ marginTop: 3 }} />
-            <View style={{ flex: 1 }}>
-              <Text style={cardStyles.routePinCity} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>
-                <Text style={cardStyles.routePin}>{load.origin_pincode}</Text>
-                <Text style={cardStyles.routeComma}>, </Text>
-                <Text style={cardStyles.routeCity}>{oCity}</Text>
-              </Text>
-              {load.origin_state ? <Text style={cardStyles.routeState} numberOfLines={1}>{load.origin_state}</Text> : null}
-            </View>
-          </View>
-          <View style={[cardStyles.routeEndpoint, { marginTop: 8 }]}>
-            <Ionicons name="flag" size={13} color={COLORS.primary} style={{ marginTop: 3 }} />
-            <View style={{ flex: 1 }}>
-              <Text style={cardStyles.routePinCity} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>
-                <Text style={cardStyles.routePin}>{load.destination_pincode}</Text>
-                <Text style={cardStyles.routeComma}>, </Text>
-                <Text style={cardStyles.routeCity}>{dCity}</Text>
-              </Text>
-              {load.destination_state ? <Text style={cardStyles.routeState} numberOfLines={1}>{load.destination_state}</Text> : null}
-            </View>
-          </View>
+          {renderEndpoint(
+            "location", COLORS.secondary,
+            load.origin_locality || "", load.origin_city || "", load.origin_state || "", load.origin_pincode || "",
+          )}
+          <View style={{ height: 8 }} />
+          {renderEndpoint(
+            "flag", COLORS.primary,
+            load.destination_locality || "", load.destination_city || "", load.destination_state || "", load.destination_pincode || "",
+          )}
         </View>
       </View>
 
@@ -2697,6 +2919,11 @@ const cardStyles = StyleSheet.create({
   routeComma: { fontSize: 14, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.text },
   routeCity: { fontSize: 14, fontFamily: "Inter_700Bold", fontWeight: "800", color: COLORS.text },
   routeState: { fontSize: 10, color: COLORS.textMuted, fontStyle: "italic", marginTop: 1 },
+  // Standardized 3-line route display (used by both endpoints).
+  // L1 (locality) > L2 (city, ST) > L3 (pincode).
+  routeL1: { fontSize: 16, lineHeight: 19, color: COLORS.text, fontFamily: "Inter_700Bold", fontWeight: "800" },
+  routeL2: { fontSize: 13, lineHeight: 16, color: COLORS.text, fontFamily: "Inter_600SemiBold", fontWeight: "700", marginTop: 1 },
+  routeL3: { fontSize: 11, lineHeight: 14, color: COLORS.textMuted, fontFamily: "Inter_600SemiBold", fontWeight: "600", letterSpacing: 0.4, marginTop: 1 },
   metaScrollContent: { flexDirection: "row", alignItems: "center", gap: 10, paddingRight: 8 },
   metaChip: { flexDirection: "row", alignItems: "center", gap: 4 },
   metaText: { fontSize: 12, color: COLORS.text, fontFamily: "Inter_600SemiBold", fontWeight: "600" },
