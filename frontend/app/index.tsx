@@ -1904,50 +1904,118 @@ function VoiceListenOverlay({ visible, onCancel, status }: { visible: boolean; o
 // ============== RouteSearchModal ==============
 const RECENT_KEY_PREFIX = "recent_routes_";
 
-// Mappls Autosuggest ranking for logistics workflows.
-// Mappls returns results ordered by their internal relevance, but for trucking
-// the city itself almost always outranks a POI — searching "kolkata" should
-// surface "Kolkata" first, then "Kolkata Airport" / "Kolkata Port", not the
-// other way round. We re-rank client-side in three priority tiers using the
-// `type` and `addressTokens` fields already in the response.
+// Mappls Autosuggest filtering + ranking for the Truck-Traffic freight workflow.
 //
-// P1: City matches            (type === "City", or placeName ≈ query)
-// P2: Localities/sub-localities (Locality, SubLocality, Village, etc.)
-// P3: POIs / landmarks         (POI, Airport, Port, Railway Station, …)
+// Users are picking ROUTE ENDPOINTS — cities, localities, industrial estates —
+// NOT navigation destinations. Mappls' default ordering mixes in POIs (airports,
+// railway stations, hotels, businesses, landmarks), which is wrong for freight
+// pickup/drop selection. We therefore apply a strict whitelist BEFORE ranking.
 //
-// Within a tier, exact-name matches beat prefix matches beat substring matches,
-// then we fall back to the original Mappls order (stable sort).
-function mapplsRankTier(item: any): number {
-  const t = String(item?.type || "").toLowerCase();
-  if (t === "city" || t === "subdistrict" || t === "district" || t === "state" || t === "country") return 1;
-  if (t === "locality" || t === "sublocality" || t === "village" || t === "town" || t === "suburb") return 2;
-  // POI, Airport, Port, RailwayStation, Landmark, Hospital, etc., or unknown → tier 3.
-  return 3;
+// Allowed (admin / settlement types only):
+//   CITY, LOCALITY, SUB_LOCALITY, VILLAGE, ADMIN_AREA, INDUSTRIAL_AREA
+//   + heuristic allowlist for placeNames that look like industrial estates
+//     (MIDC / GIDC / SIDC / Industrial Area / Industrial Estate / Industrial Park),
+//     because Mappls sometimes returns these as LOCALITY/POI without a dedicated
+//     type. The hint is conservative — it only matches well-known suffixes.
+//
+// Explicitly excluded:
+//   STATE, DISTRICT, SUB_DISTRICT (too coarse for a pickup pin),
+//   POI, AIRPORT, RAILWAY_STATION, HOTEL, RESTAURANT, TOURIST_ATTRACTION,
+//   BUSINESS, LANDMARK, PORT, SHOPPING, and anything else not on the allowlist.
+//
+// Ranking (after filtering):
+//   T1 — Exact CITY match (placeName == query)
+//   T2 — Exact LOCALITY / SUB_LOCALITY match (placeName == query)
+//   T3 — Any LOCALITY / SUB_LOCALITY (prefix beats substring)
+//   T4 — VILLAGE
+//   T5 — Other allowed admin areas (INDUSTRIAL_AREA, ADMIN_AREA, other CITY)
+//   Ties resolve by original Mappls index (stable sort).
+//
+// Mappls type strings vary in case and separators across endpoints, so we
+// normalise to uppercase without underscores/hyphens for comparison.
+
+const MAPPLS_ALLOWED_TYPES = new Set([
+  "CITY",
+  "LOCALITY",
+  "SUBLOCALITY",
+  "VILLAGE",
+  "ADMINAREA",
+  "ADMINISTRATIVEAREA",
+  "INDUSTRIALAREA",
+]);
+
+const INDUSTRIAL_AREA_HINT_RX =
+  /\b(MIDC|GIDC|SIDC|UPSIDC|RIICO|KIADB|APIIC|Industrial\s+(Area|Estate|Park|Township|Zone)|Industrial)\b/i;
+
+function normMapplsType(t: unknown): string {
+  return String(t || "").toUpperCase().replace(/[\s_\-]+/g, "");
 }
 
-// 0 = exact placeName match, 1 = exact city/locality token match,
-// 2 = prefix match, 3 = substring match, 4 = no name match.
-function mapplsNameMatchScore(item: any, q: string): number {
-  const query = q.trim().toLowerCase();
-  if (!query) return 4;
-  const placeName = String(item?.placeName || "").trim().toLowerCase();
+function isIndustrialEstateName(item: any): boolean {
+  const placeName = String(item?.placeName || "");
+  const placeAddress = String(item?.placeAddress || "");
+  return INDUSTRIAL_AREA_HINT_RX.test(placeName) || INDUSTRIAL_AREA_HINT_RX.test(placeAddress);
+}
+
+// Single source of truth — keep this in lock-step with the tier function below.
+function isAllowedMapplsResult(item: any): boolean {
+  const t = normMapplsType(item?.type);
+  if (MAPPLS_ALLOWED_TYPES.has(t)) return true;
+  // Heuristic: industrial estates often come back as LOCALITY (already allowed)
+  // or as POI. Allow the POI form only when the placeName/address clearly
+  // signals an industrial estate — never a generic POI.
+  if (isIndustrialEstateName(item)) return true;
+  return false;
+}
+
+// Tier numbers per user spec: lower = higher priority.
+function mapplsRankTier(item: any, q: string): number {
+  const t = normMapplsType(item?.type);
   const tokens = item?.addressTokens || {};
+  const placeName = String(item?.placeName || "").trim().toLowerCase();
   const city = String(tokens.city || "").trim().toLowerCase();
   const locality = String(tokens.locality || "").trim().toLowerCase();
   const subLocality = String(tokens.subLocality || "").trim().toLowerCase();
+  const query = q.trim().toLowerCase();
 
-  if (placeName === query) return 0;
-  if (city === query || locality === query || subLocality === query) return 1;
-  if (placeName.startsWith(query)) return 2;
-  if (placeName.includes(query)) return 3;
-  return 4;
+  // T1 — exact city match.
+  if (t === "CITY" && (placeName === query || city === query)) return 1;
+  // T2 — exact locality / sub-locality match.
+  if (
+    (t === "LOCALITY" || t === "SUBLOCALITY") &&
+    (placeName === query || locality === query || subLocality === query)
+  ) return 2;
+  // T3 — any LOCALITY / SUB_LOCALITY (or industrial estate which we treat as locality-ish).
+  if (t === "LOCALITY" || t === "SUBLOCALITY") return 3;
+  if (t === "INDUSTRIALAREA" || isIndustrialEstateName(item)) return 3;
+  // T4 — village.
+  if (t === "VILLAGE") return 4;
+  // T5 — other allowed admin areas (non-exact CITY, ADMIN_AREA, etc.).
+  return 5;
 }
 
-// Stable sort by (tier, nameMatch, originalIndex). Ties preserve Mappls order.
+// Within a tier: prefix match beats substring match beats nothing.
+function mapplsTieBreak(item: any, q: string): number {
+  const query = q.trim().toLowerCase();
+  if (!query) return 3;
+  const placeName = String(item?.placeName || "").trim().toLowerCase();
+  if (placeName.startsWith(query)) return 0;
+  if (placeName.includes(query)) return 1;
+  return 2;
+}
+
+// Stable sort: (tier, tieBreak, originalIndex). Items not on the whitelist
+// are dropped entirely before ranking.
 function rankMapplsSuggestions<T extends any>(items: T[], q: string): T[] {
   return items
-    .map((item, idx) => ({ item, idx, tier: mapplsRankTier(item), name: mapplsNameMatchScore(item, q) }))
-    .sort((a, b) => (a.tier - b.tier) || (a.name - b.name) || (a.idx - b.idx))
+    .filter(isAllowedMapplsResult)
+    .map((item, idx) => ({
+      item,
+      idx,
+      tier: mapplsRankTier(item, q),
+      tb: mapplsTieBreak(item, q),
+    }))
+    .sort((a, b) => (a.tier - b.tier) || (a.tb - b.tb) || (a.idx - b.idx))
     .map((x) => x.item);
 }
 
@@ -2012,19 +2080,25 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
         ];
 
         // Dev-only: log Mappls `type` classifications so we can verify how
-        // results are being categorised (City vs Locality vs POI vs …) while
-        // tuning the ranking tiers. Stripped from production builds.
+        // results are being categorised AND see which items the whitelist
+        // filtered out (POIs, airports, etc.). Any item with `kept:false` and
+        // an unfamiliar `type` is a candidate to add to the allowlist.
+        // Stripped from production builds by Metro.
         if (__DEV__) {
           // eslint-disable-next-line no-console
           console.log(
-            `[Mappls] q="${q}" types=`,
-            all.map((s: any) => ({ type: s?.type, name: s?.placeName }))
+            `[Mappls] q="${q}" results=`,
+            all.map((s: any) => ({
+              type: s?.type,
+              name: s?.placeName,
+              kept: isAllowedMapplsResult(s),
+            }))
           );
         }
 
-        // Rank BEFORE mapping so the original Mappls payload (with `type` and
-        // `addressTokens`) drives the sort. Truck-Traffic priority:
-        //   P1 City / exact placeName  →  P2 Localities  →  P3 POIs / landmarks
+        // Whitelist filter + rank. POIs / airports / railway stations / etc.
+        // are dropped here so the dropdown only ever shows route-endpoint-grade
+        // results (city / locality / village / industrial area).
         const ranked = rankMapplsSuggestions(all, q);
 
         // Map Mappls autosuggest items to CitySuggestion using the structured

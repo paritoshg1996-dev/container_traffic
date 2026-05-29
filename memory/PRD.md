@@ -47,49 +47,86 @@ Root cause: `RouteSearchModal` was deriving `state` by splitting `placeAddress` 
 
 ## What's been implemented (2026-01)
 
-### Mappls Autosuggest client-side ranking + Saved Pickups removal
-Mappls returned POIs (Kolkata Airport, Kolkata Port) before the actual city
-(Kolkata) for plain city queries. Backend storage is unchanged — this is a
-display-only re-ranking using the `type` and `addressTokens` fields already in
-the response.
+### Mappls Autosuggest: strict whitelist + freight-grade ranking (revised)
+For a freight marketplace, route endpoints are settlements (city / locality /
+village / industrial estate), **never** POIs. Mappls' default response mixes in
+airports, railway stations, hotels, factories and shops, so we now filter the
+response with a strict whitelist BEFORE ranking. Backend storage is unchanged —
+precision tier (place_name / full_address / lat-lon / eLoc) flows through
+untouched.
 
-- **New helpers in `RouteSearchModal`**: `mapplsRankTier`, `mapplsNameMatchScore`,
-  `rankMapplsSuggestions` — three-tier stable sort:
-  - **P1** — `type === City | District | SubDistrict | State | Country`, or
-    `placeName` exactly matches the query (case-insensitive).
-  - **P2** — Localities/sub-localities/villages/towns.
-  - **P3** — POIs / Airports / Ports / Railway Stations / Landmarks / unknown.
-  - Within a tier: exact placeName → exact token match → prefix → substring →
-    original Mappls index. Stable, so Mappls' own ordering wins ties.
-- **Dev-only logging** (`__DEV__` guarded `console.log`) of every Mappls item's
-  `type` so result classifications can be verified during tuning. Stripped from
-  production bundles automatically by Metro.
-- **Saved Pickups section removed** (UI + storage) — the recent-search list
-  serves the same purpose. Removed: `SAVED_PICKUPS_KEY`, `SavedPickup` type,
-  `getSavedPickups`, `bumpSavedPickup`, `savedPickupKey`, `savedPickups` state,
-  `useCountPill` / `useCountText` styles, and all `section === "saved"` branches
-  in row rendering.
+Implementation lives at the top of `RouteSearchModal` in
+`/app/frontend/app/index.tsx`:
+
+- **Whitelist** (`MAPPLS_ALLOWED_TYPES`):
+  `CITY`, `LOCALITY`, `SUB_LOCALITY`, `VILLAGE`, `ADMIN_AREA`,
+  `ADMINISTRATIVE_AREA`, `INDUSTRIAL_AREA`. Type comparison is normalised
+  (uppercase, underscore/space/hyphen stripped) so `SUB_LOCALITY` ≡
+  `SubLocality` ≡ `sublocality`.
+- **Industrial-estate heuristic** (`INDUSTRIAL_AREA_HINT_RX`): a placeName /
+  placeAddress containing `MIDC`, `GIDC`, `SIDC`, `UPSIDC`, `RIICO`, `KIADB`,
+  `APIIC`, or `Industrial (Area|Estate|Park|Township|Zone)` is allowed even
+  when Mappls returns it as POI — covers Taloja MIDC, Bhosari MIDC, etc.
+- **Explicit deny** (everything else): `STATE`, `DISTRICT`, `SUB_DISTRICT`,
+  `POI`, `AIRPORT`, `RAILWAY_STATION`, `HOTEL`, `RESTAURANT`,
+  `TOURIST_ATTRACTION`, `BUSINESS`, `LANDMARK`, `PORT`, `SHOPPING`, and any
+  unknown type without an industrial-estate hint.
+- **Ranking after filter**:
+  - **T1** — exact CITY match (`placeName == query` or `addressTokens.city == query`)
+  - **T2** — exact LOCALITY / SUB_LOCALITY match
+  - **T3** — any LOCALITY / SUB_LOCALITY / INDUSTRIAL_AREA
+  - **T4** — VILLAGE
+  - **T5** — other allowed admin areas (non-exact CITY etc.)
+  - Within a tier: prefix-match → substring → no match → original Mappls index.
+    Stable sort preserves Mappls' ordering on ties.
+- **Dev log** (`__DEV__` only): for every Mappls response, prints every item
+  with `{ type, name, kept }` so unmapped types that should be allowed can be
+  discovered and added to the whitelist later. Stripped from production bundles
+  by Metro.
+
+Unit-tested with synthetic payloads matching the spec examples — all 6
+real-world queries pass:
+- Kolkata → `Kolkata [CITY]` first; airport, port, Taj Bengal dropped.
+- Rewari → `Rewari [CITY, Haryana]` first; Rewari [VILLAGE, Jaisalmer]
+  demoted to T4; Junction railway station dropped.
+- Taloja → `Taloja [LOCALITY]` first, `Taloja MIDC` second; JSW Steel,
+  Reliance plants dropped.
+- Pimpri → `Pimpri [LOCALITY]` first; Tata Motors, Bajaj Auto dropped.
+- Vashi → `Vashi [SUB_LOCALITY]` only; Vashi Railway Station, Inorbit Mall
+  dropped.
+- Mumbai → `Mumbai [CITY]` first, `Navi Mumbai [CITY]` second; airport,
+  Mumbai Central, university dropped.
+
+### Saved Pickups removed (UI + storage)
+Removed below-search-bar `Saved Pickups` section since `Recent Searches` does
+the same job. Storage layer (`SAVED_PICKUPS_KEY`, `bumpSavedPickup`,
+`getSavedPickups`, `SavedPickup` type, `useCountPill`/`useCountText` styles, all
+`section === "saved"` branches) deleted as dead code.
 
 ### Files touched
-- `/app/frontend/app/index.tsx` — `RouteSearchModal` ranking/dev-log added,
-  Saved Pickups infrastructure deleted.
-
-### Verified
-- Unit-tested ranking with synthetic Mappls payload: queries "kolkata" with
-  POI-first response returns `[Kolkata, Kolkata Salt Lake (Locality),
-  New Kolkata Township (SubLocality), Kolkata Airport (POI), Kolkata Port (POI)]`
-  — exactly the spec example.
-- TypeScript: no new errors introduced (one pre-existing duplicate-key error
-  on line 3248 in `phoneInput` style is unrelated).
+- `/app/frontend/app/index.tsx` — `RouteSearchModal` filter+ranking helpers,
+  dev log, and removed Saved Pickups.
 
 ## Next action items
-1. **Manual visual verification on device** — install/hot-reload Expo build and:
-   - Search "kolkata", "mumbai", "delhi" → confirm city appears first.
-   - Confirm Saved Pickups section no longer appears below the search bar.
-   - Watch Metro logs for `[Mappls] q="…" types=[…]` while searching to verify
-     the actual `type` classifications Mappls returns in production.
-2. **Optional Phase 2 — Mappls Place Detail API** for richer precision when an
-   autosuggest item has `eLoc` but lacks `addressTokens`.
+1. Hot-reload the Expo build, search for **Kolkata / Mumbai / Rewari / Vashi /
+   Taloja / Pimpri** in both Origin and Destination pickers, and confirm:
+   - The expected city/locality is the first row.
+   - No airports / railway stations / hotels / factories appear.
+   - Metro console shows `[Mappls] q="…" results=[{type, name, kept}, …]` —
+     any allowlist-relevant `kept: false` items (e.g. Mappls returning a new
+     type string) can be added to `MAPPLS_ALLOWED_TYPES` later.
+2. (Optional) Once production data confirms no surprises in `type` strings,
+   tighten the dev log to only print items where `kept` is false and remove
+   the `__DEV__` print entirely after a stable cycle.
+
+## Backlog / future
+- Phase 2: Mappls Place Detail API for richer precision when an autosuggest
+  item has `eLoc` but no `addressTokens`.
+- Map view using stored `latitude` / `longitude`.
+- Route matching, truck-load matching, distance/off-route — unblocked by the
+  precision tier already in storage.
+- Warehouse/factory search using `place_name` / `full_address`.
+- One-time migration to flag/clear legacy `state == pincode` records.
 
 ## Backlog / future
 - Route matching, truck-load matching, distance/off-route — all unblocked by the precision tier now available in storage.
