@@ -1975,6 +1975,15 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
           ...(data.userAddedLocations || []),
         ];
 
+		  console.log(
+  "MAPPLS_RAW",
+  all.map((x: any) => ({
+    name: x.placeName,
+    type: x.type,
+    address: x.placeAddress,
+    pincode: x.addressTokens?.pincode,
+  }))
+);
         // Dev-only: log raw Mappls items (type + placeName) so any future
         // divergence vs the website can be diagnosed quickly. No filtering
         // happens here — this is purely observational. Stripped from
@@ -2096,6 +2105,24 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
   };
 
   const pick = async (s: CitySuggestion) => {
+
+	  if (!s.pincode) {
+    onSelect(
+      s.placeName || s.name,
+      "",
+      {
+        city: s.city || "",
+        state: s.state || "",
+        locality: s.locality || "",
+        lat: s.latitude,
+        lon: s.longitude,
+        valid: true,
+      }
+    );
+
+    onClose();
+    return;
+  }
     // Always fetch the authoritative city/state from the pincode endpoint
     // so the UI shows the instantly-recognizable district name (e.g., Rewari,
     // Thane), even if the search result's parsed city/state was incomplete.
