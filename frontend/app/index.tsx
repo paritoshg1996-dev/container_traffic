@@ -2106,7 +2106,7 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
 
   const pick = async (s: CitySuggestion) => {
 
-	  if (!s.pincode) {
+	/*  if (!s.pincode) {
     onSelect(
       s.placeName || s.name,
       "",
@@ -2122,7 +2122,7 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
 
     onClose();
     return;
-  }
+  }*/
     // Always fetch the authoritative city/state from the pincode endpoint
     // so the UI shows the instantly-recognizable district name (e.g., Rewari,
     // Thane), even if the search result's parsed city/state was incomplete.
