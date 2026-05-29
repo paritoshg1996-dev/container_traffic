@@ -1904,120 +1904,16 @@ function VoiceListenOverlay({ visible, onCancel, status }: { visible: boolean; o
 // ============== RouteSearchModal ==============
 const RECENT_KEY_PREFIX = "recent_routes_";
 
-// Mappls Autosuggest filtering + ranking for the Truck-Traffic freight workflow.
+// Mappls Autosuggest — mirrors the TruckTraffic web autocomplete exactly:
+//   1. Concatenate suggestedLocations + userAddedLocations in returned order.
+//   2. Map to CitySuggestion using addressTokens (canonical) with placeAddress
+//      tail as last-resort fallback.
+//   3. Keep only results that resolve to a valid 6-digit pincode.
+//   4. Preserve Mappls' native ordering — no client-side re-ranking, no type
+//      whitelist, no POI exclusion. The web app receives the same payload and
+//      shows it as-is, and the mobile app must match.
 //
-// Users are picking ROUTE ENDPOINTS — cities, localities, industrial estates —
-// NOT navigation destinations. Mappls' default ordering mixes in POIs (airports,
-// railway stations, hotels, businesses, landmarks), which is wrong for freight
-// pickup/drop selection. We therefore apply a strict whitelist BEFORE ranking.
-//
-// Allowed (admin / settlement types only):
-//   CITY, LOCALITY, SUB_LOCALITY, VILLAGE, ADMIN_AREA, INDUSTRIAL_AREA
-//   + heuristic allowlist for placeNames that look like industrial estates
-//     (MIDC / GIDC / SIDC / Industrial Area / Industrial Estate / Industrial Park),
-//     because Mappls sometimes returns these as LOCALITY/POI without a dedicated
-//     type. The hint is conservative — it only matches well-known suffixes.
-//
-// Explicitly excluded:
-//   STATE, DISTRICT, SUB_DISTRICT (too coarse for a pickup pin),
-//   POI, AIRPORT, RAILWAY_STATION, HOTEL, RESTAURANT, TOURIST_ATTRACTION,
-//   BUSINESS, LANDMARK, PORT, SHOPPING, and anything else not on the allowlist.
-//
-// Ranking (after filtering):
-//   T1 — Exact CITY match (placeName == query)
-//   T2 — Exact LOCALITY / SUB_LOCALITY match (placeName == query)
-//   T3 — Any LOCALITY / SUB_LOCALITY (prefix beats substring)
-//   T4 — VILLAGE
-//   T5 — Other allowed admin areas (INDUSTRIAL_AREA, ADMIN_AREA, other CITY)
-//   Ties resolve by original Mappls index (stable sort).
-//
-// Mappls type strings vary in case and separators across endpoints, so we
-// normalise to uppercase without underscores/hyphens for comparison.
-
-const MAPPLS_ALLOWED_TYPES = new Set([
-  "CITY",
-  "LOCALITY",
-  "SUBLOCALITY",
-  "VILLAGE",
-  "ADMINAREA",
-  "ADMINISTRATIVEAREA",
-  "INDUSTRIALAREA",
-]);
-
-const INDUSTRIAL_AREA_HINT_RX =
-  /\b(MIDC|GIDC|SIDC|UPSIDC|RIICO|KIADB|APIIC|Industrial\s+(Area|Estate|Park|Township|Zone)|Industrial)\b/i;
-
-function normMapplsType(t: unknown): string {
-  return String(t || "").toUpperCase().replace(/[\s_\-]+/g, "");
-}
-
-function isIndustrialEstateName(item: any): boolean {
-  const placeName = String(item?.placeName || "");
-  const placeAddress = String(item?.placeAddress || "");
-  return INDUSTRIAL_AREA_HINT_RX.test(placeName) || INDUSTRIAL_AREA_HINT_RX.test(placeAddress);
-}
-
-// Single source of truth — keep this in lock-step with the tier function below.
-function isAllowedMapplsResult(item: any): boolean {
-  const t = normMapplsType(item?.type);
-  if (MAPPLS_ALLOWED_TYPES.has(t)) return true;
-  // Heuristic: industrial estates often come back as LOCALITY (already allowed)
-  // or as POI. Allow the POI form only when the placeName/address clearly
-  // signals an industrial estate — never a generic POI.
-  if (isIndustrialEstateName(item)) return true;
-  return false;
-}
-
-// Tier numbers per user spec: lower = higher priority.
-function mapplsRankTier(item: any, q: string): number {
-  const t = normMapplsType(item?.type);
-  const tokens = item?.addressTokens || {};
-  const placeName = String(item?.placeName || "").trim().toLowerCase();
-  const city = String(tokens.city || "").trim().toLowerCase();
-  const locality = String(tokens.locality || "").trim().toLowerCase();
-  const subLocality = String(tokens.subLocality || "").trim().toLowerCase();
-  const query = q.trim().toLowerCase();
-
-  // T1 — exact city match.
-  if (t === "CITY" && (placeName === query || city === query)) return 1;
-  // T2 — exact locality / sub-locality match.
-  if (
-    (t === "LOCALITY" || t === "SUBLOCALITY") &&
-    (placeName === query || locality === query || subLocality === query)
-  ) return 2;
-  // T3 — any LOCALITY / SUB_LOCALITY (or industrial estate which we treat as locality-ish).
-  if (t === "LOCALITY" || t === "SUBLOCALITY") return 3;
-  if (t === "INDUSTRIALAREA" || isIndustrialEstateName(item)) return 3;
-  // T4 — village.
-  if (t === "VILLAGE") return 4;
-  // T5 — other allowed admin areas (non-exact CITY, ADMIN_AREA, etc.).
-  return 5;
-}
-
-// Within a tier: prefix match beats substring match beats nothing.
-function mapplsTieBreak(item: any, q: string): number {
-  const query = q.trim().toLowerCase();
-  if (!query) return 3;
-  const placeName = String(item?.placeName || "").trim().toLowerCase();
-  if (placeName.startsWith(query)) return 0;
-  if (placeName.includes(query)) return 1;
-  return 2;
-}
-
-// Stable sort: (tier, tieBreak, originalIndex). Items not on the whitelist
-// are dropped entirely before ranking.
-function rankMapplsSuggestions<T extends any>(items: T[], q: string): T[] {
-  return items
-    .filter(isAllowedMapplsResult)
-    .map((item, idx) => ({
-      item,
-      idx,
-      tier: mapplsRankTier(item, q),
-      tb: mapplsTieBreak(item, q),
-    }))
-    .sort((a, b) => (a.tier - b.tier) || (a.tb - b.tb) || (a.idx - b.idx))
-    .map((x) => x.item);
-}
+// Backend storage (place_name, full_address, lat/lon, eLoc) is unchanged.
 
 async function getRecentSearches(prefix: string): Promise<CitySuggestion[]> {
   try {
@@ -2079,33 +1975,29 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
           ...(data.userAddedLocations || []),
         ];
 
-        // Dev-only: log Mappls `type` classifications so we can verify how
-        // results are being categorised AND see which items the whitelist
-        // filtered out (POIs, airports, etc.). Any item with `kept:false` and
-        // an unfamiliar `type` is a candidate to add to the allowlist.
-        // Stripped from production builds by Metro.
+        // Dev-only: log raw Mappls items (type + placeName) so any future
+        // divergence vs the website can be diagnosed quickly. No filtering
+        // happens here — this is purely observational. Stripped from
+        // production bundles by Metro.
         if (__DEV__) {
           // eslint-disable-next-line no-console
           console.log(
-            `[Mappls] q="${q}" results=`,
-            all.map((s: any) => ({
-              type: s?.type,
-              name: s?.placeName,
-              kept: isAllowedMapplsResult(s),
-            }))
+            `[Mappls] q="${q}" types=`,
+            all.map((s: any) => ({ type: s?.type, name: s?.placeName }))
           );
         }
 
-        // Whitelist filter + rank. POIs / airports / railway stations / etc.
-        // are dropped here so the dropdown only ever shows route-endpoint-grade
-        // results (city / locality / village / industrial area).
-        const ranked = rankMapplsSuggestions(all, q);
+        // Match the website exactly: preserve Mappls' native order — no
+        // client-side re-ranking, no type whitelist. The only filter is the
+        // post-mapping pincode-validity check (`.filter(s.pincode)` below),
+        // which mirrors the web app's behaviour of dropping any result we
+        // can't resolve to a 6-digit pincode.
 
         // Map Mappls autosuggest items to CitySuggestion using the structured
         // `addressTokens` payload (the canonical source). Comma-splitting the
         // placeAddress is fragile and was the root cause of state==pincode
         // bugs — we only fall back to it when tokens are missing.
-        const mapped: CitySuggestion[] = ranked.slice(0, 7).map((s: any) => {
+        const mapped: CitySuggestion[] = all.slice(0, 7).map((s: any) => {
           const tokens = s.addressTokens || {};
 
           // Pincode: prefer tokens, then regex on address string.
