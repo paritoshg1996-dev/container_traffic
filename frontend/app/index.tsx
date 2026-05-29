@@ -1903,6 +1903,54 @@ function VoiceListenOverlay({ visible, onCancel, status }: { visible: boolean; o
 
 // ============== RouteSearchModal ==============
 const RECENT_KEY_PREFIX = "recent_routes_";
+// "Saved Pickups" — usage-ranked locations shared across origin & destination
+// pickers. Deduped by eLoc (when present) else pincode+placeName. Auto-tracked
+// on every user selection; the user never has to tap "save" explicitly.
+const SAVED_PICKUPS_KEY = "saved_pickups_v1";
+const SAVED_PICKUPS_MAX = 5;
+
+type SavedPickup = CitySuggestion & { useCount: number; lastUsedAt: string };
+
+// Stable identity for a pickup — eLoc when Mappls gave us one (preferred),
+// otherwise pincode+placeName so manual pincode entries are deduped sensibly.
+function savedPickupKey(s: CitySuggestion): string {
+  const eloc = (s.eLoc || "").trim();
+  if (eloc) return `eloc:${eloc}`;
+  const name = (s.placeName || s.name || s.locality || "").trim().toLowerCase();
+  return `pin:${s.pincode}|${name}`;
+}
+
+async function getSavedPickups(): Promise<SavedPickup[]> {
+  try {
+    const raw = await AsyncStorage.getItem(SAVED_PICKUPS_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(arr)) return [];
+    return arr;
+  } catch { return []; }
+}
+
+// Increment usage on selection — most-used + recently-used wins ranking.
+async function bumpSavedPickup(s: CitySuggestion) {
+  try {
+    const all = await getSavedPickups();
+    const key = savedPickupKey(s);
+    const idx = all.findIndex((p) => savedPickupKey(p) === key);
+    const now = new Date().toISOString();
+    let next: SavedPickup;
+    if (idx >= 0) {
+      next = { ...all[idx], ...s, useCount: (all[idx].useCount || 0) + 1, lastUsedAt: now };
+      all.splice(idx, 1);
+    } else {
+      next = { ...s, useCount: 1, lastUsedAt: now };
+    }
+    // Sort: most-used first, then most-recent; cap at MAX so storage stays tiny.
+    const merged = [next, ...all].sort((a, b) => {
+      if ((b.useCount || 0) !== (a.useCount || 0)) return (b.useCount || 0) - (a.useCount || 0);
+      return (b.lastUsedAt || "").localeCompare(a.lastUsedAt || "");
+    }).slice(0, SAVED_PICKUPS_MAX);
+    await AsyncStorage.setItem(SAVED_PICKUPS_KEY, JSON.stringify(merged));
+  } catch {}
+}
 
 async function getRecentSearches(prefix: string): Promise<CitySuggestion[]> {
   try {
@@ -1930,6 +1978,7 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<CitySuggestion[]>([]);
   const [recents, setRecents] = useState<CitySuggestion[]>([]);
+  const [savedPickups, setSavedPickups] = useState<SavedPickup[]>([]);
   const [searching, setSearching] = useState(false);
   const [listening, setListening] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState("Speak the city name or pincode");
@@ -1943,6 +1992,7 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
       setResults([]);
       setListening(false);
       getRecentSearches(testIDPrefix).then(setRecents);
+      getSavedPickups().then(setSavedPickups);
       setTimeout(() => inputRef.current?.focus(), 120);
     }
   }, [visible]);
@@ -2111,6 +2161,8 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
       locality: finalLocality,
     };
     await saveRecentSearch(testIDPrefix, enriched);
+    // Auto-track in shared "Saved Pickups" (usage-ranked, dedup by eLoc).
+    await bumpSavedPickup(enriched);
     onSelect(enriched.name, enriched.pincode, {
       city: finalCity,
       locality: finalLocality,
@@ -2161,7 +2213,32 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
   };
 
   const showRecents = query.length === 0 && recents.length > 0;
-  const list: CitySuggestion[] = showRecents ? recents : results;
+  const showSaved = query.length === 0 && savedPickups.length > 0;
+  // When the input is empty, show both sections via FlatList sections.
+  // When the user types, show live results.
+  type Section = { label?: string; icon?: any; items: CitySuggestion[]; kind: "saved" | "recent" | "results" };
+  const sections: Section[] = query.length === 0
+    ? [
+        ...(showSaved   ? [{ label: "Saved Pickups",   icon: "bookmark" as const, items: savedPickups as CitySuggestion[], kind: "saved" as const }]   : []),
+        ...(showRecents ? [{ label: "Recent Searches", icon: "time-outline" as const, items: recents, kind: "recent" as const }] : []),
+      ]
+    : [{ items: results, kind: "results" as const }];
+  // Flatten to a single list with optional section headers.
+  type Row =
+    | { kind: "header"; label: string; sectionKey: string }
+    | { kind: "row"; data: CitySuggestion; section: "saved" | "recent" | "results"; useCount?: number };
+  const rows: Row[] = [];
+  sections.forEach((sec) => {
+    if (sec.label) rows.push({ kind: "header", label: sec.label, sectionKey: sec.kind });
+    sec.items.forEach((it) =>
+      rows.push({
+        kind: "row",
+        data: it,
+        section: sec.kind,
+        useCount: sec.kind === "saved" ? (it as SavedPickup).useCount : undefined,
+      })
+    );
+  });
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
@@ -2203,10 +2280,9 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
           </View>
         ) : null}
 
-        {/* Section label */}
-        {showRecents ? (
-          <Text style={srm.sectionLabel}>Recent Searches</Text>
-        ) : query.length >= 2 && !searching && results.length === 0 ? (
+        {/* Section labels rendered inline in the list. Only show no-results /
+            searching states when the user is actively typing. */}
+        {query.length >= 2 && !searching && results.length === 0 ? (
           <Text style={srm.noResultText}>No results found. Try a different name or pincode.</Text>
         ) : searching ? (
           <View style={srm.searchingRow}>
@@ -2216,28 +2292,67 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
         ) : null}
 
         <FlatList
-          data={list}
-          keyExtractor={(s, i) => `${s.pincode}-${i}`}
+          data={rows}
+          keyExtractor={(r, i) =>
+            r.kind === "header"
+              ? `h-${r.sectionKey}-${i}`
+              : `${r.section}-${r.data.pincode}-${i}`
+          }
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={{ paddingBottom: 40 }}
-          renderItem={({ item: s, index: i }) => (
-            <TouchableOpacity
-              key={`${s.pincode}-${i}`}
-              testID={`${testIDPrefix}-modal-suggest-${i}`}
-              style={srm.row}
-              onPress={() => pick(s)}
-              activeOpacity={0.7}
-            >
-              <View style={srm.rowIcon}>
-                <Ionicons name={showRecents ? "time-outline" : "location-outline"} size={20} color={COLORS.textMuted} />
-              </View>
-              <View style={srm.rowBody}>
-                <Text style={srm.rowName} numberOfLines={1}>{s.name}</Text>
-                <Text style={srm.rowSub} numberOfLines={1}>{s.city}</Text>
-              </View>
-              <Text style={srm.rowPin}>{s.pincode}</Text>
-            </TouchableOpacity>
-          )}
+          renderItem={({ item }) => {
+            if (item.kind === "header") {
+              return (
+                <View style={srm.sectionHeaderRow}>
+                  <Ionicons
+                    name={item.sectionKey === "saved" ? "bookmark" : "time-outline"}
+                    size={13}
+                    color={item.sectionKey === "saved" ? COLORS.primary : COLORS.textMuted}
+                  />
+                  <Text style={srm.sectionLabel}>{item.label}</Text>
+                </View>
+              );
+            }
+            const s = item.data;
+            const cleanState = sanitizeStateForDisplay(s.state || "", s.pincode);
+            const cleanCity = sanitizeCityForDisplay(s.city || "", s.pincode, cleanState);
+            const abbr = stateAbbr(cleanState);
+            const subLine = cleanCity && abbr ? `${cleanCity}, ${abbr}` : (cleanCity || abbr || "");
+            return (
+              <TouchableOpacity
+                testID={
+                  item.section === "saved"
+                    ? `${testIDPrefix}-modal-saved-${s.pincode}`
+                    : `${testIDPrefix}-modal-suggest-${s.pincode}`
+                }
+                style={srm.row}
+                onPress={() => pick(s)}
+                activeOpacity={0.7}
+              >
+                <View style={srm.rowIcon}>
+                  <Ionicons
+                    name={
+                      item.section === "saved" ? "bookmark"
+                      : item.section === "recent" ? "time-outline"
+                      : "location-outline"
+                    }
+                    size={20}
+                    color={item.section === "saved" ? COLORS.primary : COLORS.textMuted}
+                  />
+                </View>
+                <View style={srm.rowBody}>
+                  <Text style={srm.rowName} numberOfLines={1}>{s.placeName || s.name}</Text>
+                  {subLine ? <Text style={srm.rowSub} numberOfLines={1}>{subLine}</Text> : null}
+                </View>
+                {item.section === "saved" && item.useCount && item.useCount > 1 ? (
+                  <View style={srm.useCountPill}>
+                    <Text style={srm.useCountText}>×{item.useCount}</Text>
+                  </View>
+                ) : null}
+                <Text style={srm.rowPin}>{s.pincode}</Text>
+              </TouchableOpacity>
+            );
+          }}
         />
         <VoiceListenOverlay visible={false} onCancel={stopVoice} status={voiceStatus} />
       </SafeAreaView>
@@ -2267,7 +2382,10 @@ const srm = StyleSheet.create({
   micBtn: { padding: 6 },
   voiceRow: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 16, paddingVertical: 8, backgroundColor: "#EFF3FF" },
   voiceText: { fontSize: 13, color: COLORS.primary },
-  sectionLabel: { fontSize: 12, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.textMuted, textTransform: "uppercase", letterSpacing: 0.5, paddingHorizontal: 16, paddingTop: 16, paddingBottom: 6 },
+  sectionLabel: { fontSize: 12, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.textMuted, textTransform: "uppercase", letterSpacing: 0.5, paddingTop: 0, paddingBottom: 0 },
+  sectionHeaderRow: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 16, paddingTop: 16, paddingBottom: 6 },
+  useCountPill: { backgroundColor: "#EEF2FA", paddingHorizontal: 7, paddingVertical: 2, borderRadius: 100, marginRight: 8 },
+  useCountText: { fontSize: 11, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.primary, letterSpacing: 0.2 },
   noResultText: { fontSize: 14, color: COLORS.danger, paddingHorizontal: 16, paddingTop: 20, textAlign: "center" },
   searchingRow: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingTop: 20 },
   searchingText: { fontSize: 14, color: COLORS.textMuted },
