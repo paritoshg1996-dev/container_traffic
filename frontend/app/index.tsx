@@ -2048,7 +2048,7 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
             longitude: typeof s.longitude === "number" ? s.longitude : (s.longitude ? parseFloat(s.longitude) : null),
             eLoc: s.eLoc || "",
           };
-        }).filter((s: CitySuggestion) => s.pincode);
+        });
 
         if (!cancelled) setResults(mapped);
       } catch { if (!cancelled) setResults([]); }
