@@ -912,16 +912,20 @@ const originValid =
   /^\d{6}$/.test(originPin) ||
   (
     originInfo?.valid &&
-    originInfo?.latitude != null &&
-    originInfo?.longitude != null
+    (
+      (originInfo?.latitude != null && originInfo?.longitude != null) ||
+      !!(originInfo?.city || originInfo?.locality || originInfo?.placeName)
+    )
   );
 
 const destValid =
   /^\d{6}$/.test(destPin) ||
   (
     destInfo?.valid &&
-    destInfo?.latitude != null &&
-    destInfo?.longitude != null
+    (
+      (destInfo?.latitude != null && destInfo?.longitude != null) ||
+      !!(destInfo?.city || destInfo?.locality || destInfo?.placeName)
+    )
   );
 
 if (!originValid)
@@ -1431,16 +1435,20 @@ const onDateChange = (event: any, selected?: Date) => {
   /^\d{6}$/.test(originPin) ||
   (
     originInfo?.valid &&
-    originInfo?.latitude != null &&
-    originInfo?.longitude != null
+    (
+      (originInfo?.latitude != null && originInfo?.longitude != null) ||
+      !!(originInfo?.city || originInfo?.locality || originInfo?.placeName)
+    )
   );
 
 const destValid =
   /^\d{6}$/.test(destPin) ||
   (
     destInfo?.valid &&
-    destInfo?.latitude != null &&
-    destInfo?.longitude != null
+    (
+      (destInfo?.latitude != null && destInfo?.longitude != null) ||
+      !!(destInfo?.city || destInfo?.locality || destInfo?.placeName)
+    )
   );
 
 if (!originValid) {
@@ -3206,16 +3214,20 @@ const originValid =
   /^\d{6}$/.test(originPin) ||
   (
     originInfo?.valid &&
-    originInfo?.latitude != null &&
-    originInfo?.longitude != null
+    (
+      (originInfo?.latitude != null && originInfo?.longitude != null) ||
+      !!(originInfo?.city || originInfo?.locality || originInfo?.placeName)
+    )
   );
 
 const destValid =
   /^\d{6}$/.test(destPin) ||
   (
     destInfo?.valid &&
-    destInfo?.latitude != null &&
-    destInfo?.longitude != null
+    (
+      (destInfo?.latitude != null && destInfo?.longitude != null) ||
+      !!(destInfo?.city || destInfo?.locality || destInfo?.placeName)
+    )
   );
 
 if (!originValid) {
@@ -3248,8 +3260,12 @@ if (
     lon: originInfo.longitude,
     found: true,
   };
-} else {
+} else if (/^\d{6}$/.test(originPin)) {
   oc = await geocodePin(originPin);
+} else {
+  // City selected without pincode and without coords — cannot geo-filter.
+  setOriginErr("Location coordinates unavailable. Please select a different origin.");
+  return;
 }
 
 if (
@@ -3261,8 +3277,11 @@ if (
     lon: destInfo.longitude,
     found: true,
   };
-} else {
+} else if (/^\d{6}$/.test(destPin)) {
   dc = await geocodePin(destPin);
+} else {
+  setDestErr("Location coordinates unavailable. Please select a different destination.");
+  return;
 }
 
 if (!oc.found) {
