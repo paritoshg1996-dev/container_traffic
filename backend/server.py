@@ -256,15 +256,27 @@ async def geocode_pincode(pincode: str):
 
 
 @api_router.get("/places")
-async def places_search(query: str = Query(..., min_length=2)):
-    """Proxy Mappls Autosuggest using static key — avoids browser CORS issues."""
+async def places_search(
+    query: str = Query(..., min_length=2),
+    filter: Optional[str] = Query(None),
+    tokenizeAddress: Optional[str] = Query(None),
+):
+    """Proxy Mappls Autosuggest using static key — avoids browser CORS issues.
+    Forwards optional filter (e.g. podSubLocality,podLocality,podCity) and
+    tokenizeAddress params so the frontend can restrict result types.
+    """
     MAPPLS_KEY = os.environ.get("MAPPLS_KEY", "")
     if not MAPPLS_KEY:
         raise HTTPException(status_code=500, detail="MAPPLS_KEY not configured")
     try:
+        params: dict = {"query": query, "region": "IND", "access_token": MAPPLS_KEY}
+        if filter:
+            params["filter"] = filter
+        if tokenizeAddress:
+            params["tokenizeAddress"] = tokenizeAddress
         resp = requests.get(
             "https://search.mappls.com/search/places/autosuggest/json",
-            params={"query": query, "region": "IND", "access_token": MAPPLS_KEY},
+            params=params,
             timeout=8,
             headers={
                 "User-Agent": "TruckTraffic/1.0 (trucktraffic.in)",
@@ -276,6 +288,84 @@ async def places_search(query: str = Query(..., min_length=2)):
     except Exception as e:
         logger.warning(f"Places search failed: {e}")
         raise HTTPException(status_code=502, detail="Places search unavailable")
+
+
+@api_router.get("/places/detail/{eloc}")
+async def places_detail(eloc: str):
+    """Resolve a Mappls eLoc to full place detail including lat/lon.
+
+    Mappls Autosuggest intentionally omits coordinates for city/locality-level
+    results (podCity, podLocality, podSubLocality) because those cover a broad
+    area and have no single representative point in the autosuggest response.
+    The Place Detail API always returns a centroid lat/lon for every eLoc, so
+    we call it here whenever the frontend picks a suggestion without coords.
+
+    Results are cached in MongoDB (eloc_geo collection) to avoid redundant
+    Mappls API calls — an eLoc never changes for a given place.
+    """
+    eloc = (eloc or "").strip().upper()
+    if not eloc:
+        raise HTTPException(status_code=400, detail="eLoc is required")
+
+    # Serve from cache if available
+    cached = await db.eloc_geo.find_one({"eloc": eloc}, {"_id": 0})
+    if cached:
+        return cached
+
+    MAPPLS_KEY = os.environ.get("MAPPLS_KEY", "")
+    if not MAPPLS_KEY:
+        raise HTTPException(status_code=500, detail="MAPPLS_KEY not configured")
+
+    try:
+        resp = requests.get(
+            "https://apis.mappls.com/advancedmaps/v1/{key}/place_detail".format(key=MAPPLS_KEY),
+            params={"place_id": eloc},
+            timeout=8,
+            headers={
+                "User-Agent": "TruckTraffic/1.0 (trucktraffic.in)",
+                "Referer": "https://ptl-market.onrender.com",
+            },
+        )
+        data = resp.json()
+
+        # Mappls Place Detail wraps results under different keys depending on version
+        place = (
+            data.get("place_details")
+            or data.get("placeDetails")
+            or data.get("results", [{}])[0]
+            or data
+        )
+
+        lat = place.get("latitude") or place.get("lat")
+        lon = place.get("longitude") or place.get("lng") or place.get("lon")
+
+        if lat is None or lon is None:
+            logger.warning(f"Place detail for eLoc {eloc} returned no coords: {data}")
+            raise HTTPException(status_code=404, detail="Coordinates not found for this eLoc")
+
+        result = {
+            "eloc": eloc,
+            "latitude": float(lat),
+            "longitude": float(lon),
+            "placeName": place.get("placeName") or place.get("place_name") or "",
+            "city": place.get("city") or "",
+            "state": place.get("state") or "",
+            "pincode": place.get("pincode") or place.get("pin_code") or "",
+        }
+
+        # Cache forever — eLoc→coords never change
+        await db.eloc_geo.update_one(
+            {"eloc": eloc},
+            {"$set": result},
+            upsert=True,
+        )
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"Place detail lookup failed for eLoc {eloc}: {e}")
+        raise HTTPException(status_code=502, detail="Place detail unavailable")
 
 
 @api_router.get("/testmappls")
