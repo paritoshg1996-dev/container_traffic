@@ -1974,6 +1974,24 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
           ...(data.suggestedLocations || []),
           ...(data.userAddedLocations || []),
         ];
+ const pincodeByWord: Record<string, string> = {};
+
+all.forEach((s: any) => {
+  const m = (s.placeAddress || "").match(/\b(\d{6})\b/);
+
+  if (m) {
+    (s.placeName || "")
+      .toLowerCase()
+      .split(/\s+/)
+      .forEach((w: string) => {
+        if (w.length > 3 && !pincodeByWord[w]) {
+          pincodeByWord[w] = m[1];
+        }
+      });
+  }
+});
+
+		  
 
 		  console.log(
   "MAPPLS_RAW",
@@ -2010,10 +2028,29 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
           const tokens = s.addressTokens || {};
 
           // Pincode: prefer tokens, then regex on address string.
-          const directPin = (s.placeAddress || "").match(/\b(\d{6})\b/);
-          const pincode: string =
-            (tokens.pincode && /^\d{6}$/.test(tokens.pincode) ? tokens.pincode : "") ||
-            (directPin ? directPin[1] : "");
+        const directPin = (s.placeAddress || "").match(/\b(\d{6})\b/);
+
+const lookedUpPin =
+  (s.placeName || "")
+    .toLowerCase()
+    .split(/\s+/)
+    .map((w: string) => pincodeByWord[w])
+    .find(Boolean);
+
+const pincode: string =
+  (tokens.pincode && /^\d{6}$/.test(tokens.pincode)
+    ? tokens.pincode
+    : "") ||
+  (directPin ? directPin[1] : "") ||
+  (lookedUpPin || "");
+
+	console.log("PIN_LOOKUP", {
+  place: s.placeName,
+  directPin: directPin ? directPin[1] : "",
+  lookedUpPin,
+  finalPin: pincode,
+});		
+			
 
           // State: ONLY from tokens. Never from address tail (that's often
           // a pincode and caused the Vashi/400703/400703 bug).
