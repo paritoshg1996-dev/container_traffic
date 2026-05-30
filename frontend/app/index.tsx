@@ -2029,7 +2029,7 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
     setSearching(true);
     const t = setTimeout(async () => {
       try {
-        const r = await fetch(`${API}/places?query=${encodeURIComponent(q)}`);
+        const r = await fetch(`${API}/places?query=${encodeURIComponent(q)}&filter=podSubLocality,podLocality,podCity&tokenizeAddress=true`);
         const data = await r.json();
 
         const all = [
@@ -2070,7 +2070,7 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
         // `addressTokens` payload (the canonical source). Comma-splitting the
         // placeAddress is fragile and was the root cause of state==pincode
         // bugs — we only fall back to it when tokens are missing.
-        const mapped: CitySuggestion[] = all.slice(0, 7).map((s: any) => {
+        const mapped: CitySuggestion[] = all.slice(0, 10).map((s: any) => {
           const tokens = s.addressTokens || {};
 
           // Pincode: prefer tokens, then regex on address string.
@@ -2638,6 +2638,23 @@ async function geocodePin(pin: string) {
   } catch { return { lat: 0, lon: 0, found: false }; }
 }
 
+async function geocodeEloc(eLoc: string) {
+  const key = `eloc:${eLoc}`;
+  if (geoCache.has(key)) return geoCache.get(key)!;
+  try {
+    const r = await fetch(`${API}/places/eloc/${encodeURIComponent(eLoc)}`);
+    const j = await r.json();
+    const lat = j.latitude ?? j.lat ?? null;
+    const lon = j.longitude ?? j.lon ?? j.lng ?? null;
+    if (lat != null && lon != null) {
+      const out = { lat: parseFloat(lat), lon: parseFloat(lon), found: true };
+      geoCache.set(key, out);
+      return out;
+    }
+  } catch {}
+  return { lat: 0, lon: 0, found: false };
+}
+
 function haversineKm(a: { lat: number; lon: number }, b: { lat: number; lon: number }) {
   const toRad = (d: number) => (d * Math.PI) / 180;
   const R = 6371;
@@ -2720,8 +2737,33 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
     for (const load of allLoads) {
       if (load.weight_tons * 1000 < f.weightKg) continue;
       if (f.volumeCuft != null && load.space_cuft != null && load.space_cuft < f.volumeCuft) continue;
-      const lo = await geocodePin(load.origin_pincode); if (!lo.found) continue;
-      const ld = await geocodePin(load.destination_pincode); if (!ld.found) continue;
+
+      // Resolve origin coords: stored lat/lon (best) → pincode geocode → eLoc geocode
+      let lo: { lat: number; lon: number; found: boolean };
+      if (load.origin_latitude != null && load.origin_longitude != null) {
+        lo = { lat: load.origin_latitude, lon: load.origin_longitude, found: true };
+      } else if (/^\d{6}$/.test(load.origin_pincode)) {
+        lo = await geocodePin(load.origin_pincode);
+      } else if (load.origin_eloc) {
+        lo = await geocodeEloc(load.origin_eloc);
+      } else {
+        continue;
+      }
+      if (!lo.found) continue;
+
+      // Resolve destination coords: stored lat/lon (best) → pincode geocode → eLoc geocode
+      let ld: { lat: number; lon: number; found: boolean };
+      if (load.destination_latitude != null && load.destination_longitude != null) {
+        ld = { lat: load.destination_latitude, lon: load.destination_longitude, found: true };
+      } else if (/^\d{6}$/.test(load.destination_pincode)) {
+        ld = await geocodePin(load.destination_pincode);
+      } else if (load.destination_eloc) {
+        ld = await geocodeEloc(load.destination_eloc);
+      } else {
+        continue;
+      }
+      if (!ld.found) continue;
+
       const dOrigin = haversineKm(f.originCoord, lo), dDest = haversineKm(f.destCoord, ld);
       if (dOrigin <= 30 && dDest <= 30) { dist[load.id] = { origin: dOrigin, dest: dDest, offRoute: false }; survivors.push({ load, total: dOrigin + dDest }); continue; }
       const routeLen = haversineKm(lo, ld);
@@ -3262,8 +3304,9 @@ if (
   };
 } else if (/^\d{6}$/.test(originPin)) {
   oc = await geocodePin(originPin);
+} else if (originInfo?.eLoc) {
+  oc = await geocodeEloc(originInfo.eLoc);
 } else {
-  // City selected without pincode and without coords — cannot geo-filter.
   setOriginErr("Location coordinates unavailable. Please select a different origin.");
   return;
 }
@@ -3279,6 +3322,8 @@ if (
   };
 } else if (/^\d{6}$/.test(destPin)) {
   dc = await geocodePin(destPin);
+} else if (destInfo?.eLoc) {
+  dc = await geocodeEloc(destInfo.eLoc);
 } else {
   setDestErr("Location coordinates unavailable. Please select a different destination.");
   return;
