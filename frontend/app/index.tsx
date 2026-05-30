@@ -2022,13 +2022,7 @@ const pincode: string =
     : "") ||
   (directPin ? directPin[1] : "");
 
-	console.log("PIN_LOOKUP", {
-  place: s.placeName,
-  directPin: directPin ? directPin[1] : "",
-  lookedUpPin,
-  finalPin: pincode,
-});		
-			
+
 
           // State: ONLY from tokens. Never from address tail (that's often
           // a pincode and caused the Vashi/400703/400703 bug).
