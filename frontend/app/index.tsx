@@ -3197,17 +3197,84 @@ function FindSpaceModal({ visible, initial, onClose, onApply }: {
   }, [visible, initial]);
 
   const submit = async () => {
-    setOriginErr(""); setDestErr("");
-    if (!/^\d{6}$/.test(originPin)) { setOriginErr("Select a valid origin from the list or enter a 6-digit pincode"); return; }
-    if (!/^\d{6}$/.test(destPin)) { setDestErr("Select a valid destination from the list or enter a 6-digit pincode"); return; }
-    const wTons = parseFloat(weightTons);
+   
+	  
+	  setOriginErr("");
+setDestErr("");
+
+const originValid =
+  /^\d{6}$/.test(originPin) ||
+  (
+    originInfo?.valid &&
+    originInfo?.latitude != null &&
+    originInfo?.longitude != null
+  );
+
+const destValid =
+  /^\d{6}$/.test(destPin) ||
+  (
+    destInfo?.valid &&
+    destInfo?.latitude != null &&
+    destInfo?.longitude != null
+  );
+
+if (!originValid) {
+  setOriginErr("Select a valid origin from the list");
+  return;
+}
+
+if (!destValid) {
+  setDestErr("Select a valid destination from the list");
+  return;
+}
+    
+	  
+	  const wTons = parseFloat(weightTons);
     if (!wTons || wTons <= 0) return Alert.alert("Required", "Enter cargo weight in tons");
     const w = wTons * 1000; // convert tons to kg for downstream filter
     setBusy(true);
     try {
-      const [oc, dc] = await Promise.all([geocodePin(originPin), geocodePin(destPin)]);
-      if (!oc.found) { setOriginErr("Pincode not found, please check and try again."); return; }
-      if (!dc.found) { setDestErr("Pincode not found, please check and try again."); return; }
+      
+		
+		let oc;
+let dc;
+
+if (
+  originInfo?.latitude != null &&
+  originInfo?.longitude != null
+) {
+  oc = {
+    lat: originInfo.latitude,
+    lon: originInfo.longitude,
+    found: true,
+  };
+} else {
+  oc = await geocodePin(originPin);
+}
+
+if (
+  destInfo?.latitude != null &&
+  destInfo?.longitude != null
+) {
+  dc = {
+    lat: destInfo.latitude,
+    lon: destInfo.longitude,
+    found: true,
+  };
+} else {
+  dc = await geocodePin(destPin);
+}
+
+if (!oc.found) {
+  setOriginErr("Location could not be resolved.");
+  return;
+}
+
+if (!dc.found) {
+  setDestErr("Location could not be resolved.");
+  return;
+}
+		
       await onApply({ origin: originPin, dest: destPin, weightKg: w, volumeCuft: null, originCoord: { lat: oc.lat, lon: oc.lon }, destCoord: { lat: dc.lat, lon: dc.lon } });
     } finally { setBusy(false); }
   };
