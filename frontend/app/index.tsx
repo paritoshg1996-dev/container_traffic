@@ -1403,8 +1403,39 @@ const onDateChange = (event: any, selected?: Date) => {
   const removeImage = (idx: number) => setImages((prev) => prev.filter((_, i) => i !== idx));
 
   const submit = async (alsoShare: boolean) => {
-    if (!/^\d{6}$/.test(originPin)) return Alert.alert("Invalid Origin", "Enter a valid 6-digit pincode or pick a city from the list.");
-    if (!/^\d{6}$/.test(destPin)) return Alert.alert("Invalid Destination", "Enter a valid 6-digit pincode or pick a city from the list.");
+
+	  const originValid =
+  /^\d{6}$/.test(originPin) ||
+  (
+    originInfo?.valid &&
+    originInfo?.latitude != null &&
+    originInfo?.longitude != null
+  );
+
+const destValid =
+  /^\d{6}$/.test(destPin) ||
+  (
+    destInfo?.valid &&
+    destInfo?.latitude != null &&
+    destInfo?.longitude != null
+  );
+
+if (!originValid) {
+  return Alert.alert(
+    "Invalid Origin",
+    "Select a valid origin from the list."
+  );
+}
+
+if (!destValid) {
+  return Alert.alert(
+    "Invalid Destination",
+    "Select a valid destination from the list."
+  );
+}
+
+
+	  
     if (!truckType) return Alert.alert("Required", "Select a truck type");
 const w = weight;
 if (!w || w <= 0) return Alert.alert("Invalid", "Enter valid weight in tons");
