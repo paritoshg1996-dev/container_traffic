@@ -2413,7 +2413,14 @@ function SmartRouteInput({ label, testIDPrefix, text, pin, info, onChange }: {
 }) {
   const [modalOpen, setModalOpen] = useState(false);
 
-  const hasValue = pin && info?.valid;
+ const hasValue =
+  !!info?.valid &&
+  !!(
+    pin ||
+    info?.locality ||
+    info?.city ||
+    info?.placeName
+  );
 
   return (
     <View style={sriStyles.wrap}>
