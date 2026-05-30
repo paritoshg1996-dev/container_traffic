@@ -258,22 +258,25 @@ async def geocode_pincode(pincode: str):
 @api_router.get("/places")
 async def places_search(
     query: str = Query(..., min_length=2),
-    filter: Optional[str] = Query(None),
-    tokenizeAddress: Optional[str] = Query(None),
+    pod: Optional[str] = Query(None),
 ):
     """Proxy Mappls Autosuggest using static key — avoids browser CORS issues.
-    Forwards optional filter (e.g. podSubLocality,podLocality,podCity) and
-    tokenizeAddress params so the frontend can restrict result types.
+    Accepts an optional pod param (e.g. podSubLocality,podLocality,podCity)
+    which maps to Mappls's pod filter for restricting result types to areas only.
+    tokenizeAddress is always enabled so address tokens are returned for parsing.
     """
     MAPPLS_KEY = os.environ.get("MAPPLS_KEY", "")
     if not MAPPLS_KEY:
         raise HTTPException(status_code=500, detail="MAPPLS_KEY not configured")
     try:
-        params: dict = {"query": query, "region": "IND", "access_token": MAPPLS_KEY}
-        if filter:
-            params["filter"] = filter
-        if tokenizeAddress:
-            params["tokenizeAddress"] = tokenizeAddress
+        params: dict = {
+            "query": query,
+            "region": "IND",
+            "access_token": MAPPLS_KEY,
+            "tokenizeAddress": "true",
+        }
+        if pod:
+            params["pod"] = pod
         resp = requests.get(
             "https://search.mappls.com/search/places/autosuggest/json",
             params=params,
