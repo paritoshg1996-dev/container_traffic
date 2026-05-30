@@ -2029,7 +2029,7 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
     setSearching(true);
     const t = setTimeout(async () => {
       try {
-        const r = await fetch(`${API}/places?query=${encodeURIComponent(q)}&filter=podSubLocality,podLocality,podCity&tokenizeAddress=true`);
+        const r = await fetch(`${API}/places?query=${encodeURIComponent(q)}&pod=podSubLocality,podLocality,podCity`);
         const data = await r.json();
 
         const all = [
@@ -2685,7 +2685,7 @@ async function geocodeEloc(eLoc: string, fallbackName?: string) {
   if (fallbackName) {
     try {
       const r = await fetch(
-        `${API}/places?query=${encodeURIComponent(fallbackName)}&filter=podSubLocality,podLocality,podCity&tokenizeAddress=true`
+        `${API}/places?query=${encodeURIComponent(fallbackName)}&pod=podSubLocality,podLocality,podCity`
       );
       const j = await r.json();
       const results: any[] = j.suggestedLocations || j.results || j || [];
