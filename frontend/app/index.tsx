@@ -1974,22 +1974,6 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
           ...(data.suggestedLocations || []),
           ...(data.userAddedLocations || []),
         ];
- const pincodeByWord: Record<string, string> = {};
-
-all.forEach((s: any) => {
-  const m = (s.placeAddress || "").match(/\b(\d{6})\b/);
-
-  if (m) {
-    (s.placeName || "")
-      .toLowerCase()
-      .split(/\s+/)
-      .forEach((w: string) => {
-        if (w.length > 3 && !pincodeByWord[w]) {
-          pincodeByWord[w] = m[1];
-        }
-      });
-  }
-});
 
 		  
 
@@ -2030,19 +2014,13 @@ all.forEach((s: any) => {
           // Pincode: prefer tokens, then regex on address string.
         const directPin = (s.placeAddress || "").match(/\b(\d{6})\b/);
 
-const lookedUpPin =
-  (s.placeName || "")
-    .toLowerCase()
-    .split(/\s+/)
-    .map((w: string) => pincodeByWord[w])
-    .find(Boolean);
+
 
 const pincode: string =
   (tokens.pincode && /^\d{6}$/.test(tokens.pincode)
     ? tokens.pincode
     : "") ||
-  (directPin ? directPin[1] : "") ||
-  (lookedUpPin || "");
+  (directPin ? directPin[1] : "");
 
 	console.log("PIN_LOOKUP", {
   place: s.placeName,
@@ -2143,23 +2121,31 @@ const pincode: string =
 
   const pick = async (s: CitySuggestion) => {
   console.log("PICKED", s);
-	  if (!s.pincode) {
-    onSelect(
-      s.placeName || s.name,
-      "",
-      {
-        city: s.city || "",
-        state: s.state || "",
-        locality: s.locality || "",
-        lat: s.latitude,
-        lon: s.longitude,
-        valid: true,
-      }
-    );
+	 
+	  
+	 if (!s.pincode) {
+  await saveRecentSearch(testIDPrefix, s);
 
-    onClose();
-    return;
-  }
+  onSelect(
+    s.placeName || s.name,
+    "",
+    {
+      city: s.city || "",
+      locality: s.locality || s.name || "",
+      state: s.state || "",
+      valid: true,
+
+      placeName: s.placeName || s.name || "",
+      fullAddress: s.fullAddress || "",
+      latitude: s.latitude ?? null,
+      longitude: s.longitude ?? null,
+      eLoc: s.eLoc || "",
+    }
+  );
+
+  onClose();
+  return;
+}
     // Always fetch the authoritative city/state from the pincode endpoint
     // so the UI shows the instantly-recognizable district name (e.g., Rewari,
     // Thane), even if the search result's parsed city/state was incomplete.
