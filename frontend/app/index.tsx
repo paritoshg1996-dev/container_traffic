@@ -906,9 +906,32 @@ function EditLoadModal({ load, visible, onClose, onSaved }: { load: Load; visibl
   };
 
   const save = async () => {
-    if (!/^\d{6}$/.test(originPin)) return Alert.alert("Invalid Origin", "Select a valid origin.");
-    if (!/^\d{6}$/.test(destPin)) return Alert.alert("Invalid Destination", "Select a valid destination.");
-    if (!truckType) return Alert.alert("Required", "Select a truck type.");
+    
+	  
+const originValid =
+  /^\d{6}$/.test(originPin) ||
+  (
+    originInfo?.valid &&
+    originInfo?.latitude != null &&
+    originInfo?.longitude != null
+  );
+
+const destValid =
+  /^\d{6}$/.test(destPin) ||
+  (
+    destInfo?.valid &&
+    destInfo?.latitude != null &&
+    destInfo?.longitude != null
+  );
+
+if (!originValid)
+  return Alert.alert("Invalid Origin", "Select a valid origin.");
+
+if (!destValid)
+  return Alert.alert("Invalid Destination", "Select a valid destination."); 
+	  
+	  
+	if (!truckType) return Alert.alert("Required", "Select a truck type.");
     if (!weight || weight <= 0) return Alert.alert("Invalid", "Enter valid weight.");
     setBusy(true);
     try {
