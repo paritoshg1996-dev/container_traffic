@@ -2242,11 +2242,13 @@ const pincode: string =
       const r = await fetch(`${API}/pincode/${s.pincode}`);
       const j = await r.json();
       if (j && j.valid) {
-        // Prefer pincode-API city/state — these are authoritative & match the
-        // RTO naming the UI uses for the abbreviation lookup.
+        // Prefer pincode-API city/state — authoritative & matches RTO naming.
         if (j.city)  finalCity  = j.city;
         if (j.state) finalState = j.state;
-        if (!finalLocality) finalLocality = j.city || s.name;
+        // Use the specific locality name (e.g. "Bhandup West") if returned,
+        // otherwise fall back to district ("Mumbai") or the search name.
+        if (j.locality) finalLocality = j.locality;
+        else if (!finalLocality) finalLocality = j.city || s.name;
       }
     } catch {}
 
