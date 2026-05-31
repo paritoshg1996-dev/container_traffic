@@ -12,6 +12,8 @@ from typing import List, Optional
 import uuid
 from datetime import datetime, timezone
 import requests
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)  # postalpincode.in SSL cert expired
 
 import firebase_admin
 from firebase_admin import credentials as fb_credentials, auth as fb_auth
@@ -152,6 +154,7 @@ async def lookup_pincode(pincode: str):
             f"https://api.postalpincode.in/pincode/{pincode}",
             timeout=8,
             headers={"User-Agent": "LoadLink/1.0"},
+            verify=False,  # postalpincode.in SSL cert expired
         )
         data = resp.json()
         if isinstance(data, list) and data and data[0].get("Status") == "Success":
@@ -188,6 +191,7 @@ async def search_city(name: str):
             f"https://api.postalpincode.in/postoffice/{name}",
             timeout=8,
             headers={"User-Agent": "LoadLink/1.0"},
+            verify=False,  # postalpincode.in SSL cert expired
         )
         data = resp.json()
         out: List[CitySuggestion] = []
@@ -223,36 +227,72 @@ class GeoInfo(BaseModel):
 
 @api_router.get("/geocode/{pincode}", response_model=GeoInfo)
 async def geocode_pincode(pincode: str):
-    """Resolve an Indian pincode to lat/lon. Cached in Mongo."""
+    """Resolve an Indian pincode to lat/lon. Cached in Mongo.
+
+    Strategy:
+    1. MongoDB cache (permanent, free)
+    2. Nominatim by postalcode (free, usually reliable)
+    3. Nominatim by city name from postalpincode.in (fallback)
+    All results cached permanently so each pincode is only ever looked up once.
+    """
     if not (pincode.isdigit() and len(pincode) == 6):
         raise HTTPException(status_code=400, detail="Pincode must be 6 digits")
 
     cached = await db.pincode_geo.find_one({"pincode": pincode}, {"_id": 0})
-    if cached:
+    if cached and cached.get("found"):
         return GeoInfo(**cached)
 
+    nominatim_headers = {"User-Agent": "TruckTraffic/1.0 (trucktraffic.in)"}
+
+    # Step 1: Nominatim by postalcode
     try:
         resp = requests.get(
             "https://nominatim.openstreetmap.org/search",
             params={"postalcode": pincode, "country": "India", "format": "json", "limit": 1},
             timeout=10,
-            headers={"User-Agent": "LoadLink/1.0 (loadlink.app)"},
+            headers=nominatim_headers,
         )
         data = resp.json()
         if isinstance(data, list) and data:
             first = data[0]
-            info = GeoInfo(
-                pincode=pincode,
-                lat=float(first["lat"]),
-                lon=float(first["lon"]),
-                found=True,
-            )
-            await db.pincode_geo.insert_one(info.dict())
+            info = GeoInfo(pincode=pincode, lat=float(first["lat"]), lon=float(first["lon"]), found=True)
+            await db.pincode_geo.update_one({"pincode": pincode}, {"$set": info.dict()}, upsert=True)
             return info
-        return GeoInfo(pincode=pincode, found=False)
     except Exception as e:
-        logger.warning(f"Geocode failed for {pincode}: {e}")
-        return GeoInfo(pincode=pincode, found=False)
+        logger.warning(f"Nominatim postalcode lookup failed for {pincode}: {e}")
+
+    # Step 2: Look up city name from postalpincode.in, then geocode by city name
+    try:
+        resp = requests.get(
+            f"https://api.postalpincode.in/pincode/{pincode}",
+            timeout=8,
+            headers={"User-Agent": "LoadLink/1.0"},
+            verify=False,  # postalpincode.in SSL cert is expired
+        )
+        data = resp.json()
+        if isinstance(data, list) and data and data[0].get("Status") == "Success":
+            offices = data[0].get("PostOffice") or []
+            if offices:
+                first = offices[0]
+                city_name = first.get("District") or first.get("Block") or first.get("Name") or ""
+                state_name = first.get("State") or ""
+                if city_name:
+                    geo_resp = requests.get(
+                        "https://nominatim.openstreetmap.org/search",
+                        params={"q": f"{city_name}, {state_name}, India", "format": "json", "limit": 1, "countrycodes": "in"},
+                        timeout=10,
+                        headers=nominatim_headers,
+                    )
+                    geo_data = geo_resp.json()
+                    if isinstance(geo_data, list) and geo_data:
+                        first_geo = geo_data[0]
+                        info = GeoInfo(pincode=pincode, lat=float(first_geo["lat"]), lon=float(first_geo["lon"]), found=True)
+                        await db.pincode_geo.update_one({"pincode": pincode}, {"$set": info.dict()}, upsert=True)
+                        return info
+    except Exception as e:
+        logger.warning(f"Pincode city-name fallback failed for {pincode}: {e}")
+
+    return GeoInfo(pincode=pincode, found=False)
 
 
 @api_router.get("/geocode-city/{city_name}")
@@ -307,9 +347,11 @@ async def places_search(
 ):
     """Proxy Mappls Autosuggest.
 
-    The frontend calls this 3 times in parallel with pod=CITY, pod=LC, pod=SLC
-    to get area-level suggestions only. Mappls only accepts a single pod value
-    per request — comma-separated values return HTTP 400.
+    The frontend calls this twice in parallel (pod=CITY and pod=LC).
+    Mappls only accepts a single pod value — comma-separated values return 400.
+    For short queries (< 4 chars), pod=CITY often returns empty/invalid JSON,
+    so we skip the pod param in that case and let the frontend filter by type.
+    Always returns a valid JSON object — never a 502.
     """
     MAPPLS_KEY = os.environ.get("MAPPLS_KEY", "")
     if not MAPPLS_KEY:
@@ -321,7 +363,8 @@ async def places_search(
             "access_token": MAPPLS_KEY,
             "tokenizeAddress": "true",
         }
-        if pod:
+        # pod=CITY is unreliable for short queries — Mappls returns empty/invalid JSON
+        if pod and len(query) >= 4:
             params["pod"] = pod
         resp = requests.get(
             "https://search.mappls.com/search/places/autosuggest/json",
@@ -333,10 +376,79 @@ async def places_search(
                 "Origin": "https://ptl-market.onrender.com",
             },
         )
+        # Guard against empty/non-JSON responses from Mappls
+        text = resp.text.strip()
+        if not text:
+            return {"suggestedLocations": [], "userAddedLocations": []}
         return resp.json()
+    except ValueError:
+        # Mappls returned non-JSON (e.g. empty body for short pod=CITY queries)
+        return {"suggestedLocations": [], "userAddedLocations": []}
     except Exception as e:
         logger.warning(f"Places search failed: {e}")
-        raise HTTPException(status_code=502, detail="Places search unavailable")
+        return {"suggestedLocations": [], "userAddedLocations": []}
+
+
+@api_router.get("/testgeocode")
+async def test_geocode(
+    pincode: Optional[str] = Query(default=None),
+    city: Optional[str] = Query(default=None),
+):
+    """Test both geocoding paths — verify before deploying.
+
+    Test pincode geocoding (used for LC locality selections):
+      GET /api/testgeocode?pincode=400053   (Andheri West)
+      GET /api/testgeocode?pincode=562123   (Nelamangala)
+
+    Test city-name geocoding (used for CITY selections like Mumbai):
+      GET /api/testgeocode?city=Mumbai
+      GET /api/testgeocode?city=Nelamangala
+      GET /api/testgeocode?city=Bengaluru
+    """
+    results = {}
+    if pincode:
+        try:
+            # Step 1: Nominatim by postalcode
+            resp = requests.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={"postalcode": pincode, "country": "India", "format": "json", "limit": 1},
+                timeout=10,
+                headers={"User-Agent": "TruckTraffic/1.0 (trucktraffic.in)"},
+            )
+            data = resp.json()
+            results["nominatim_by_pincode"] = data[0] if data else "no results"
+        except Exception as e:
+            results["nominatim_by_pincode"] = f"error: {e}"
+
+        try:
+            # Step 2: postalpincode.in (with SSL bypass)
+            resp2 = requests.get(
+                f"https://api.postalpincode.in/pincode/{pincode}",
+                timeout=8,
+                headers={"User-Agent": "LoadLink/1.0"},
+                verify=False,
+            )
+            results["postalpincode"] = resp2.json()
+        except Exception as e:
+            results["postalpincode"] = f"error: {e}"
+
+    if city:
+        try:
+            resp3 = requests.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={"q": f"{city}, India", "format": "json", "limit": 1, "countrycodes": "in"},
+                timeout=10,
+                headers={"User-Agent": "TruckTraffic/1.0 (trucktraffic.in)"},
+            )
+            data3 = resp3.json()
+            results["nominatim_by_city"] = data3[0] if data3 else "no results"
+        except Exception as e:
+            results["nominatim_by_city"] = f"error: {e}"
+
+    if not pincode and not city:
+        results["usage"] = "Pass ?pincode=400053 or ?city=Mumbai"
+
+    return results
 
 
 @api_router.get("/testmappls")
