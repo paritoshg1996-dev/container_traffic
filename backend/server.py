@@ -261,9 +261,25 @@ async def places_search(
     pod: Optional[str] = Query(None),
 ):
     """Proxy Mappls Autosuggest using static key — avoids browser CORS issues.
-    Accepts an optional pod param (e.g. podSubLocality,podLocality,podCity)
-    which maps to Mappls's pod filter for restricting result types to areas only.
-    tokenizeAddress is always enabled so address tokens are returned for parsing.
+
+    The `pod` parameter restricts results to a specific place type using the
+    official Mappls REST API codes:
+        SLC   = Sublocality
+        LC    = Locality
+        CITY  = City
+        VLG   = Village
+        SDIST = Subdistrict
+        DIST  = District
+        STATE = State
+        SSLC  = Subsublocality
+
+    tokenizeAddress=true is always sent so the frontend receives structured
+    addressTokens (pincode, city, state, subLocality etc.) for clean parsing.
+
+    Note: the pod codes above are the REST API values. The Android/iOS SDK
+    constants (e.g. POD_SUB_LOCALITY) are translated to these codes internally
+    by the SDK before hitting this endpoint — never send the SDK constant names
+    directly to the REST API.
     """
     MAPPLS_KEY = os.environ.get("MAPPLS_KEY", "")
     if not MAPPLS_KEY:
