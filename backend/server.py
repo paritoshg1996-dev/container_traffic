@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 import uuid
 from datetime import datetime, timezone
+import re
 import requests
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)  # postalpincode.in SSL cert expired
@@ -127,8 +128,9 @@ class Load(LoadCreate):
 
 class PincodeInfo(BaseModel):
     pincode: str
-    city: str
-    state: str
+    city: str       # District name (e.g. "Mumbai")
+    state: str      # State name (e.g. "Maharashtra")
+    locality: str = ""  # Most specific area name (e.g. "Bhandup West")
     valid: bool
 
 
@@ -146,7 +148,17 @@ async def python_version():
 
 @api_router.get("/pincode/{pincode}", response_model=PincodeInfo)
 async def lookup_pincode(pincode: str):
-    """Look up Indian pincode and return city/state."""
+    """Look up Indian pincode and return city, state, and specific locality.
+
+    locality = most specific area name from the post office list
+               e.g. "Bhandup West" for 400078, not just "Mumbai"
+    city     = district name e.g. "Mumbai"
+    state    = state name e.g. "Maharashtra"
+
+    Priority for locality: Head PO > Sub PO > first Branch PO
+    This gives the area name the user actually knows (Bhandup West,
+    Andheri East, Vashi etc.) rather than just the district.
+    """
     if not (pincode.isdigit() and len(pincode) == 6):
         raise HTTPException(status_code=400, detail="Pincode must be 6 digits")
     try:
@@ -160,17 +172,41 @@ async def lookup_pincode(pincode: str):
         if isinstance(data, list) and data and data[0].get("Status") == "Success":
             offices = data[0].get("PostOffice") or []
             if offices:
-                first = offices[0]
+                city  = offices[0].get("District") or offices[0].get("Block") or ""
+                state = offices[0].get("State") or ""
+
+                # Pick the most representative locality name:
+                # Prefer Head PO > Sub PO > first office
+                # Head/Sub POs are named after the actual area (e.g. "Bhandup West HO")
+                # Branch POs are often named after small lanes/buildings
+                def rank(o):
+                    bt = (o.get("BranchType") or "").lower()
+                    if "head" in bt:   return 0
+                    if "sub" in bt:    return 1
+                    return 2
+
+                best = min(offices, key=rank)
+                raw_name = best.get("Name") or ""
+
+                # Strip common suffixes that clutter the display
+                # e.g. "Bhandup West H.O" → "Bhandup West"
+                #      "Andheri East S.O" → "Andheri East"
+                locality = re.sub(
+                    r'\s*(H\.?O\.?|S\.?O\.?|B\.?O\.?|Head\s+Post\s+Office|Sub\s+Post\s+Office|Branch\s+Post\s+Office)\s*$',
+                    '', raw_name, flags=re.IGNORECASE
+                ).strip()
+
                 return PincodeInfo(
                     pincode=pincode,
-                    city=first.get("District") or first.get("Block") or "",
-                    state=first.get("State") or "",
+                    city=city,
+                    state=state,
+                    locality=locality,
                     valid=True,
                 )
-        return PincodeInfo(pincode=pincode, city="", state="", valid=False)
+        return PincodeInfo(pincode=pincode, city="", state="", locality="", valid=False)
     except Exception as e:
         logger.warning(f"Pincode lookup failed: {e}")
-        return PincodeInfo(pincode=pincode, city="", state="", valid=False)
+        return PincodeInfo(pincode=pincode, city="", state="", locality="", valid=False)
 
 
 class CitySuggestion(BaseModel):
