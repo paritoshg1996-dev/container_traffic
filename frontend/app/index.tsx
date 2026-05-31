@@ -2662,19 +2662,47 @@ async function geocodePin(pin: string) {
   } catch { return { lat: 0, lon: 0, found: false }; }
 }
 
-// geocodeEloc: resolves coords for a load that was stored without a pincode.
-// Strategy: extract pincode from the full_address string stored on the load
-// (Mappls placeAddress always contains a 6-digit pincode), then geocode via
-// Nominatim. Place Detail API does not return coords on our Mappls plan.
+// Resolves lat/lon from a city/locality name via Nominatim.
+// Used when a CITY-type Mappls result has no pincode in placeAddress
+// (e.g. Mumbai → placeAddress = "Maharashtra" with no 6-digit pin).
+async function geocodeCityName(name: string) {
+  if (!name) return { lat: 0, lon: 0, found: false };
+  const key = `city:${name.toLowerCase()}`;
+  if (geoCache.has(key)) return geoCache.get(key)!;
+  try {
+    const r = await fetch(`${API}/geocode-city/${encodeURIComponent(name)}`);
+    const j = await r.json();
+    if (j.found) {
+      const out = { lat: j.lat, lon: j.lon, found: true };
+      geoCache.set(key, out);
+      return out;
+    }
+  } catch {}
+  return { lat: 0, lon: 0, found: false };
+}
+
+// geocodeEloc: resolves coords for a load stored without lat/lon.
+// 1. Extract pincode from fullAddress (e.g. "Mumbai, Maharashtra, 400053" → 400053)
+// 2. If no pincode (e.g. CITY results where placeAddress = "Maharashtra"),
+//    fall back to city-name geocoding via Nominatim.
 async function geocodeEloc(eLoc: string, fallbackName?: string, fullAddress?: string) {
   if (!eLoc) return { lat: 0, lon: 0, found: false };
   const key = `eloc:${eLoc}`;
   if (geoCache.has(key)) return geoCache.get(key)!;
 
-  // Extract pincode from the stored full address (e.g. "Mumbai, Maharashtra, 400053")
+  // Step 1: pincode from stored full address
   const pin = (fullAddress || "").match(/\b(\d{6})\b/)?.[1] || "";
   if (pin) {
     const result = await geocodePin(pin);
+    if (result.found) {
+      geoCache.set(key, result);
+      return result;
+    }
+  }
+
+  // Step 2: city name geocoding (for CITY-type results with no pincode)
+  if (fallbackName) {
+    const result = await geocodeCityName(fallbackName);
     if (result.found) {
       geoCache.set(key, result);
       return result;
@@ -2774,7 +2802,7 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
       } else if (/^\d{6}$/.test(load.origin_pincode)) {
         lo = await geocodePin(load.origin_pincode);
       } else if (load.origin_eloc) {
-        lo = await geocodeEloc(load.origin_eloc, "", load.origin_full_address || "");
+        lo = await geocodeEloc(load.origin_eloc, load.origin_place_name || load.origin_city || "", load.origin_full_address || "");
       } else {
         continue;
       }
@@ -2787,7 +2815,7 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
       } else if (/^\d{6}$/.test(load.destination_pincode)) {
         ld = await geocodePin(load.destination_pincode);
       } else if (load.destination_eloc) {
-        ld = await geocodeEloc(load.destination_eloc, "", load.destination_full_address || "");
+        ld = await geocodeEloc(load.destination_eloc, load.destination_place_name || load.destination_city || "", load.destination_full_address || "");
       } else {
         continue;
       }
@@ -3334,7 +3362,7 @@ if (
 } else if (/^\d{6}$/.test(originPin)) {
   oc = await geocodePin(originPin);
 } else if (originInfo?.eLoc) {
-  oc = await geocodeEloc(originInfo.eLoc, "", originInfo.fullAddress || "");
+  oc = await geocodeEloc(originInfo.eLoc, originInfo.placeName || originInfo.city || "", originInfo.fullAddress || "");
 } else {
   setOriginErr("Location coordinates unavailable. Please select a different origin.");
   return;
@@ -3352,7 +3380,7 @@ if (
 } else if (/^\d{6}$/.test(destPin)) {
   dc = await geocodePin(destPin);
 } else if (destInfo?.eLoc) {
-  dc = await geocodeEloc(destInfo.eLoc, "", destInfo.fullAddress || "");
+  dc = await geocodeEloc(destInfo.eLoc, destInfo.placeName || destInfo.city || "", destInfo.fullAddress || "");
 } else {
   setDestErr("Location coordinates unavailable. Please select a different destination.");
   return;
