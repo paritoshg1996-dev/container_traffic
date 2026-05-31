@@ -2029,7 +2029,7 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
     setSearching(true);
     const t = setTimeout(async () => {
       try {
-        const r = await fetch(`${API}/places?query=${encodeURIComponent(q)}&pod=podSubLocality,podLocality,podCity`);
+        const r = await fetch(`${API}/places?query=${encodeURIComponent(q)}&pod=SLC,LC,CITY,VLG`);
         const data = await r.json();
 
         const all = [
@@ -2130,7 +2130,21 @@ const pincode: string =
           };
         });
 
-        if (!cancelled) setResults(mapped);
+        // Filter client-side to area-level results only (no full addresses,
+        // streets, or POIs). Mappls returns a `type` field on every result:
+        //   CITY, LOCALITY, SUBLOCALITY, VILLAGE  → keep (area-level)
+        //   HOUSE_NUMBER, STREET, POI, ROUTE       → discard
+        // This replaces the pod param which only works in the JS SDK, not REST API.
+        const AREA_TYPES = new Set([
+          "CITY", "LOCALITY", "SUBLOCALITY", "VILLAGE",
+          "SUBDISTRICT", "DISTRICT",                    // kept as fallback for rural queries
+        ]);
+        const areaOnly = mapped.filter((s: CitySuggestion) => {
+          const raw = (all.find((x: any) => x.eLoc === s.eLoc) as any);
+          const t = (raw?.type || "").toUpperCase();
+          return !t || AREA_TYPES.has(t); // if type missing, keep (don't discard unknowns)
+        });
+        if (!cancelled) setResults(areaOnly);
       } catch { if (!cancelled) setResults([]); }
       finally { if (!cancelled) setSearching(false); }
     }, 350);
@@ -2685,7 +2699,7 @@ async function geocodeEloc(eLoc: string, fallbackName?: string) {
   if (fallbackName) {
     try {
       const r = await fetch(
-        `${API}/places?query=${encodeURIComponent(fallbackName)}&pod=podSubLocality,podLocality,podCity`
+        `${API}/places?query=${encodeURIComponent(fallbackName)}&pod=SLC,LC,CITY,VLG`
       );
       const j = await r.json();
       const results: any[] = j.suggestedLocations || j.results || j || [];
