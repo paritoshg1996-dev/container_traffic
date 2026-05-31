@@ -255,6 +255,51 @@ async def geocode_pincode(pincode: str):
         return GeoInfo(pincode=pincode, found=False)
 
 
+@api_router.get("/geocode-city/{city_name}")
+async def geocode_city(city_name: str):
+    """Resolve an Indian city/locality name to lat/lon via Nominatim.
+    Used when a CITY-type Mappls result has no pincode in placeAddress
+    (e.g. Mumbai → placeAddress is just "Maharashtra" with no pincode).
+    Results are cached in MongoDB permanently.
+    """
+    city_name = (city_name or "").strip()
+    if not city_name:
+        raise HTTPException(status_code=400, detail="city_name is required")
+
+    cache_key = city_name.lower()
+    cached = await db.city_geo.find_one({"city": cache_key}, {"_id": 0})
+    if cached:
+        return GeoInfo(pincode="", lat=cached["lat"], lon=cached["lon"], found=True)
+
+    try:
+        resp = requests.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={
+                "q": f"{city_name}, India",
+                "format": "json",
+                "limit": 1,
+                "countrycodes": "in",
+            },
+            timeout=10,
+            headers={"User-Agent": "LoadLink/1.0 (loadlink.app)"},
+        )
+        data = resp.json()
+        if isinstance(data, list) and data:
+            first = data[0]
+            lat = float(first["lat"])
+            lon = float(first["lon"])
+            await db.city_geo.update_one(
+                {"city": cache_key},
+                {"$set": {"city": cache_key, "lat": lat, "lon": lon}},
+                upsert=True,
+            )
+            return GeoInfo(pincode="", lat=lat, lon=lon, found=True)
+        return GeoInfo(pincode="", found=False)
+    except Exception as e:
+        logger.warning(f"City geocode failed for {city_name}: {e}")
+        return GeoInfo(pincode="", found=False)
+
+
 @api_router.get("/places")
 async def places_search(
     query: str = Query(..., min_length=2),
@@ -292,89 +337,6 @@ async def places_search(
     except Exception as e:
         logger.warning(f"Places search failed: {e}")
         raise HTTPException(status_code=502, detail="Places search unavailable")
-
-
-@api_router.get("/places/detail/{eloc}")
-async def places_detail(eloc: str):
-    """Resolve a Mappls eLoc to full place detail including lat/lon.
-
-    Mappls Autosuggest intentionally omits coordinates for city/locality-level
-    results (podCity, podLocality, podSubLocality) because those cover a broad
-    area and have no single representative point in the autosuggest response.
-    The Place Detail API always returns a centroid lat/lon for every eLoc, so
-    we call it here whenever the frontend picks a suggestion without coords.
-
-    Results are cached in MongoDB (eloc_geo collection) to avoid redundant
-    Mappls API calls — an eLoc never changes for a given place.
-    """
-    eloc = (eloc or "").strip().upper()
-    if not eloc:
-        raise HTTPException(status_code=400, detail="eLoc is required")
-
-    # Serve from cache if available
-    cached = await db.eloc_geo.find_one({"eloc": eloc}, {"_id": 0})
-    if cached:
-        return cached
-
-    MAPPLS_KEY = os.environ.get("MAPPLS_KEY", "")
-    if not MAPPLS_KEY:
-        raise HTTPException(status_code=500, detail="MAPPLS_KEY not configured")
-
-    try:
-        resp = requests.get(
-            "https://apis.mappls.com/advancedmaps/v1/{key}/place_detail".format(key=MAPPLS_KEY),
-            params={"place_id": eloc},
-            timeout=8,
-            headers={
-                "User-Agent": "TruckTraffic/1.0 (trucktraffic.in)",
-                "Referer": "https://ptl-market.onrender.com",
-            },
-        )
-        data = resp.json()
-
-        return {
-    "status_code": resp.status_code,
-    "raw_response": data
-}
-
-        # Mappls Place Detail wraps results under different keys depending on version
-        place = (
-            data.get("place_details")
-            or data.get("placeDetails")
-            or data.get("results", [{}])[0]
-            or data
-        )
-
-        lat = place.get("latitude") or place.get("lat")
-        lon = place.get("longitude") or place.get("lng") or place.get("lon")
-
-        if lat is None or lon is None:
-            logger.warning(f"Place detail for eLoc {eloc} returned no coords: {data}")
-            raise HTTPException(status_code=404, detail="Coordinates not found for this eLoc")
-
-        result = {
-            "eloc": eloc,
-            "latitude": float(lat),
-            "longitude": float(lon),
-            "placeName": place.get("placeName") or place.get("place_name") or "",
-            "city": place.get("city") or "",
-            "state": place.get("state") or "",
-            "pincode": place.get("pincode") or place.get("pin_code") or "",
-        }
-
-        # Cache forever — eLoc→coords never change
-        await db.eloc_geo.update_one(
-            {"eloc": eloc},
-            {"$set": result},
-            upsert=True,
-        )
-        return result
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.warning(f"Place detail lookup failed for eLoc {eloc}: {e}")
-        raise HTTPException(status_code=502, detail="Place detail unavailable")
 
 
 @api_router.get("/testmappls")
