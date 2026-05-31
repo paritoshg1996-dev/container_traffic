@@ -2029,13 +2029,30 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
     setSearching(true);
     const t = setTimeout(async () => {
       try {
-        const r = await fetch(`${API}/places?query=${encodeURIComponent(q)}&pod=SLC,LC,CITY,VLG`);
-        const data = await r.json();
+        // Mappls pod only accepts ONE value per request — send three parallel
+        // requests (CITY, LC=Locality, SLC=SubLocality) and merge the results.
+        // This gives us area-level suggestions only, no POIs or addresses.
+        // Mappls pod only accepts ONE value per request — send two parallel
+        // requests (CITY and LC=Locality) and merge the results.
+        // SLC (SubLocality) is excluded — results are too granular (specific
+        // chowks, micro-zones) and not how logistics users describe locations.
+        const [rCity, rLoc] = await Promise.all([
+          fetch(`${API}/places?query=${encodeURIComponent(q)}&pod=CITY`),
+          fetch(`${API}/places?query=${encodeURIComponent(q)}&pod=LC`),
+        ]);
+        const [dCity, dLoc] = await Promise.all([
+          rCity.json(), rLoc.json(),
+        ]);
 
-        const all = [
-          ...(data.suggestedLocations || []),
-          ...(data.userAddedLocations || []),
-        ];
+        // Merge both, dedup by eLoc, preserve relevance order within each pod
+        const seen = new Set<string>();
+        const all: any[] = [];
+        for (const item of [
+          ...(dCity.suggestedLocations || []),
+          ...(dLoc.suggestedLocations  || []),
+        ]) {
+          if (!seen.has(item.eLoc)) { seen.add(item.eLoc); all.push(item); }
+        }
 
 		  
 
@@ -2130,21 +2147,9 @@ const pincode: string =
           };
         });
 
-        // Filter client-side to area-level results only (no full addresses,
-        // streets, or POIs). Mappls returns a `type` field on every result:
-        //   CITY, LOCALITY, SUBLOCALITY, VILLAGE  → keep (area-level)
-        //   HOUSE_NUMBER, STREET, POI, ROUTE       → discard
-        // This replaces the pod param which only works in the JS SDK, not REST API.
-        const AREA_TYPES = new Set([
-          "CITY", "LOCALITY", "SUBLOCALITY", "VILLAGE",
-          "SUBDISTRICT", "DISTRICT",                    // kept as fallback for rural queries
-        ]);
-        const areaOnly = mapped.filter((s: CitySuggestion) => {
-          const raw = (all.find((x: any) => x.eLoc === s.eLoc) as any);
-          const t = (raw?.type || "").toUpperCase();
-          return !t || AREA_TYPES.has(t); // if type missing, keep (don't discard unknowns)
-        });
-        if (!cancelled) setResults(areaOnly);
+        // Results are already area-level (CITY / LOCALITY / SUB_LOCALITY)
+        // because we used pod=CITY and pod=LC in the fetch above.
+        if (!cancelled) setResults(mapped);
       } catch { if (!cancelled) setResults([]); }
       finally { if (!cancelled) setSearching(false); }
     }, 350);
@@ -2194,30 +2199,17 @@ const pincode: string =
 	 
 	  
 	 if (!s.pincode) {
-  // Resolve coords at selection time via Place Detail API.
-  // Autosuggest intentionally omits lat/lon for city-level results;
-  // Place Detail always has them. We do this once on pick so that
-  // PostLoad, EditLoad, and FindSpace filter all receive valid coords.
-  let lat = s.latitude ?? null;
-  let lon = s.longitude ?? null;
+  // Autosuggest never returns lat/lon — but placeAddress always contains
+  // the pincode (e.g. "Mumbai, Maharashtra, 400053"). Extract it and use
+  // geocodePin (Nominatim) to get coords. This is the only reliable path
+  // given that the Place Detail API does not return coords on our plan.
+  const addressPin = (s.fullAddress || "").match(/\b(\d{6})\b/)?.[1] || "";
 
-  if ((lat == null || lon == null) && s.eLoc) {
-    try {
-      const r = await fetch(`${API}/places/detail/${encodeURIComponent(s.eLoc)}`);
-      if (r.ok) {
-        const j = await r.json();
-        lat = j.latitude ?? j.lat ?? lat;
-        lon = j.longitude ?? j.lon ?? j.lng ?? lon;
-      }
-    } catch {}
-  }
-
-  const enriched: CitySuggestion = { ...s, latitude: lat, longitude: lon };
-  await saveRecentSearch(testIDPrefix, enriched);
+  await saveRecentSearch(testIDPrefix, { ...s, pincode: addressPin });
 
   onSelect(
     s.placeName || s.name,
-    "",
+    addressPin,
     {
       city: s.city || "",
       locality: s.locality || s.name || "",
@@ -2225,8 +2217,8 @@ const pincode: string =
       valid: true,
       placeName: s.placeName || s.name || "",
       fullAddress: s.fullAddress || "",
-      latitude: lat,
-      longitude: lon,
+      latitude: null,
+      longitude: null,
       eLoc: s.eLoc || "",
     }
   );
@@ -2670,50 +2662,23 @@ async function geocodePin(pin: string) {
   } catch { return { lat: 0, lon: 0, found: false }; }
 }
 
-// Resolves lat/lon from an eLoc via the Place Detail API.
-// Used as a fallback for:
-//   (a) legacy DB records stored before coords were resolved at pick() time
-//   (b) applyFilter() for loads whose lat/lon columns are null
-// New selections always have coords resolved in pick() so this is rarely called.
-async function geocodeEloc(eLoc: string, fallbackName?: string) {
+// geocodeEloc: resolves coords for a load that was stored without a pincode.
+// Strategy: extract pincode from the full_address string stored on the load
+// (Mappls placeAddress always contains a 6-digit pincode), then geocode via
+// Nominatim. Place Detail API does not return coords on our Mappls plan.
+async function geocodeEloc(eLoc: string, fallbackName?: string, fullAddress?: string) {
   if (!eLoc) return { lat: 0, lon: 0, found: false };
   const key = `eloc:${eLoc}`;
   if (geoCache.has(key)) return geoCache.get(key)!;
 
-  // Primary: Place Detail API — always has coords for any eLoc
-  try {
-    const r = await fetch(`${API}/places/detail/${encodeURIComponent(eLoc)}`);
-    if (r.ok) {
-      const j = await r.json();
-      const lat = j.latitude ?? j.lat ?? null;
-      const lon = j.longitude ?? j.lon ?? j.lng ?? null;
-      if (lat != null && lon != null) {
-        const out = { lat: parseFloat(lat), lon: parseFloat(lon), found: true };
-        geoCache.set(key, out);
-        return out;
-      }
+  // Extract pincode from the stored full address (e.g. "Mumbai, Maharashtra, 400053")
+  const pin = (fullAddress || "").match(/\b(\d{6})\b/)?.[1] || "";
+  if (pin) {
+    const result = await geocodePin(pin);
+    if (result.found) {
+      geoCache.set(key, result);
+      return result;
     }
-  } catch {}
-
-  // Fallback: re-query Autosuggest by name and match on eLoc
-  if (fallbackName) {
-    try {
-      const r = await fetch(
-        `${API}/places?query=${encodeURIComponent(fallbackName)}&pod=SLC,LC,CITY,VLG`
-      );
-      const j = await r.json();
-      const results: any[] = j.suggestedLocations || j.results || j || [];
-      const match = results.find((s: any) => s.eLoc === eLoc) || results[0];
-      if (match) {
-        const lat = match.latitude ?? match.lat ?? null;
-        const lon = match.longitude ?? match.lon ?? match.lng ?? null;
-        if (lat != null && lon != null) {
-          const out = { lat: parseFloat(lat), lon: parseFloat(lon), found: true };
-          geoCache.set(key, out);
-          return out;
-        }
-      }
-    } catch {}
   }
 
   return { lat: 0, lon: 0, found: false };
@@ -2809,7 +2774,7 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
       } else if (/^\d{6}$/.test(load.origin_pincode)) {
         lo = await geocodePin(load.origin_pincode);
       } else if (load.origin_eloc) {
-        lo = await geocodeEloc(load.origin_eloc, load.origin_place_name || load.origin_city || "");
+        lo = await geocodeEloc(load.origin_eloc, "", load.origin_full_address || "");
       } else {
         continue;
       }
@@ -2822,7 +2787,7 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
       } else if (/^\d{6}$/.test(load.destination_pincode)) {
         ld = await geocodePin(load.destination_pincode);
       } else if (load.destination_eloc) {
-        ld = await geocodeEloc(load.destination_eloc, load.destination_place_name || load.destination_city || "");
+        ld = await geocodeEloc(load.destination_eloc, "", load.destination_full_address || "");
       } else {
         continue;
       }
@@ -3369,7 +3334,7 @@ if (
 } else if (/^\d{6}$/.test(originPin)) {
   oc = await geocodePin(originPin);
 } else if (originInfo?.eLoc) {
-  oc = await geocodeEloc(originInfo.eLoc, originInfo.placeName || originInfo.city || "");
+  oc = await geocodeEloc(originInfo.eLoc, "", originInfo.fullAddress || "");
 } else {
   setOriginErr("Location coordinates unavailable. Please select a different origin.");
   return;
@@ -3387,7 +3352,7 @@ if (
 } else if (/^\d{6}$/.test(destPin)) {
   dc = await geocodePin(destPin);
 } else if (destInfo?.eLoc) {
-  dc = await geocodeEloc(destInfo.eLoc, destInfo.placeName || destInfo.city || "");
+  dc = await geocodeEloc(destInfo.eLoc, "", destInfo.fullAddress || "");
 } else {
   setDestErr("Location coordinates unavailable. Please select a different destination.");
   return;
