@@ -256,46 +256,26 @@ async def geocode_pincode(pincode: str):
 
 
 @api_router.get("/places")
-async def places_search(
-    query: str = Query(..., min_length=2),
-    pod: Optional[str] = Query(None),
-):
-    """Proxy Mappls Autosuggest using static key — avoids browser CORS issues.
-
-    The `pod` parameter restricts results to a specific place type using the
-    official Mappls REST API codes:
-        SLC   = Sublocality
-        LC    = Locality
-        CITY  = City
-        VLG   = Village
-        SDIST = Subdistrict
-        DIST  = District
-        STATE = State
-        SSLC  = Subsublocality
+async def places_search(query: str = Query(..., min_length=2)):
+    """Proxy Mappls Autosuggest — clean proxy with no extra filtering params.
 
     tokenizeAddress=true is always sent so the frontend receives structured
-    addressTokens (pincode, city, state, subLocality etc.) for clean parsing.
-
-    Note: the pod codes above are the REST API values. The Android/iOS SDK
-    constants (e.g. POD_SUB_LOCALITY) are translated to these codes internally
-    by the SDK before hitting this endpoint — never send the SDK constant names
-    directly to the REST API.
+    addressTokens for parsing. Type filtering (areas only) is done client-side
+    using the `type` field in each result — no pod param is sent to Mappls
+    as it caused empty results in testing.
     """
     MAPPLS_KEY = os.environ.get("MAPPLS_KEY", "")
     if not MAPPLS_KEY:
         raise HTTPException(status_code=500, detail="MAPPLS_KEY not configured")
     try:
-        params: dict = {
-            "query": query,
-            "region": "IND",
-            "access_token": MAPPLS_KEY,
-            "tokenizeAddress": "true",
-        }
-        if pod:
-            params["pod"] = pod
         resp = requests.get(
             "https://search.mappls.com/search/places/autosuggest/json",
-            params=params,
+            params={
+                "query": query,
+                "region": "IND",
+                "access_token": MAPPLS_KEY,
+                "tokenizeAddress": "true",
+            },
             timeout=8,
             headers={
                 "User-Agent": "TruckTraffic/1.0 (trucktraffic.in)",
@@ -388,13 +368,55 @@ async def places_detail(eloc: str):
 
 
 @api_router.get("/testmappls")
-async def test_mappls():
-    """Debug route to test Mappls API directly from server."""
+async def test_mappls(
+    query: str = Query(default="Mumbai"),
+    pod: Optional[str] = Query(default=None),
+    tokenizeAddress: Optional[str] = Query(default=None),
+    extra: Optional[str] = Query(default=None),
+):
+    """
+    Browser-testable Mappls Autosuggest debug endpoint.
+
+    Test from any browser or curl — no app rebuild needed:
+
+      # Basic query
+      GET /api/testmappls?query=Mumbai
+
+      # With tokenizeAddress
+      GET /api/testmappls?query=Andheri&tokenizeAddress=true
+
+      # With pod (single value)
+      GET /api/testmappls?query=Mumbai&pod=CITY
+
+      # With pod (multiple — test if comma-separated works)
+      GET /api/testmappls?query=Andheri&pod=SLC,LC,CITY
+
+      # Any arbitrary extra param (e.g. filter=bounds:...)
+      GET /api/testmappls?query=Mumbai&extra=filter%3Dcop%3AYMCZ0J
+
+    Returns: raw Mappls response + the exact params sent + result summary.
+    """
     MAPPLS_KEY = os.environ.get("MAPPLS_KEY", "NOT_SET")
+    params: dict = {
+        "query": query,
+        "region": "IND",
+        "access_token": MAPPLS_KEY,
+    }
+    if tokenizeAddress:
+        params["tokenizeAddress"] = tokenizeAddress
+    if pod:
+        params["pod"] = pod
+
+    # `extra` lets you inject any raw param for experimentation
+    # Format: key=value  e.g. extra=filter%3Dcop%3AYMCZ0J → filter=cop:YMCZ0J
+    if extra and "=" in extra:
+        k, v = extra.split("=", 1)
+        params[k] = v
+
     try:
         resp = requests.get(
             "https://search.mappls.com/search/places/autosuggest/json",
-            params={"query": "Mumbai", "region": "IND", "access_token": MAPPLS_KEY},
+            params=params,
             timeout=8,
             headers={
                 "User-Agent": "TruckTraffic/1.0 (trucktraffic.in)",
@@ -402,13 +424,31 @@ async def test_mappls():
                 "Origin": "https://ptl-market.onrender.com",
             },
         )
+        data = resp.json()
+        results = data.get("suggestedLocations", []) + data.get("userAddedLocations", [])
+
         return {
             "status_code": resp.status_code,
             "key_used": MAPPLS_KEY[:10] + "...",
-            "response": resp.json()
+            "params_sent": {k: v for k, v in params.items() if k != "access_token"},
+            "result_count": len(results),
+            "result_summary": [
+                {
+                    "placeName": r.get("placeName"),
+                    "type": r.get("type"),
+                    "eLoc": r.get("eLoc"),
+                    "latitude": r.get("latitude"),
+                    "longitude": r.get("longitude"),
+                    "pincode": (r.get("addressTokens") or {}).get("pincode"),
+                    "city": (r.get("addressTokens") or {}).get("city"),
+                    "state": (r.get("addressTokens") or {}).get("state"),
+                }
+                for r in results
+            ],
+            "raw_response": data,
         }
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": str(e), "params_sent": {k: v for k, v in params.items() if k != "access_token"}}
 
 
 @api_router.post("/loads", response_model=Load)
