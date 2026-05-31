@@ -256,26 +256,31 @@ async def geocode_pincode(pincode: str):
 
 
 @api_router.get("/places")
-async def places_search(query: str = Query(..., min_length=2)):
-    """Proxy Mappls Autosuggest — clean proxy with no extra filtering params.
+async def places_search(
+    query: str = Query(..., min_length=2),
+    pod: Optional[str] = Query(None),
+):
+    """Proxy Mappls Autosuggest.
 
-    tokenizeAddress=true is always sent so the frontend receives structured
-    addressTokens for parsing. Type filtering (areas only) is done client-side
-    using the `type` field in each result — no pod param is sent to Mappls
-    as it caused empty results in testing.
+    The frontend calls this 3 times in parallel with pod=CITY, pod=LC, pod=SLC
+    to get area-level suggestions only. Mappls only accepts a single pod value
+    per request — comma-separated values return HTTP 400.
     """
     MAPPLS_KEY = os.environ.get("MAPPLS_KEY", "")
     if not MAPPLS_KEY:
         raise HTTPException(status_code=500, detail="MAPPLS_KEY not configured")
     try:
+        params: dict = {
+            "query": query,
+            "region": "IND",
+            "access_token": MAPPLS_KEY,
+            "tokenizeAddress": "true",
+        }
+        if pod:
+            params["pod"] = pod
         resp = requests.get(
             "https://search.mappls.com/search/places/autosuggest/json",
-            params={
-                "query": query,
-                "region": "IND",
-                "access_token": MAPPLS_KEY,
-                "tokenizeAddress": "true",
-            },
+            params=params,
             timeout=8,
             headers={
                 "User-Agent": "TruckTraffic/1.0 (trucktraffic.in)",
