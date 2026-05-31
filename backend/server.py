@@ -332,6 +332,11 @@ async def places_detail(eloc: str):
         )
         data = resp.json()
 
+        return {
+    "status_code": resp.status_code,
+    "raw_response": data
+}
+
         # Mappls Place Detail wraps results under different keys depending on version
         place = (
             data.get("place_details")
