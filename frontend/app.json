@@ -18,7 +18,21 @@
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#351385"
       },
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_CONTACTS",
+        "android.permission.INTERNET"
+      ],
+      "blockedPermissions": [
+        "android.permission.WRITE_CONTACTS",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.VIBRATE"
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -38,6 +52,13 @@
         }
       ],
       [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Truck Traffic PTL to access your gallery to share photos.",
+          "cameraPermission": "Allow Truck Traffic PTL to access your camera to take photos."
+        }
+      ],
+      [
         "expo-contacts",
         {
           "contactsPermission": "Allow Truck Traffic PTL to access your contacts so you can save truck-owner numbers directly to your phonebook."
@@ -52,7 +73,8 @@
           "backgroundColor": "#351385"
         }
       ],
-      "@react-native-community/datetimepicker"
+      "@react-native-community/datetimepicker",
+      "expo-font"
     ],
     "experiments": {
       "typedRoutes": true
