@@ -242,23 +242,52 @@ useEffect(() => {
 }, []);
 
 	
-  // Ask for contacts permission once profile is set up (so user can save truck-owner numbers).
+  // Ask for contacts permission once profile is set up, then sync the contact
+  // phone numbers to the backend. Only the 10-digit numbers are sent — no
+  // names, no other PII. This powers the mutual-contacts feature in the
+  // PosterProfileModal (poster's backend contacts ∩ viewer's backend contacts).
   useEffect(() => {
     if (!profile) return;
     (async () => {
       try {
-        const asked = await AsyncStorage.getItem("contacts_perm_asked");
-        if (asked === "1") return;
         const { status: cur } = await Contacts.getPermissionsAsync();
-        if (cur === "granted") { await AsyncStorage.setItem("contacts_perm_asked", "1"); return; }
-        const { status } = await Contacts.requestPermissionsAsync();
-        await AsyncStorage.setItem("contacts_perm_asked", "1");
-        if (status !== "granted") {
-          // Soft note — user can also save contacts later from a load card
-          Alert.alert(
-            "Contacts permission",
-            "You can grant contacts access anytime from Settings to save truck-owner numbers directly to your phonebook."
-          );
+        let granted = cur === "granted";
+        if (!granted) {
+          const asked = await AsyncStorage.getItem("contacts_perm_asked");
+          if (asked === "1") return; // already asked and denied — don't re-prompt
+          const { status } = await Contacts.requestPermissionsAsync();
+          await AsyncStorage.setItem("contacts_perm_asked", "1");
+          granted = status === "granted";
+          if (!granted) {
+            Alert.alert(
+              "Contacts permission",
+              "You can grant contacts access anytime from Settings to enable the mutual-contacts feature."
+            );
+            return;
+          }
+        }
+        // Permission granted — read all phone numbers and push to backend.
+        // Numbers only (no names). Backend normalises to 10-digit and stores.
+        const { data } = await Contacts.getContactsAsync({
+          fields: [Contacts.Fields.PhoneNumbers],
+        });
+        const phones: string[] = [];
+        for (const c of data) {
+          for (const n of ((c as any).phoneNumbers || [])) {
+            const digits = String(n?.number || "").replace(/\D/g, "");
+            if (digits.length >= 10) phones.push(digits.slice(-10));
+          }
+        }
+        if (phones.length > 0) {
+          try {
+            await fetch(`${API}/users/${encodeURIComponent(profile.phone)}/contacts`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ phone: profile.phone, contact_phones: phones }),
+            });
+          } catch (e) {
+            console.log("Contact sync to backend failed (non-critical):", e);
+          }
         }
       } catch {}
     })();
@@ -355,9 +384,18 @@ useEffect(() => {
             <Text style={styles.headerSubtitle} numberOfLines={1}>Hi, {profile.name.split(" ")[0]}</Text>
           </View>
         </View>
-        <TouchableOpacity testID="open-profile-btn" onPress={() => setShowProfile(true)} style={styles.iconBtn}>
-          <Ionicons name="person-circle-outline" size={28} color={COLORS.primary} />
-        </TouchableOpacity>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+          <TouchableOpacity testID="main-invite-btn" onPress={async () => {
+            const msg = `🚛 *Join me on Truck Traffic!*\n\nFind truck space & post loads instantly across India.\n\n📲 Download the app or visit: https://www.trucktraffic.in\n\nLet\'s connect on the platform!`;
+            try { await Linking.openURL(`https://wa.me/?text=${encodeURIComponent(msg)}`); } catch {}
+          }} style={{ backgroundColor: "#E8F8EE", borderRadius: 8, paddingHorizontal: 8, paddingVertical: 5, flexDirection: "row", alignItems: "center", gap: 4 }}>
+            <Ionicons name="logo-whatsapp" size={16} color="#25D366" />
+            <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", fontWeight: "700", color: "#25D366" }}>Invite</Text>
+          </TouchableOpacity>
+          <TouchableOpacity testID="open-profile-btn" onPress={() => setShowProfile(true)} style={styles.iconBtn}>
+            <Ionicons name="person-circle-outline" size={28} color={COLORS.primary} />
+          </TouchableOpacity>
+        </View>
       </View>
 
       <View style={styles.tabs} testID="tabs">
@@ -879,15 +917,37 @@ function EditLoadModal({ load, visible, onClose, onSaved }: { load: Load; visibl
     return () => { cancelled = true; };
   }, [visible, load.id]);
 
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+
   const pickImage = async () => {
     if (images.length >= 3) { Alert.alert("Limit", "You can attach up to 3 photos."); return; }
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) { Alert.alert("Permission needed", "Please grant photo library access to attach images."); return; }
     const remaining = 3 - images.length;
-    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: false, allowsMultipleSelection: true, selectionLimit: remaining, quality: 0.5, base64: true });
+    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: false, allowsMultipleSelection: true, selectionLimit: remaining, quality: 0.7, base64: true });
     if (!res.canceled && res.assets && res.assets.length > 0) {
-      const newOnes = res.assets.slice(0, remaining).filter((a: any) => !!a.base64).map((a: any) => `data:${a.mimeType || "image/jpeg"};base64,${a.base64}`);
+      const MAX_SIZE_BYTES = 50 * 1024 * 1024; // 50MB
+      const validAssets = res.assets.slice(0, remaining).filter((a: any) => {
+        if (!a.base64) return false;
+        const sizeBytes = (a.base64.length * 3) / 4;
+        if (sizeBytes > MAX_SIZE_BYTES) {
+          Alert.alert("File too large", `"${a.fileName || "Photo"}" exceeds the 50 MB limit. Please choose a smaller image.`);
+          return false;
+        }
+        return true;
+      });
+      if (validAssets.length === 0) return;
+      setUploadProgress(0);
+      const total = validAssets.length;
+      const newOnes: string[] = [];
+      for (let i = 0; i < total; i++) {
+        const a = validAssets[i];
+        newOnes.push(`data:${a.mimeType || "image/jpeg"};base64,${a.base64}`);
+        setUploadProgress(Math.round(((i + 1) / total) * 100));
+        await new Promise(r => setTimeout(r, 80)); // brief tick for progress UI
+      }
       setImages((prev) => [...prev, ...newOnes].slice(0, 3));
+      setTimeout(() => setUploadProgress(null), 600);
     }
   };
   const removeImage = (idx: number) => setImages((prev) => prev.filter((_, i) => i !== idx));
@@ -937,11 +997,16 @@ if (!destValid)
 	  
 	if (!truckType) return Alert.alert("Required", "Select a truck type.");
     if (!weight || weight <= 0) return Alert.alert("Invalid", "Enter valid weight.");
+    if (weight > 40) return Alert.alert("Weight limit exceeded", "Maximum allowed weight is 40 tons.");
+    if (pricePerTon && parseInt(pricePerTon, 10) > 10000) return Alert.alert("Price limit exceeded", "Maximum allowed price is ₹10,000 per ton.");
     setBusy(true);
     try {
-      const lengthVal = dimL ? Math.min(40, parseInt(dimL, 10)) : null;
-      const breadthVal = dimB ? Math.min(8, parseInt(dimB, 10)) : null;
-      const heightVal = dimH ? Math.min(9, parseInt(dimH, 10)) : null;
+      const lengthVal = dimL ? parseInt(dimL, 10) : null;
+      const breadthVal = dimB ? parseInt(dimB, 10) : null;
+      const heightVal = dimH ? parseInt(dimH, 10) : null;
+      if (lengthVal !== null && lengthVal > 40) return Alert.alert("Invalid length", "Length cannot exceed 40 ft.");
+      if (breadthVal !== null && breadthVal > 8) return Alert.alert("Invalid breadth", "Breadth cannot exceed 8 ft.");
+      if (heightVal !== null && heightVal > 9) return Alert.alert("Invalid height", "Height cannot exceed 9 ft.");
       const priceVal = pricePerTon ? parseInt(pricePerTon, 10) : null;
       const payload = {
         origin_pincode: originPin, origin_locality: originInfo?.locality || "", origin_city: originInfo?.city || "", origin_state: originInfo?.state || "",
@@ -1086,16 +1151,16 @@ if (!destValid)
                       onChangeText={(t) => {
                         const digits = t.replace(/\D/g, "");
                         if (!digits) { setDimL(""); return; }
-                        const n = Math.min(40, parseInt(digits, 10));
-                        setDimL(String(n));
+                        setDimL(digits);
                       }}
                       keyboardType="number-pad"
-                      maxLength={2}
+                      maxLength={3}
                       placeholder="0"
                       placeholderTextColor={COLORS.textSubtle}
                     />
                     <Text style={styles.dimSuffix}>ft</Text>
                   </View>
+                  {dimL && parseInt(dimL, 10) > 40 ? <Text style={styles.errorText}>Max length: 40 ft</Text> : null}
                 </View>
                 <View style={styles.dimItem}>
                   <Text style={styles.dimLabel}>Breadth</Text>
@@ -1107,16 +1172,16 @@ if (!destValid)
                       onChangeText={(t) => {
                         const digits = t.replace(/\D/g, "");
                         if (!digits) { setDimB(""); return; }
-                        const n = Math.min(8, parseInt(digits, 10));
-                        setDimB(String(n));
+                        setDimB(digits);
                       }}
                       keyboardType="number-pad"
-                      maxLength={1}
+                      maxLength={2}
                       placeholder="0"
                       placeholderTextColor={COLORS.textSubtle}
                     />
                     <Text style={styles.dimSuffix}>ft</Text>
                   </View>
+                  {dimB && parseInt(dimB, 10) > 8 ? <Text style={styles.errorText}>Max breadth: 8 ft</Text> : null}
                 </View>
                 <View style={styles.dimItem}>
                   <Text style={styles.dimLabel}>Height</Text>
@@ -1128,16 +1193,16 @@ if (!destValid)
                       onChangeText={(t) => {
                         const digits = t.replace(/\D/g, "");
                         if (!digits) { setDimH(""); return; }
-                        const n = Math.min(9, parseInt(digits, 10));
-                        setDimH(String(n));
+                        setDimH(digits);
                       }}
                       keyboardType="number-pad"
-                      maxLength={1}
+                      maxLength={2}
                       placeholder="0"
                       placeholderTextColor={COLORS.textSubtle}
                     />
                     <Text style={styles.dimSuffix}>ft</Text>
                   </View>
+                  {dimH && parseInt(dimH, 10) > 9 ? <Text style={styles.errorText}>Max height: 9 ft</Text> : null}
                 </View>
               </View>
             </CollapsibleSection>
@@ -1272,6 +1337,15 @@ function ProfileScreen({ profile, onClose, onEdit }: { profile: Profile; onClose
   const [refreshing, setRefreshing] = useState(false);
   const [editLoad, setEditLoad] = useState<Load | null>(null);
 
+  const handleInvite = async () => {
+    const msg = `🚛 *Join me on Truck Traffic!*\n\nFind truck space & post loads instantly across India.\n\n📲 Download the app or visit: https://www.trucktraffic.in\n\nLet\'s connect on the platform!`;
+    try {
+      await Linking.openURL(`https://wa.me/?text=${encodeURIComponent(msg)}`);
+    } catch {
+      Alert.alert("Error", "WhatsApp could not be opened.");
+    }
+  };
+
   const fetchMy = useCallback(async () => {
     try {
       const r = await fetch(`${API}/loads`);
@@ -1305,9 +1379,15 @@ function ProfileScreen({ profile, onClose, onEdit }: { profile: Profile; onClose
           <Ionicons name="arrow-back" size={24} color={COLORS.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>My Profile</Text>
-        <TouchableOpacity testID="profile-edit-btn" onPress={onEdit} style={styles.iconBtn}>
-          <Ionicons name="create-outline" size={22} color={COLORS.primary} />
-        </TouchableOpacity>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+          <TouchableOpacity testID="profile-invite-btn" onPress={handleInvite} style={[styles.iconBtn, { backgroundColor: "#E8F8EE", borderRadius: 8, paddingHorizontal: 8, flexDirection: "row", alignItems: "center", gap: 4 }]}>
+            <Ionicons name="logo-whatsapp" size={18} color="#25D366" />
+            <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", fontWeight: "700", color: "#25D366" }}>Invite</Text>
+          </TouchableOpacity>
+          <TouchableOpacity testID="profile-edit-btn" onPress={onEdit} style={styles.iconBtn}>
+            <Ionicons name="create-outline" size={22} color={COLORS.primary} />
+          </TouchableOpacity>
+        </View>
       </View>
       <FlatList
         testID="my-loads-list"
@@ -1422,7 +1502,17 @@ const onDateChange = (event: any, selected?: Date) => {
     const remaining = 3 - images.length;
     const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: false, allowsMultipleSelection: true, selectionLimit: remaining, quality: 0.5, base64: true });
     if (!res.canceled && res.assets && res.assets.length > 0) {
-      const newOnes = res.assets.slice(0, remaining).filter((a: any) => !!a.base64).map((a: any) => `data:${a.mimeType || "image/jpeg"};base64,${a.base64}`);
+      const MAX_SIZE_BYTES = 50 * 1024 * 1024;
+      const validAssets = res.assets.slice(0, remaining).filter((a: any) => {
+        if (!a.base64) return false;
+        const sizeBytes = (a.base64.length * 3) / 4;
+        if (sizeBytes > MAX_SIZE_BYTES) {
+          Alert.alert("File too large", `"${a.fileName || "Photo"}" exceeds the 50 MB limit.`);
+          return false;
+        }
+        return true;
+      });
+      const newOnes = validAssets.map((a: any) => `data:${a.mimeType || "image/jpeg"};base64,${a.base64}`);
       setImages((prev) => [...prev, ...newOnes].slice(0, 3));
     }
   };
@@ -1470,12 +1560,17 @@ if (!destValid) {
     if (!truckType) return Alert.alert("Required", "Select a truck type");
 const w = weight;
 if (!w || w <= 0) return Alert.alert("Invalid", "Enter valid weight in tons");
+if (w > 40) return Alert.alert("Weight limit exceeded", "Maximum allowed weight is 40 tons.");
+if (pricePerTon && parseInt(pricePerTon, 10) > 10000) return Alert.alert("Price limit exceeded", "Maximum allowed price is ₹10,000 per ton.");
     
     setLoadingPost(true);
     try {
-      const lengthVal = dimL ? Math.min(40, parseInt(dimL, 10)) : null;
-      const breadthVal = dimB ? Math.min(8, parseInt(dimB, 10)) : null;
-      const heightVal = dimH ? Math.min(9, parseInt(dimH, 10)) : null;
+      const lengthVal = dimL ? parseInt(dimL, 10) : null;
+      const breadthVal = dimB ? parseInt(dimB, 10) : null;
+      const heightVal = dimH ? parseInt(dimH, 10) : null;
+      if (lengthVal !== null && lengthVal > 40) return Alert.alert("Invalid length", "Length cannot exceed 40 ft.");
+      if (breadthVal !== null && breadthVal > 8) return Alert.alert("Invalid breadth", "Breadth cannot exceed 8 ft.");
+      if (heightVal !== null && heightVal > 9) return Alert.alert("Invalid height", "Height cannot exceed 9 ft.");
       const priceVal = pricePerTon ? parseInt(pricePerTon, 10) : null;
       const payload = {
         origin_pincode: originPin, origin_locality: originInfo?.locality || "", origin_city: originInfo?.city || "", origin_state: originInfo?.state || "",
@@ -1524,12 +1619,16 @@ if (!w || w <= 0) return Alert.alert("Invalid", "Enter valid weight in tons");
           `📍 ${dLocClean || dCityClean || destPin}` +
           (dCityClean && dAbbr ? `\n   ${dCityClean}, ${dAbbr}` : (dCityClean ? `\n   ${dCityClean}` : (dAbbr ? `\n   ${dAbbr}` : ""))) +
           `\n   ${destPin}`;
+        const truckLabelPost = truckType === "Open" ? "Open Truck" : truckType === "Container" ? "Container Truck" : truckType === "Trailer" ? "Trailer Truck" : truckType;
+        const oOriginLabel = `From: ${oLocClean || oCityClean || originPin}${oCityClean && oAbbr ? `, ${oCityClean}, ${oAbbr}` : (oCityClean ? `, ${oCityClean}` : (oAbbr ? `, ${oAbbr}` : ""))} (${originPin})`;
+        const oDestLabel = `To: ${dLocClean || dCityClean || destPin}${dCityClean && dAbbr ? `, ${dCityClean}, ${dAbbr}` : (dCityClean ? `, ${dCityClean}` : (dAbbr ? `, ${dAbbr}` : ""))} (${destPin})`;
+        const shortPathPost = created?.id ? shortLoadPath(created.id) : "";
         const loadLink = created?.id
-          ? `\n\n🔗 More info & pics: https://www.trucktraffic.in?load=${created.id}`
-          : `\n\n🔗 More info & pics: https://www.trucktraffic.in`;
-        const text = `🚛 *Truck Space Available – Truck Traffic PTL*\n\n` +
-          `*Route:*\n${originLine}\n   ⬇️\n${destLine}\n\n` +
-          `🚚 *Truck:* ${truckType}\n` +
+          ? `\n\n🔗 *Get more info:* https://www.trucktraffic.in${shortPathPost}`
+          : `\n\n🔗 *Get more info:* https://www.trucktraffic.in`;
+        const text = `🚛 *Truck Space Available - Truck Traffic*\n\n` +
+          `*Route:*\n${oOriginLabel}\n${oDestLabel}\n\n` +
+          `🚚 *Truck:* ${truckLabelPost}\n` +
           `⚖️ *Weight:* ${w} Tons\n` +
           `📅 *Loading:* ${dateStr}\n` +
           `🧱 *Placement:* ${placement}` +
@@ -1668,7 +1767,7 @@ return (
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.stepperBtn}
-            onPress={() => setWeight(w => parseFloat((w + 0.5).toFixed(1)))}
+            onPress={() => setWeight(w => Math.min(40, parseFloat((w + 0.5).toFixed(1))))}
           >
             <Text style={styles.stepperBtnText}>+</Text>
           </TouchableOpacity>
@@ -1739,16 +1838,16 @@ return (
                   onChangeText={(t) => {
                     const digits = t.replace(/\D/g, "");
                     if (!digits) { setDimL(""); return; }
-                    const n = Math.min(40, parseInt(digits, 10));
-                    setDimL(String(n));
+                    setDimL(digits);
                   }}
                   keyboardType="number-pad"
-                  maxLength={2}
+                  maxLength={3}
                   placeholder="0"
                   placeholderTextColor={COLORS.textSubtle}
                 />
                 <Text style={styles.dimSuffix}>ft</Text>
               </View>
+              {dimL && parseInt(dimL, 10) > 40 ? <Text style={styles.errorText}>Max length: 40 ft</Text> : null}
             </View>
             <View style={styles.dimItem}>
               <Text style={styles.dimLabel}>Breadth</Text>
@@ -1760,16 +1859,16 @@ return (
                   onChangeText={(t) => {
                     const digits = t.replace(/\D/g, "");
                     if (!digits) { setDimB(""); return; }
-                    const n = Math.min(8, parseInt(digits, 10));
-                    setDimB(String(n));
+                    setDimB(digits);
                   }}
                   keyboardType="number-pad"
-                  maxLength={1}
+                  maxLength={2}
                   placeholder="0"
                   placeholderTextColor={COLORS.textSubtle}
                 />
                 <Text style={styles.dimSuffix}>ft</Text>
               </View>
+              {dimB && parseInt(dimB, 10) > 8 ? <Text style={styles.errorText}>Max breadth: 8 ft</Text> : null}
             </View>
             <View style={styles.dimItem}>
               <Text style={styles.dimLabel}>Height</Text>
@@ -1781,16 +1880,16 @@ return (
                   onChangeText={(t) => {
                     const digits = t.replace(/\D/g, "");
                     if (!digits) { setDimH(""); return; }
-                    const n = Math.min(9, parseInt(digits, 10));
-                    setDimH(String(n));
+                    setDimH(digits);
                   }}
                   keyboardType="number-pad"
-                  maxLength={1}
+                  maxLength={2}
                   placeholder="0"
                   placeholderTextColor={COLORS.textSubtle}
                 />
                 <Text style={styles.dimSuffix}>ft</Text>
               </View>
+              {dimH && parseInt(dimH, 10) > 9 ? <Text style={styles.errorText}>Max height: 9 ft</Text> : null}
             </View>
           </View>
         </CollapsibleSection>
@@ -1857,7 +1956,18 @@ return (
           summary={images.length > 0 ? `${images.length} photo${images.length > 1 ? "s" : ""}` : ""}
           testID="opt-photos"
         >
-          <Text style={styles.label}>Attach up to 3 photos of the truck or available space</Text>
+          <Text style={styles.label}>Attach up to 3 photos of the truck or available space (max 50 MB each)</Text>
+          {uploadProgress !== null && (
+            <View style={{ marginBottom: 10 }}>
+              <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 4 }}>
+                <Text style={{ fontSize: 12, color: COLORS.textMuted, fontFamily: "Inter_500Medium" }}>Uploading photos…</Text>
+                <Text style={{ fontSize: 12, color: COLORS.primary, fontFamily: "Inter_700Bold" }}>{uploadProgress}%</Text>
+              </View>
+              <View style={{ height: 6, backgroundColor: COLORS.border, borderRadius: 3, overflow: "hidden" }}>
+                <View style={{ height: 6, backgroundColor: COLORS.primary, borderRadius: 3, width: `${uploadProgress}%` as any }} />
+              </View>
+            </View>
+          )}
           <View style={styles.photoRow} testID="photos-row">
             {[0, 1, 2].map((idx) => {
               const img = images[idx];
@@ -2742,7 +2852,7 @@ type Distances = Record<string, { origin: number; dest: number; offRoute: boolea
 // Map of 10-digit phone -> saved contact name from the user's address book.
 // Loaded once per app session if contacts permission is granted, so we can
 // show a "Saved" badge next to load posters the user already knows.
-function useContactsMap(): Map<string, string> {
+function useContactsMap(userPhone?: string): Map<string, string> {
   const [map, setMap] = useState<Map<string, string>>(new Map());
   useEffect(() => {
     let cancelled = false;
@@ -2754,21 +2864,40 @@ function useContactsMap(): Map<string, string> {
           fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name],
         });
         const m = new Map<string, string>();
+        const phones: string[] = [];
         for (const c of data) {
           const nums = (c as any).phoneNumbers || [];
           for (const n of nums) {
             const digits = String(n?.number || "").replace(/\D/g, "");
             if (digits.length >= 10) {
               const local = digits.slice(-10);
-              if (!m.has(local)) m.set(local, (c.name || "").trim());
+              if (!m.has(local)) {
+                m.set(local, (c.name || "").trim());
+                phones.push(local);
+              }
             }
           }
         }
-        if (!cancelled) setMap(m);
+        if (!cancelled) {
+          setMap(m);
+          // Upload contact list to backend (numbers only, no names).
+          // Best-effort — never blocks the UI, never retried on failure.
+          if (userPhone && phones.length > 0) {
+            try {
+              await fetch(`${API}/users/${encodeURIComponent(userPhone)}/contacts`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(phones),
+              });
+            } catch {
+              // Silently ignore — contacts upload is best-effort
+            }
+          }
+        }
       } catch {}
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [userPhone]);
   return map;
 }
 
@@ -2780,7 +2909,7 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
   const [activeFilter, setActiveFilter] = useState<ActiveFilter | null>(null);
   const [filteredLoads, setFilteredLoads] = useState<Load[] | null>(null);
   const [distances, setDistances] = useState<Distances>({});
-  const contactsMap = useContactsMap();
+  const contactsMap = useContactsMap(profile.phone);
 
   const fetchLoads = useCallback(async () => {
     try { const r = await fetch(`${API}/loads`); const j = await r.json(); setAllLoads(j); }
@@ -2880,7 +3009,7 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
               <Text style={styles.emptySub}>{isFiltered ? "Try adjusting your cargo details or search within a wider area." : "Be the first to post a load!"}</Text>
             </View>
           }
-          renderItem={({ item }) => <LoadCard load={item} isMine={item.poster_phone === profile.phone} distance={isFiltered ? distances[item.id] : undefined} contactName={contactsMap.get(item.poster_phone)} />}
+          renderItem={({ item }) => <LoadCard load={item} isMine={item.poster_phone === profile.phone} distance={isFiltered ? distances[item.id] : undefined} contactName={contactsMap.get(item.poster_phone)} contactsMap={contactsMap} viewerPhone={profile.phone} />}
         />
       )}
       <FindSpaceModal visible={showFilter} initial={activeFilter} onClose={() => setShowFilter(false)} onApply={onApplyFilter} />
@@ -2944,9 +3073,19 @@ const ivStyles = StyleSheet.create({
   counterText: { color: "#fff", fontFamily: "Inter_700Bold", fontWeight: "700", fontSize: 13 },
 });
 
-function LoadCard({ load, isMine, distance, contactName }: { load: Load; isMine: boolean; distance?: { origin: number; dest: number; offRoute: boolean }; contactName?: string }) {
+
+// Generates a short path for the load link: /t-{first4ofId} style
+function shortLoadPath(id: string | undefined): string {
+  if (!id) return "";
+  // Use first 8 chars of load ID → compact but still unique enough
+  const slug = id.replace(/-/g, "").slice(0, 8).toLowerCase();
+  return `/l/${slug}`;
+}
+
+function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhone }: { load: Load; isMine: boolean; distance?: { origin: number; dest: number; offRoute: boolean }; contactName?: string; contactsMap?: Map<string, string>; viewerPhone?: string }) {
   const [viewerStart, setViewerStart] = useState<number | null>(null);
   const [showImages, setShowImages] = useState(false);
+  const [showPosterProfile, setShowPosterProfile] = useState(false);
   const callPoster = () => Linking.openURL(`tel:${load.poster_phone}`).catch(() => Alert.alert("Error", "Cannot open dialer"));
   const shareOnWhatsApp = async () => {
     // Same message format as the "Post & Share" button on the post-truck-space screen.
@@ -2971,13 +3110,17 @@ function LoadCard({ load, isMine, distance, contactName }: { load: Load; isMine:
       `📍 ${dLocClean || dCityClean || load.destination_pincode}` +
       (dCityClean && dAbbr ? `\n   ${dCityClean}, ${dAbbr}` : (dCityClean ? `\n   ${dCityClean}` : (dAbbr ? `\n   ${dAbbr}` : ""))) +
       `\n   ${load.destination_pincode}`;
+    const shortPath = load.id ? shortLoadPath(load.id) : "";
     const loadLink = load.id
-      ? `\n\n🔗 More info & pics: https://www.trucktraffic.in?load=${load.id}`
-      : `\n\n🔗 More info & pics: https://www.trucktraffic.in`;
+      ? `\n\n🔗 *Get more info:* https://www.trucktraffic.in${shortPath}`
+      : `\n\n🔗 *Get more info:* https://www.trucktraffic.in`;
+    const truckLabelCard = load.truck_type === "Open" ? "Open Truck" : load.truck_type === "Container" ? "Container Truck" : load.truck_type === "Trailer" ? "Trailer Truck" : load.truck_type;
+    const originLabel = `From: ${oLocClean || oCityClean || load.origin_pincode}${oCityClean && oAbbr ? `, ${oCityClean}, ${oAbbr}` : (oCityClean ? `, ${oCityClean}` : (oAbbr ? `, ${oAbbr}` : ""))} (${load.origin_pincode})`;
+    const destLabel = `To: ${dLocClean || dCityClean || load.destination_pincode}${dCityClean && dAbbr ? `, ${dCityClean}, ${dAbbr}` : (dCityClean ? `, ${dCityClean}` : (dAbbr ? `, ${dAbbr}` : ""))} (${load.destination_pincode})`;
     const text =
-      `🚛 *Truck Space Available – Truck Traffic PTL*\n\n` +
-      `*Route:*\n${originLine}\n   ⬇️\n${destLine}\n\n` +
-      `🚚 *Truck:* ${load.truck_type}\n` +
+      `🚛 *Truck Space Available - Truck Traffic*\n\n` +
+      `*Route:*\n${originLabel}\n${destLabel}\n\n` +
+      `🚚 *Truck:* ${truckLabelCard}\n` +
       `⚖️ *Weight:* ${load.weight_tons} Tons\n` +
       `📅 *Loading:* ${dateStrShare}\n` +
       (load.cargo_placement ? `🧱 *Placement:* ${load.cargo_placement}` : "") +
@@ -3131,9 +3274,11 @@ function LoadCard({ load, isMine, distance, contactName }: { load: Load; isMine:
       <View style={cardStyles.line3Row}>
         <View style={cardStyles.contactSection}>
           <View style={cardStyles.posterNameRow}>
-            <Text style={styles.posterName} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>
-              {load.poster_name}{isMine && <Text style={styles.youTag}> · You</Text>}
-            </Text>
+            <TouchableOpacity onPress={() => !isMine && setShowPosterProfile(true)} activeOpacity={isMine ? 1 : 0.7}>
+              <Text style={[styles.posterName, !isMine && { color: COLORS.primary, textDecorationLine: "underline" }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>
+                {load.poster_name}{isMine && <Text style={styles.youTag}> · You</Text>}
+              </Text>
+            </TouchableOpacity>
             {!isMine && contactName ? (
               <View
                 style={cardStyles.savedBadge}
@@ -3198,9 +3343,194 @@ function LoadCard({ load, isMine, distance, contactName }: { load: Load; isMine:
         initialIndex={viewerStart || 0}
         onClose={() => setViewerStart(null)}
       />
+      {showPosterProfile && !isMine && (
+        <PosterProfileModal
+          visible={showPosterProfile}
+          load={load}
+          contactName={contactName}
+          contactsMap={contactsMap}
+          viewerPhone={viewerPhone}
+          onClose={() => setShowPosterProfile(false)}
+        />
+      )}
     </View>
   );
 }
+
+
+// ============== PosterProfileModal ==============
+function PosterProfileModal({ visible, load, contactName, contactsMap, viewerPhone, onClose }: {
+  visible: boolean;
+  load: Load;
+  contactName?: string;
+  contactsMap?: Map<string, string>;
+  viewerPhone?: string;
+  onClose: () => void;
+}) {
+  const [posterLoads, setPosterLoads] = useState<Load[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [mutualContacts, setMutualContacts] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!visible) return;
+    setLoading(true);
+    setPosterLoads([]);
+    setMutualContacts([]);
+    (async () => {
+      try {
+        // Run loads fetch and mutuals lookup in parallel
+        const [loadsRes, mutualsRes] = await Promise.all([
+          fetch(`${API}/loads`),
+          viewerPhone
+            ? fetch(`${API}/users/${encodeURIComponent(viewerPhone)}/mutuals/${encodeURIComponent(load.poster_phone)}`)
+            : Promise.resolve(null),
+        ]);
+
+        // Poster's loads
+        const all: Load[] = await loadsRes.json();
+        const posterPosts = all.filter(l => l.poster_phone === load.poster_phone);
+        setPosterLoads(posterPosts);
+
+        // True mutual contacts: phones in both viewer's and poster's contact lists.
+        // The backend returns raw phone numbers; we resolve display names from
+        // the viewer's local contactsMap (so we never expose poster's contact names).
+        if (mutualsRes && mutualsRes.ok) {
+          const mutualsData = await mutualsRes.json();
+          const mutualPhones: string[] = mutualsData.mutual_phones || [];
+          const mutualNames: string[] = [];
+          for (const phone of mutualPhones) {
+            const name = contactsMap?.get(phone);
+            if (name) mutualNames.push(name);
+          }
+          setMutualContacts(mutualNames.slice(0, 5));
+        }
+      } catch {} finally {
+        setLoading(false);
+      }
+    })();
+  }, [visible, load.poster_phone, viewerPhone, contactsMap]);
+
+  const initials = load.poster_name.split(" ").map((p: string) => p[0]).filter(Boolean).slice(0, 2).join("").toUpperCase();
+  const isDirectContact = !!contactName;
+
+  return (
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+      <SafeAreaView style={[styles.fill, { backgroundColor: COLORS.bg }]} edges={["top"]}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={onClose} style={styles.iconBtn}>
+            <Ionicons name="arrow-back" size={24} color={COLORS.text} />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Poster Profile</Text>
+          <View style={{ width: 40 }} />
+        </View>
+        <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+          {/* Profile card */}
+          <View style={styles.profileCard}>
+            <View style={styles.avatarBig}>
+              <Text style={styles.avatarBigText}>{initials || "?"}</Text>
+            </View>
+            <Text style={styles.profileCardName}>{load.poster_name}</Text>
+            {load.poster_company ? <Text style={styles.profileCardCompany}>{load.poster_company}</Text> : null}
+            <View style={styles.profilePhoneRow}>
+              <Ionicons name="call-outline" size={14} color={COLORS.textMuted} />
+              <Text style={styles.profileCardPhone}>+91 {load.poster_phone}</Text>
+            </View>
+
+            {/* Contact relationship badges */}
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 10, justifyContent: "center" }}>
+              {isDirectContact ? (
+                <View style={[posterProfileStyles.badge, posterProfileStyles.directBadge]}>
+                  <Ionicons name="person-circle" size={14} color={COLORS.primary} />
+                  <Text style={posterProfileStyles.directBadgeText}>In your contacts as "{contactName}"</Text>
+                </View>
+              ) : (
+                <View style={[posterProfileStyles.badge, posterProfileStyles.unknownBadge]}>
+                  <Ionicons name="person-outline" size={14} color={COLORS.textMuted} />
+                  <Text style={posterProfileStyles.unknownBadgeText}>Not in your contacts</Text>
+                </View>
+              )}
+            </View>
+
+            {/* Mutual contacts */}
+            {!loading && mutualContacts.length > 0 && (
+              <View style={{ marginTop: 10, alignItems: "center" }}>
+                <Text style={{ fontSize: 12, color: COLORS.textMuted, fontFamily: "Inter_600SemiBold", marginBottom: 4 }}>
+                  {mutualContacts.length} mutual contact{mutualContacts.length > 1 ? "s" : ""} in common:
+                </Text>
+                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, justifyContent: "center" }}>
+                  {mutualContacts.map((name, i) => (
+                    <View key={i} style={[posterProfileStyles.badge, posterProfileStyles.mutualBadge]}>
+                      <Ionicons name="people" size={12} color="#0F6B36" />
+                      <Text style={posterProfileStyles.mutualBadgeText}>{name}</Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            )}
+            {!loading && mutualContacts.length === 0 && !isDirectContact && (
+              <View style={{ marginTop: 8, alignItems: "center" }}>
+                <Text style={{ fontSize: 11, color: COLORS.textSubtle, fontStyle: "italic" }}>No mutual contacts found</Text>
+              </View>
+            )}
+          </View>
+
+          {/* Stats */}
+          <View style={styles.statsRow}>
+            <View style={styles.statBox}>
+              <Text style={styles.statValue}>{posterLoads.length}</Text>
+              <Text style={styles.statLabel}>Loads Posted</Text>
+            </View>
+            <View style={styles.statBox}>
+              <Text style={styles.statValue}>{posterLoads.reduce((s, l) => s + (l.weight_tons || 0), 0).toFixed(1)} T</Text>
+              <Text style={styles.statLabel}>Total Weight</Text>
+            </View>
+          </View>
+
+          {/* Action buttons */}
+          <View style={{ flexDirection: "row", gap: 10, marginBottom: 16 }}>
+            <TouchableOpacity
+              style={[styles.primaryBtn, { flex: 1, marginTop: 0 }]}
+              onPress={() => Linking.openURL(`tel:${load.poster_phone}`).catch(() => Alert.alert("Error", "Cannot open dialer"))}
+            >
+              <Ionicons name="call" size={16} color={COLORS.surface} />
+              <Text style={styles.primaryBtnText}>Call</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.whatsappBtn, { flex: 1 }]}
+              onPress={() => Linking.openURL(`https://wa.me/91${load.poster_phone}`).catch(() => Alert.alert("Error", "Cannot open WhatsApp"))}
+            >
+              <Ionicons name="logo-whatsapp" size={16} color={COLORS.surface} />
+              <Text style={styles.primaryBtnText}>WhatsApp</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Recent loads */}
+          <Text style={styles.sectionHeading}>Posted Loads</Text>
+          {loading ? (
+            <ActivityIndicator color={COLORS.primary} style={{ marginTop: 24 }} />
+          ) : posterLoads.length === 0 ? (
+            <View style={styles.emptyWrap}>
+              <Ionicons name="cube-outline" size={36} color={COLORS.textSubtle} />
+              <Text style={styles.emptyTitle}>No loads posted</Text>
+            </View>
+          ) : (
+            posterLoads.map(l => <LoadCard key={l.id} load={l} isMine={false} contactName={contactName} />)
+          )}
+        </ScrollView>
+      </SafeAreaView>
+    </Modal>
+  );
+}
+
+const posterProfileStyles = StyleSheet.create({
+  badge: { flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: 4, paddingHorizontal: 10, borderRadius: 100 },
+  directBadge: { backgroundColor: "#EEF2FA", borderWidth: 1, borderColor: COLORS.primary },
+  directBadgeText: { fontSize: 11, color: COLORS.primary, fontFamily: "Inter_700Bold", fontWeight: "700" },
+  unknownBadge: { backgroundColor: COLORS.bg, borderWidth: 1, borderColor: COLORS.border },
+  unknownBadgeText: { fontSize: 11, color: COLORS.textMuted, fontFamily: "Inter_600SemiBold", fontWeight: "600" },
+  mutualBadge: { backgroundColor: "#E8F8EE", borderWidth: 1, borderColor: "#25D366" },
+  mutualBadgeText: { fontSize: 11, color: "#0F6B36", fontFamily: "Inter_700Bold", fontWeight: "700" },
+});
 
 const cardStyles = StyleSheet.create({
   routeEndpoint: { flexDirection: "row", alignItems: "flex-start", gap: 6 },
