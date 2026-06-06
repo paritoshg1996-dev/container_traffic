@@ -704,13 +704,19 @@ class UserProfile(BaseModel):
     phone: str                     # 10-digit local form, e.g. "9876543210"
     name: str
     company: Optional[str] = ""
+    contacts: Optional[List[str]] = None   # normalized 10-digit phones from user's phonebook
 
 
-class UserProfileOut(UserProfile):
+class UserProfileOut(BaseModel):
+    phone: str
+    name: str
+    company: Optional[str] = ""
     phone_full: Optional[str] = None
     uid: Optional[str] = None
     created_at: str
     updated_at: str
+    # contacts intentionally excluded from outbound profile responses
+    # (never sent to clients other than the owner themselves)
 
 
 def _norm_phone(p: str) -> str:
@@ -730,13 +736,29 @@ async def upsert_user(payload: UserProfile):
     company = (payload.company or "").strip()
     now = datetime.now(timezone.utc).isoformat()
 
+    # Normalize contacts: keep only valid 10-digit numbers, deduplicate,
+    # remove the user's own number to avoid self-referencing in mutual lookups.
+    raw_contacts = payload.contacts or []
+    norm_contacts: Optional[List[str]] = None
+    if raw_contacts is not None:
+        seen_phones: set = set()
+        cleaned: List[str] = []
+        for c in raw_contacts:
+            digits = "".join(ch for ch in str(c) if ch.isdigit())
+            local = digits[-10:] if len(digits) >= 10 else digits
+            if len(local) == 10 and local != phone and local not in seen_phones:
+                seen_phones.add(local)
+                cleaned.append(local)
+        norm_contacts = cleaned
+
+    set_fields: dict = {"name": name, "company": company, "updated_at": now}
+    if norm_contacts is not None:
+        set_fields["contacts"] = norm_contacts
+
     existing = await db.users.find_one({"phone": phone}, {"_id": 0})
     if existing:
-        await db.users.update_one(
-            {"phone": phone},
-            {"$set": {"name": name, "company": company, "updated_at": now}},
-        )
-        doc = await db.users.find_one({"phone": phone}, {"_id": 0})
+        await db.users.update_one({"phone": phone}, {"$set": set_fields})
+        doc = await db.users.find_one({"phone": phone}, {"_id": 0, "contacts": 0})
     else:
         doc = {
             "phone": phone,
@@ -747,8 +769,11 @@ async def upsert_user(payload: UserProfile):
             "created_at": now,
             "updated_at": now,
         }
+        if norm_contacts is not None:
+            doc["contacts"] = norm_contacts
         await db.users.insert_one(doc)
         doc.pop("_id", None)
+        doc.pop("contacts", None)
     return UserProfileOut(**doc)
 
 
@@ -761,6 +786,75 @@ async def get_user(phone: str):
     if not doc:
         raise HTTPException(status_code=404, detail="User not found")
     return UserProfileOut(**doc)
+
+
+class MutualContact(BaseModel):
+    phone: str
+    name: str           # as known in the VIEWER's phonebook (provided by client)
+
+
+class MutualsResponse(BaseModel):
+    mutual_phones: List[str]   # phones that appear in BOTH users' contact lists
+
+
+@api_router.get("/users/{viewer_phone}/mutuals/{poster_phone}", response_model=MutualsResponse)
+async def get_mutual_contacts(viewer_phone: str, poster_phone: str):
+    """Return phones that appear in both the viewer's and the poster's contact lists.
+
+    The intersection is computed server-side — the viewer's contacts were uploaded
+    when they registered; the poster's contacts were uploaded when they registered.
+    We return only the phone numbers; the client (which has the viewer's contact
+    book) resolves them to display names so we never expose poster-contact names
+    to the viewer.
+    """
+    v_phone = _norm_phone(viewer_phone)
+    p_phone = _norm_phone(poster_phone)
+    if len(v_phone) != 10 or len(p_phone) != 10:
+        raise HTTPException(status_code=400, detail="Both phones must be 10-digit numbers")
+    if v_phone == p_phone:
+        return MutualsResponse(mutual_phones=[])
+
+    # Fetch only the contacts field from both users
+    v_doc = await db.users.find_one({"phone": v_phone}, {"_id": 0, "contacts": 1})
+    p_doc = await db.users.find_one({"phone": p_phone}, {"_id": 0, "contacts": 1})
+
+    if not v_doc or not p_doc:
+        return MutualsResponse(mutual_phones=[])
+
+    v_contacts: set = set(v_doc.get("contacts") or [])
+    p_contacts: set = set(p_doc.get("contacts") or [])
+
+    if not v_contacts or not p_contacts:
+        return MutualsResponse(mutual_phones=[])
+
+    # Intersection — phones known by BOTH the viewer and the poster
+    mutual_phones = list(v_contacts & p_contacts)
+    return MutualsResponse(mutual_phones=mutual_phones)
+
+
+@api_router.post("/users/{phone}/contacts")
+async def update_contacts(phone: str, contacts: List[str]):
+    """Upsert only the contacts list for a user (lightweight endpoint
+    called after login without re-sending name/company).
+    """
+    phone = _norm_phone(phone)
+    if len(phone) != 10:
+        raise HTTPException(status_code=400, detail="phone must be a 10-digit number")
+    seen_phones: set = set()
+    cleaned: List[str] = []
+    for c in contacts:
+        digits = "".join(ch for ch in str(c) if ch.isdigit())
+        local = digits[-10:] if len(digits) >= 10 else digits
+        if len(local) == 10 and local != phone and local not in seen_phones:
+            seen_phones.add(local)
+            cleaned.append(local)
+    now = datetime.now(timezone.utc).isoformat()
+    await db.users.update_one(
+        {"phone": phone},
+        {"$set": {"contacts": cleaned, "contacts_updated_at": now}},
+        upsert=False,   # only update existing users
+    )
+    return {"phone": phone, "contacts_saved": len(cleaned)}
 
 
 class ShortenRequest(BaseModel):
