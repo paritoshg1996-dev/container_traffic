@@ -82,6 +82,16 @@ const PLACEMENT_OPTIONS = [
   { key: "Stackable",     label: "Stackable",     image: require("../assets/images/stackable.png") },
   { key: "Non Stackable", label: "Non Stackable",  image: require("../assets/images/non_stackable.png") },
 ];
+
+// Cargo type options with emoji pictograms (no image assets needed)
+const CARGO_TYPE_OPTIONS = [
+  { key: "Bags",          label: "Bags",          image: require("../assets/images/cargo_bags.png") },
+  { key: "Carton Box",    label: "Carton Box",    image: require("../assets/images/cargo_carton.png") },
+  { key: "Pipes",         label: "Pipes",         image: require("../assets/images/cargo_pipes.png") },
+  { key: "Drums",         label: "Drums",         image: require("../assets/images/cargo_drums.png") },
+  { key: "Fresh Produce", label: "Fresh Produce", image: require("../assets/images/cargo_produce.png") },
+  { key: "Others",        label: "Others",        image: require("../assets/images/cargo_others.png") },
+];
 const TRUCK_TYPES: { name: string; image: any }[] = [
   { name: "Open", image: require("../assets/trucks/open.png") },
   { name: "Container", image: require("../assets/trucks/container.png") },
@@ -92,6 +102,7 @@ type Profile = { name: string; phone: string; company: string };
 
 type Load = {
   id: string;
+  short_id?: string;
   origin_pincode: string;
   origin_locality: string;
   origin_city: string;
@@ -1479,6 +1490,10 @@ const [dimL, setDimL] = useState("");
 const [dimB, setDimB] = useState("");
 const [dimH, setDimH] = useState("");
 const [pricePerTon, setPricePerTon] = useState("");
+  const [priceError, setPriceError] = useState("");
+  const [cargoTypes, setCargoTypes] = useState<string[]>([]);
+  const [cargoOther, setCargoOther] = useState("");
+  const [showCargoOtherInput, setShowCargoOtherInput] = useState(false);
 
 const today = useMemo(() => { const d = new Date(); d.setHours(0,0,0,0); return d; }, []);
 const maxDate = useMemo(() => { const d = new Date(today); d.setDate(d.getDate() + 14); return d; }, [today]);
@@ -1596,7 +1611,7 @@ if (pricePerTon && parseInt(pricePerTon, 10) > 10000) return Alert.alert("Price 
         destination_latitude: destInfo?.latitude ?? null,
         destination_longitude: destInfo?.longitude ?? null,
         destination_eloc: destInfo?.eLoc || "",
-        cargo_types: [], cargo_placement: placement, truck_type: truckType, weight_tons: w, space_cuft: null,
+        cargo_types: cargoTypes.filter(c => !c.startsWith("Others:") || !!cargoOther.trim()), cargo_placement: placement, truck_type: truckType, weight_tons: w, space_cuft: null,
         dimension_length: lengthVal, dimension_breadth: breadthVal, dimension_height: heightVal, price_per_ton: priceVal,
         loading_date: date.toISOString().slice(0, 10), poster_name: profile.name, poster_phone: profile.phone,
         poster_company: profile.company, images,
@@ -1631,24 +1646,30 @@ if (pricePerTon && parseInt(pricePerTon, 10) > 10000) return Alert.alert("Price 
           (dCityClean && dAbbr ? `\n   ${dCityClean}, ${dAbbr}` : (dCityClean ? `\n   ${dCityClean}` : (dAbbr ? `\n   ${dAbbr}` : ""))) +
           `\n   ${destPin}`;
         const truckLabelPost = truckType === "Open" ? "Open Truck" : truckType === "Container" ? "Container Truck" : truckType === "Trailer" ? "Trailer Truck" : truckType;
-        const oOriginLabel = `From: ${oLocClean || oCityClean || originPin}${oCityClean && oAbbr ? `, ${oCityClean}, ${oAbbr}` : (oCityClean ? `, ${oCityClean}` : (oAbbr ? `, ${oAbbr}` : ""))} (${originPin})`;
-        const oDestLabel = `To: ${dLocClean || dCityClean || destPin}${dCityClean && dAbbr ? `, ${dCityClean}, ${dAbbr}` : (dCityClean ? `, ${dCityClean}` : (dAbbr ? `, ${dAbbr}` : ""))} (${destPin})`;
-        const shortPathPost = created?.id ? shortLoadPath(created.id) : "";
-        const loadLink = created?.id
-          ? `\n\n🔗 *Get more info:* https://www.trucktraffic.in${shortPathPost}`
-          : `\n\n🔗 *Get more info:* https://www.trucktraffic.in`;
+        const poArea = oLocClean || oCityClean || originPin;
+        const poCity = oCityClean && oCityClean !== oLocClean ? `, ${oCityClean}` : "";
+        const poState = oAbbr ? `, ${oAbbr}` : "";
+        const pdArea = dLocClean || dCityClean || destPin;
+        const pdCity = dCityClean && dCityClean !== dLocClean ? `, ${dCityClean}` : "";
+        const pdState = dAbbr ? `, ${dAbbr}` : "";
+        const postOriginLabel = `📍 From: ${poArea}${poCity}${poState}, ${originPin}`;
+        const postDestLabel   = `📍 To: ${pdArea}${pdCity}${pdState}, ${destPin}`;
+        const postShareUrl = loadSharePath(created);
         const text = `🚛 *Truck Space Available - Truck Traffic*\n\n` +
-          `*Route:*\n${oOriginLabel}\n${oDestLabel}\n\n` +
-          `🚚 *Truck:* ${truckLabelPost}\n` +
+          `${postOriginLabel}\n${postDestLabel}\n\n` +
+          `🚚 ${truckLabelPost}\n` +
           `⚖️ *Weight:* ${w} Tons\n` +
-          `📅 *Loading:* ${dateStr}\n` +
-          `🧱 *Placement:* ${placement}` +
-          `\n\n📞 *Contact:* ${profile.name}` +
+          `📅 *Loading:* ${dateStr}\n\n` +
+          `📞 *Contact:* ${profile.name}` +
           (profile.company ? ` — ${profile.company}` : "") +
-          `\n+91 ${profile.phone}` +
-          loadLink;
-        try { await Linking.openURL(`https://wa.me/?text=${encodeURIComponent(text)}`); } catch {
-          Alert.alert("Posted", "Load posted, but WhatsApp could not be opened.");
+          `\n+91 ${profile.phone}\n\n` +
+          `🔗 *Get more info:*\n${postShareUrl}`;
+        const waUrl = `https://wa.me/?text=${encodeURIComponent(text)}`;
+        const canOpen = await Linking.canOpenURL(waUrl).catch(() => false);
+        if (canOpen) {
+          await Linking.openURL(waUrl).catch(() => {});
+        } else {
+          Alert.alert("Load Posted Successfully! 🎉", "Your load has been posted. WhatsApp is not installed on this device.");
         }
         reset(); onPosted();
       } else {
@@ -1807,6 +1828,11 @@ return (
               </View>
               <TouchableOpacity style={wmStyles.btn} onPress={() => {
                 const n = parseFloat(weightInput);
+                if (!isNaN(n) && n > 40) {
+                  setWeightInput("");
+                  Alert.alert("Weight limit exceeded", "Maximum allowed weight is 40 tons.");
+                  return;
+                }
                 if (!isNaN(n) && n > 0) setWeight(parseFloat(n.toFixed(1)));
                 setWeightModalVisible(false);
               }}>
@@ -1917,13 +1943,90 @@ return (
               testID="price-per-ton-input"
               style={styles.priceInput}
               value={pricePerTon}
-              onChangeText={(t) => setPricePerTon(t.replace(/\D/g, "").slice(0, 7))}
+              onChangeText={(t) => {
+                const digits = t.replace(/\D/g, "");
+                if (!digits) { setPricePerTon(""); setPriceError(""); return; }
+                const val = parseInt(digits, 10);
+                if (val > 10000) {
+                  setPricePerTon("");
+                  setPriceError("Max price is ₹10,000 per ton");
+                } else {
+                  setPricePerTon(digits);
+                  setPriceError("");
+                }
+              }}
               keyboardType="number-pad"
               placeholder="0"
               placeholderTextColor={COLORS.textSubtle}
             />
             <Text style={styles.priceSuffix}>/ ton</Text>
           </View>
+          {priceError ? <Text style={styles.errorText}>{priceError}</Text> : null}
+        </CollapsibleSection>
+
+        <CollapsibleSection
+          icon="cube-outline"
+          title="Cargo Type"
+          summary={cargoTypes.length > 0 ? cargoTypes.join(", ") : ""}
+          testID="opt-cargo-type"
+        >
+          <View style={cargoStyles.grid}>
+            {CARGO_TYPE_OPTIONS.map((opt) => {
+              const selected = cargoTypes.includes(opt.key);
+              const isOthers = opt.key === "Others";
+              return (
+                <TouchableOpacity
+                  key={opt.key}
+                  style={[cargoStyles.tile, selected && cargoStyles.tileSelected]}
+                  onPress={() => {
+                    if (isOthers) {
+                      setShowCargoOtherInput(!showCargoOtherInput);
+                      if (selected) {
+                        setCargoTypes(prev => prev.filter(c => c !== opt.key && !c.startsWith("Others:")));
+                        setCargoOther("");
+                        setShowCargoOtherInput(false);
+                      } else {
+                        setCargoTypes(prev => [...prev.filter(c => c !== opt.key), opt.key]);
+                      }
+                    } else {
+                      setCargoTypes(prev =>
+                        prev.includes(opt.key)
+                          ? prev.filter(c => c !== opt.key)
+                          : [...prev, opt.key]
+                      );
+                    }
+                  }}
+                  activeOpacity={0.75}
+                >
+                  <Image
+                    source={opt.image}
+                    style={cargoStyles.tileImage}
+                    resizeMode="contain"
+                  />
+                  <Text style={[cargoStyles.tileLabel, selected && cargoStyles.tileLabelSelected]} numberOfLines={1}>{opt.label}</Text>
+                  {selected && <View style={cargoStyles.checkDot}><Ionicons name="checkmark" size={9} color="#fff" /></View>}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+          {showCargoOtherInput && (
+            <View style={cargoStyles.otherInputWrap}>
+              <TextInput
+                style={cargoStyles.otherInput}
+                value={cargoOther}
+                onChangeText={(t) => {
+                  setCargoOther(t);
+                  setCargoTypes(prev => {
+                    const filtered = prev.filter(c => !c.startsWith("Others:") && c !== "Others");
+                    return t.trim() ? [...filtered, `Others: ${t.trim()}`] : [...filtered, "Others"];
+                  });
+                }}
+                placeholder="Describe cargo (e.g. Steel coils, Marble slabs…)"
+                placeholderTextColor={COLORS.textSubtle}
+                returnKeyType="done"
+              />
+            </View>
+          )}
         </CollapsibleSection>
 
         <CollapsibleSection
@@ -2002,15 +2105,21 @@ return (
           </View>
         </CollapsibleSection>
 
-        <View style={[styles.row, { marginTop: 24 }]}>
-          <TouchableOpacity testID="submit-load-btn" style={[styles.primaryBtn, styles.flex1, { marginTop: 0 }]} onPress={() => submit(false)} disabled={loadingPost}>
-            {loadingPost ? <ActivityIndicator color={COLORS.surface} /> : <><Ionicons name="checkmark-circle" size={18} color={COLORS.surface} /><Text style={styles.primaryBtnText}>Post</Text></>}
-          </TouchableOpacity>
-          <View style={{ width: 10 }} />
-          <TouchableOpacity testID="submit-load-share-btn" style={[styles.whatsappBtn, styles.flex1]} onPress={() => submit(true)} disabled={loadingPost}>
-            {loadingPost ? <ActivityIndicator color={COLORS.surface} /> : <><Ionicons name="logo-whatsapp" size={18} color={COLORS.surface} /><Text style={styles.primaryBtnText}>Post & Share</Text></>}
-          </TouchableOpacity>
-        </View>
+        <TouchableOpacity
+          testID="submit-load-share-btn"
+          style={[styles.whatsappBtn, { marginTop: 24, width: "100%", paddingVertical: 16 }]}
+          onPress={() => submit(true)}
+          disabled={loadingPost}
+          activeOpacity={0.82}
+        >
+          {loadingPost
+            ? <ActivityIndicator color={COLORS.surface} />
+            : <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10 }}>
+                <Ionicons name="logo-whatsapp" size={22} color={COLORS.surface} />
+                <Text style={[styles.primaryBtnText, { fontSize: 16 }]}>Post & Share on WhatsApp</Text>
+              </View>
+          }
+        </TouchableOpacity>
         <View style={{ height: 40 }} />
       </ScrollView>
     </KeyboardAvoidingView>
@@ -3085,12 +3194,13 @@ const ivStyles = StyleSheet.create({
 });
 
 
-// Generates a short path for the load link: /t-{first4ofId} style
-function shortLoadPath(id: string | undefined): string {
-  if (!id) return "";
-  // Use first 8 chars of load ID → compact but still unique enough
-  const slug = id.replace(/-/g, "").slice(0, 8).toLowerCase();
-  return `/l/${slug}`;
+// Returns the short-link path using the server-assigned short_id.
+// Falls back to the full UUID query-param URL if short_id isn't on the load yet
+// (e.g. loads created before the short_id feature was deployed).
+function loadSharePath(load: any): string {
+  if (load?.short_id) return `https://www.trucktraffic.in/l/${load.short_id}`;
+  if (load?.id) return `https://www.trucktraffic.in?load=${load.id}`;
+  return "https://www.trucktraffic.in";
 }
 
 function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhone }: { load: Load; isMine: boolean; distance?: { origin: number; dest: number; offRoute: boolean }; contactName?: string; contactsMap?: Map<string, string>; viewerPhone?: string }) {
@@ -3121,24 +3231,28 @@ function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhon
       `📍 ${dLocClean || dCityClean || load.destination_pincode}` +
       (dCityClean && dAbbr ? `\n   ${dCityClean}, ${dAbbr}` : (dCityClean ? `\n   ${dCityClean}` : (dAbbr ? `\n   ${dAbbr}` : ""))) +
       `\n   ${load.destination_pincode}`;
-    const shortPath = load.id ? shortLoadPath(load.id) : "";
-    const loadLink = load.id
-      ? `\n\n🔗 *Get more info:* https://www.trucktraffic.in${shortPath}`
-      : `\n\n🔗 *Get more info:* https://www.trucktraffic.in`;
     const truckLabelCard = load.truck_type === "Open" ? "Open Truck" : load.truck_type === "Container" ? "Container Truck" : load.truck_type === "Trailer" ? "Trailer Truck" : load.truck_type;
-    const originLabel = `From: ${oLocClean || oCityClean || load.origin_pincode}${oCityClean && oAbbr ? `, ${oCityClean}, ${oAbbr}` : (oCityClean ? `, ${oCityClean}` : (oAbbr ? `, ${oAbbr}` : ""))} (${load.origin_pincode})`;
-    const destLabel = `To: ${dLocClean || dCityClean || load.destination_pincode}${dCityClean && dAbbr ? `, ${dCityClean}, ${dAbbr}` : (dCityClean ? `, ${dCityClean}` : (dAbbr ? `, ${dAbbr}` : ""))} (${load.destination_pincode})`;
+    const oArea = oLocClean || oCityClean || load.origin_pincode;
+    const oPin = load.origin_pincode;
+    const dArea = dLocClean || dCityClean || load.destination_pincode;
+    const dPin = load.destination_pincode;
+    const oCity = oCityClean && oCityClean !== oLocClean ? `, ${oCityClean}` : "";
+    const oState = oAbbr ? `, ${oAbbr}` : "";
+    const dCity = dCityClean && dCityClean !== dLocClean ? `, ${dCityClean}` : "";
+    const dState = dAbbr ? `, ${dAbbr}` : "";
+    const originLabel = `📍 From: ${oArea}${oCity}${oState}, ${oPin}`;
+    const destLabel   = `📍 To: ${dArea}${dCity}${dState}, ${dPin}`;
+    const shareUrl = loadSharePath(load);
     const text =
       `🚛 *Truck Space Available - Truck Traffic*\n\n` +
-      `*Route:*\n${originLabel}\n${destLabel}\n\n` +
-      `🚚 *Truck:* ${truckLabelCard}\n` +
+      `${originLabel}\n${destLabel}\n\n` +
+      `🚚 ${truckLabelCard}\n` +
       `⚖️ *Weight:* ${load.weight_tons} Tons\n` +
-      `📅 *Loading:* ${dateStrShare}\n` +
-      (load.cargo_placement ? `🧱 *Placement:* ${load.cargo_placement}` : "") +
-      `\n\n📞 *Contact:* ${load.poster_name}` +
+      `📅 *Loading:* ${dateStrShare}\n\n` +
+      `📞 *Contact:* ${load.poster_name}` +
       (load.poster_company ? ` — ${load.poster_company}` : "") +
-      `\n+91 ${load.poster_phone}` +
-      loadLink;
+      `\n+91 ${load.poster_phone}\n\n` +
+      `🔗 *Get more info:*\n${shareUrl}`;
     try { await Linking.openURL(`https://wa.me/?text=${encodeURIComponent(text)}`); }
     catch { Alert.alert("Error", "WhatsApp could not be opened."); }
   };
@@ -3277,6 +3391,14 @@ function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhon
             <Text style={[cardStyles.metaText, { color: COLORS.secondary }]}>{load.cargo_placement}</Text>
           </View>
         ) : null}
+        {(load.cargo_types || []).filter((c: string) => !!c).map((c: string, i: number) => {
+          const label = c.startsWith("Others:") ? c.slice(8).trim() : c;
+          return (
+            <View key={i} style={[cardStyles.metaChip, { backgroundColor: "#F0F4FF" }]}>
+              <Text style={[cardStyles.metaText, { color: COLORS.primary }]}>{label}</Text>
+            </View>
+          );
+        })}
       </ScrollView>
 
       <View style={styles.divider} />
@@ -3541,6 +3663,76 @@ const posterProfileStyles = StyleSheet.create({
   unknownBadgeText: { fontSize: 11, color: COLORS.textMuted, fontFamily: "Inter_600SemiBold", fontWeight: "600" },
   mutualBadge: { backgroundColor: "#E8F8EE", borderWidth: 1, borderColor: "#25D366" },
   mutualBadgeText: { fontSize: 11, color: "#0F6B36", fontFamily: "Inter_700Bold", fontWeight: "700" },
+});
+
+const cargoStyles = StyleSheet.create({
+  grid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    paddingTop: 4,
+    paddingBottom: 4,
+  },
+  tile: {
+    width: "30%",
+    aspectRatio: 1,
+    backgroundColor: COLORS.surface,
+    borderWidth: 1.5,
+    borderColor: COLORS.border,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+    position: "relative",
+  },
+  tileSelected: {
+    backgroundColor: "#EEF2FA",
+    borderColor: COLORS.primary,
+  },
+  tileImage: {
+    width: 52,
+    height: 52,
+    marginBottom: 4,
+  },
+  tileLabel: {
+    fontSize: 11,
+    fontFamily: "Inter_600SemiBold",
+    fontWeight: "600",
+    color: COLORS.textMuted,
+    textAlign: "center",
+  },
+  tileLabelSelected: {
+    color: COLORS.primary,
+    fontFamily: "Inter_700Bold",
+    fontWeight: "700",
+  },
+  checkDot: {
+    position: "absolute",
+    top: 6,
+    right: 6,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: COLORS.primary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  otherInputWrap: {
+    marginTop: 10,
+    borderWidth: 1.5,
+    borderColor: COLORS.border,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: COLORS.bg,
+  },
+  otherInput: {
+    fontSize: 13,
+    fontFamily: "Inter_400Regular",
+    color: COLORS.text,
+    minHeight: 36,
+  },
 });
 
 const cardStyles = StyleSheet.create({
