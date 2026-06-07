@@ -1460,6 +1460,7 @@ const profileStyles = StyleSheet.create({
 // ============== Post Load ==============
 function PostLoadScreen({ profile, onPosted }: { profile: Profile; onPosted: () => void }) {
   const [originText, setOriginText] = useState("");
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [originPin, setOriginPin] = useState("");
   const [originInfo, setOriginInfo] = useState<RouteInfo>(null);
   const [destText, setDestText] = useState("");
@@ -1500,20 +1501,30 @@ const onDateChange = (event: any, selected?: Date) => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) { Alert.alert("Permission needed", "Please grant photo library access to attach images."); return; }
     const remaining = 3 - images.length;
-    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: false, allowsMultipleSelection: true, selectionLimit: remaining, quality: 0.5, base64: true });
+    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: false, allowsMultipleSelection: true, selectionLimit: remaining, quality: 0.7, base64: true });
     if (!res.canceled && res.assets && res.assets.length > 0) {
       const MAX_SIZE_BYTES = 50 * 1024 * 1024;
       const validAssets = res.assets.slice(0, remaining).filter((a: any) => {
         if (!a.base64) return false;
         const sizeBytes = (a.base64.length * 3) / 4;
         if (sizeBytes > MAX_SIZE_BYTES) {
-          Alert.alert("File too large", `"${a.fileName || "Photo"}" exceeds the 50 MB limit.`);
+          Alert.alert("File too large", `"${a.fileName || "Photo"}" exceeds the 50 MB limit. Please choose a smaller image.`);
           return false;
         }
         return true;
       });
-      const newOnes = validAssets.map((a: any) => `data:${a.mimeType || "image/jpeg"};base64,${a.base64}`);
+      if (validAssets.length === 0) return;
+      setUploadProgress(0);
+      const total = validAssets.length;
+      const newOnes: string[] = [];
+      for (let i = 0; i < total; i++) {
+        const a = validAssets[i];
+        newOnes.push(`data:${a.mimeType || "image/jpeg"};base64,${a.base64}`);
+        setUploadProgress(Math.round(((i + 1) / total) * 100));
+        await new Promise(r => setTimeout(r, 80));
+      }
       setImages((prev) => [...prev, ...newOnes].slice(0, 3));
+      setTimeout(() => setUploadProgress(null), 600);
     }
   };
 
