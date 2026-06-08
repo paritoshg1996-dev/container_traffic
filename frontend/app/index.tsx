@@ -4,7 +4,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-
+  AppState,
   StyleSheet,
   ScrollView,
   FlatList,
@@ -2981,50 +2981,57 @@ type Distances = Record<string, { origin: number; dest: number; offRoute: boolea
 // show a "Saved" badge next to load posters the user already knows.
 function useContactsMap(userPhone?: string): Map<string, string> {
   const [map, setMap] = useState<Map<string, string>>(new Map());
+
+  const loadContacts = useCallback(async (phone?: string) => {
+    try {
+      const perm = await Contacts.requestPermissionsAsync();
+      if (perm.status !== "granted") return;
+      const { data } = await Contacts.getContactsAsync({
+        fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name],
+      });
+      const m = new Map<string, string>();
+      const phones: string[] = [];
+      for (const c of data) {
+        const nums = (c as any).phoneNumbers || [];
+        for (const n of nums) {
+          const digits = String(n?.number || "").replace(/\D/g, "");
+          if (digits.length >= 10) {
+            const local = digits.slice(-10);
+            if (!m.has(local)) {
+              m.set(local, (c.name || "").trim());
+              phones.push(local);
+            }
+          }
+        }
+      }
+      setMap(m);
+      // Upload phone numbers to backend (best-effort, no names)
+      if (phone && phones.length > 0) {
+        try {
+          await fetch(`${API}/users/${encodeURIComponent(phone)}/contacts`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(phones),
+          });
+        } catch {}
+      }
+    } catch {}
+  }, []);
+
+  // Run once on mount
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const perm = await Contacts.getPermissionsAsync();
-        if (perm.status !== "granted") return;
-        const { data } = await Contacts.getContactsAsync({
-          fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name],
-        });
-        const m = new Map<string, string>();
-        const phones: string[] = [];
-        for (const c of data) {
-          const nums = (c as any).phoneNumbers || [];
-          for (const n of nums) {
-            const digits = String(n?.number || "").replace(/\D/g, "");
-            if (digits.length >= 10) {
-              const local = digits.slice(-10);
-              if (!m.has(local)) {
-                m.set(local, (c.name || "").trim());
-                phones.push(local);
-              }
-            }
-          }
-        }
-        if (!cancelled) {
-          setMap(m);
-          // Upload contact list to backend (numbers only, no names).
-          // Best-effort — never blocks the UI, never retried on failure.
-          if (userPhone && phones.length > 0) {
-            try {
-              await fetch(`${API}/users/${encodeURIComponent(userPhone)}/contacts`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(phones),
-              });
-            } catch {
-              // Silently ignore — contacts upload is best-effort
-            }
-          }
-        }
-      } catch {}
-    })();
-    return () => { cancelled = true; };
-  }, [userPhone]);
+    loadContacts(userPhone);
+  }, [userPhone, loadContacts]);
+
+  // Re-run whenever the app comes back to foreground (e.g. after granting
+  // permission in iOS/Android Settings, or after switching apps)
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") loadContacts(userPhone);
+    });
+    return () => sub.remove();
+  }, [userPhone, loadContacts]);
+
   return map;
 }
 
@@ -3036,6 +3043,8 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
   const [activeFilter, setActiveFilter] = useState<ActiveFilter | null>(null);
   const [filteredLoads, setFilteredLoads] = useState<Load[] | null>(null);
   const [distances, setDistances] = useState<Distances>({});
+  // mutualMap: poster_phone → list of mutual phone numbers (resolved to names via contactsMap)
+  const [mutualMap, setMutualMap] = useState<Record<string, string[]>>({});
   const contactsMap = useContactsMap(profile.phone);
 
   const fetchLoads = useCallback(async () => {
@@ -3046,7 +3055,31 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
 
   useEffect(() => { fetchLoads(); }, [fetchLoads]);
 
-  const applyFilter = useCallback(async (f: ActiveFilter) => {
+  // Fetch mutual contacts for all posters in one batch call.
+  // Re-runs when loads change (new data) or contactsMap populates (permission granted).
+  useEffect(() => {
+    if (!profile.phone || allLoads.length === 0 || contactsMap.size === 0) return;
+    const otherPosters = [...new Set(
+      allLoads
+        .filter(l => l.poster_phone !== profile.phone)
+        .map(l => l.poster_phone)
+    )];
+    if (otherPosters.length === 0) return;
+    (async () => {
+      try {
+        const res = await fetch(`${API}/users/mutuals/batch`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ viewer_phone: profile.phone, poster_phones: otherPosters }),
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        setMutualMap(data.mutuals || {});
+      } catch {}
+    })();
+  }, [allLoads, contactsMap.size, profile.phone]);
+
+ = useCallback(async (f: ActiveFilter) => {
     const dist: Distances = {};
     const survivors: { load: Load; total: number }[] = [];
     for (const load of allLoads) {
@@ -3136,7 +3169,8 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
               <Text style={styles.emptySub}>{isFiltered ? "Try adjusting your cargo details or search within a wider area." : "Be the first to post a load!"}</Text>
             </View>
           }
-          renderItem={({ item }) => <LoadCard load={item} isMine={item.poster_phone === profile.phone} distance={isFiltered ? distances[item.id] : undefined} contactName={contactsMap.get(item.poster_phone)} contactsMap={contactsMap} viewerPhone={profile.phone} />}
+          extraData={contactsMap.size}
+          renderItem={({ item }) => <LoadCard load={item} isMine={item.poster_phone === profile.phone} distance={isFiltered ? distances[item.id] : undefined} contactName={contactsMap.get(item.poster_phone)} contactsMap={contactsMap} viewerPhone={profile.phone} mutualPhones={mutualMap[item.poster_phone] || []} />}
         />
       )}
       <FindSpaceModal visible={showFilter} initial={activeFilter} onClose={() => setShowFilter(false)} onApply={onApplyFilter} />
@@ -3210,7 +3244,7 @@ function loadSharePath(load: any): string {
   return "https://www.trucktraffic.in";
 }
 
-function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhone }: { load: Load; isMine: boolean; distance?: { origin: number; dest: number; offRoute: boolean }; contactName?: string; contactsMap?: Map<string, string>; viewerPhone?: string }) {
+function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhone, mutualPhones }: { load: Load; isMine: boolean; distance?: { origin: number; dest: number; offRoute: boolean }; contactName?: string; contactsMap?: Map<string, string>; viewerPhone?: string; mutualPhones?: string[] }) {
   const [viewerStart, setViewerStart] = useState<number | null>(null);
   const [showImages, setShowImages] = useState(false);
   const [showPosterProfile, setShowPosterProfile] = useState(false);
@@ -3437,6 +3471,18 @@ function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhon
                 </Text>
               </View>
             ) : null}
+            {!isMine && mutualPhones && mutualPhones.length > 0 && (() => {
+              const mutualNames = mutualPhones.map(p => contactsMap?.get(p)).filter(Boolean) as string[];
+              if (mutualNames.length === 0) return null;
+              return (
+                <View style={cardStyles.mutualBadge} testID={`mutual-${load.id}`}>
+                  <Ionicons name="people" size={10} color="#0F6B36" />
+                  <Text style={cardStyles.mutualBadgeText} numberOfLines={1}>
+                    {mutualNames.length} mutual{mutualNames.length > 1 ? "s" : ""} · {mutualNames.slice(0, 2).join(", ")}{mutualNames.length > 2 ? ` +${mutualNames.length - 2}` : ""}
+                  </Text>
+                </View>
+              );
+            })()}
           </View>
           {load.poster_company ? <Text style={styles.posterCompany} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>{load.poster_company}</Text> : null}
           <Text style={styles.posterPhone}>+91 {load.poster_phone}</Text>
@@ -3497,6 +3543,7 @@ function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhon
           contactName={contactName}
           contactsMap={contactsMap}
           viewerPhone={viewerPhone}
+          prefetchedMutualPhones={mutualPhones}
           onClose={() => setShowPosterProfile(false)}
         />
       )}
@@ -3506,12 +3553,13 @@ function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhon
 
 
 // ============== PosterProfileModal ==============
-function PosterProfileModal({ visible, load, contactName, contactsMap, viewerPhone, onClose }: {
+function PosterProfileModal({ visible, load, contactName, contactsMap, viewerPhone, prefetchedMutualPhones, onClose }: {
   visible: boolean;
   load: Load;
   contactName?: string;
   contactsMap?: Map<string, string>;
   viewerPhone?: string;
+  prefetchedMutualPhones?: string[];   // already fetched by LoadCard — skip API call if provided
   onClose: () => void;
 }) {
   const [posterLoads, setPosterLoads] = useState<Load[]>([]);
@@ -3527,32 +3575,34 @@ function PosterProfileModal({ visible, load, contactName, contactsMap, viewerPho
     setShowMutuals(false);
     (async () => {
       try {
-        // Run loads fetch and mutuals lookup in parallel
-        const [loadsRes, mutualsRes] = await Promise.all([
-          fetch(`${API}/loads`),
-          viewerPhone
-            ? fetch(`${API}/users/${encodeURIComponent(viewerPhone)}/mutuals/${encodeURIComponent(load.poster_phone)}`)
-            : Promise.resolve(null),
-        ]);
-
-        // Poster's loads
+        // Poster's loads — still need to fetch these
+        const loadsRes = await fetch(`${API}/loads`);
         const all: Load[] = await loadsRes.json();
         const posterPosts = all.filter(l => l.poster_phone === load.poster_phone);
         setPosterLoads(posterPosts);
 
-        // True mutual contacts: phones in both viewer's and poster's contact lists.
-        // The backend returns raw phone numbers; we resolve display names from
-        // the viewer's local contactsMap (so we never expose poster's contact names).
-        if (mutualsRes && mutualsRes.ok) {
-          const mutualsData = await mutualsRes.json();
-          const mutualPhones: string[] = mutualsData.mutual_phones || [];
-          const mutualNames: string[] = [];
-          for (const phone of mutualPhones) {
-            const name = contactsMap?.get(phone);
-            if (name) mutualNames.push(name);
-          }
-          setMutualContacts(mutualNames.slice(0, 5));
+        // Mutual contacts: use prefetched data from LoadCard if available,
+        // otherwise fall back to the individual API call.
+        let mutualPhones: string[] = prefetchedMutualPhones || [];
+        if (mutualPhones.length === 0 && viewerPhone) {
+          try {
+            const mutualsRes = await fetch(
+              `${API}/users/${encodeURIComponent(viewerPhone)}/mutuals/${encodeURIComponent(load.poster_phone)}`
+            );
+            if (mutualsRes.ok) {
+              const mutualsData = await mutualsRes.json();
+              mutualPhones = mutualsData.mutual_phones || [];
+            }
+          } catch {}
         }
+
+        // Resolve phone numbers → display names via viewer's local phonebook
+        const mutualNames: string[] = [];
+        for (const phone of mutualPhones) {
+          const name = contactsMap?.get(phone);
+          if (name) mutualNames.push(name);
+        }
+        setMutualContacts(mutualNames.slice(0, 5));
       } catch {} finally {
         setLoading(false);
       }
@@ -3642,9 +3692,12 @@ function PosterProfileModal({ visible, load, contactName, contactsMap, viewerPho
                 )}
               </View>
             )}
-            {!loading && mutualContacts.length === 0 && !isDirectContact && (
-              <View style={{ marginTop: 8, alignItems: "center" }}>
-                <Text style={{ fontSize: 11, color: COLORS.textSubtle, fontStyle: "italic" }}>No mutual contacts found</Text>
+            {/* For direct contacts with no mutuals found — poster likely on older app version */}
+            {!loading && mutualContacts.length === 0 && isDirectContact && (
+              <View style={{ marginTop: 8, alignItems: "center", paddingHorizontal: 16 }}>
+                <Text style={{ fontSize: 11, color: COLORS.textSubtle, fontStyle: "italic", textAlign: "center" }}>
+                  No mutual contacts found — this person may be using an older version of the app.
+                </Text>
               </View>
             )}
           </View>
@@ -3826,6 +3879,20 @@ const cardStyles = StyleSheet.create({
     maxWidth: 160,
   },
   savedBadgeText: { fontSize: 10, color: COLORS.primary, fontFamily: "Inter_700Bold", fontWeight: "700", letterSpacing: 0.2 },
+  mutualBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    paddingVertical: 2,
+    paddingHorizontal: 7,
+    borderRadius: 100,
+    backgroundColor: "#E8F8EE",
+    borderWidth: 1,
+    borderColor: "#25D366",
+    maxWidth: 200,
+    marginTop: 2,
+  },
+  mutualBadgeText: { fontSize: 10, color: "#0F6B36", fontFamily: "Inter_700Bold", fontWeight: "700", letterSpacing: 0.2 },
   noPhotos: { fontSize: 11, color: COLORS.textSubtle, fontStyle: "italic" },
   contactSection: { flex: 1 },
   verifiedBadge: { flexDirection: "row", alignItems: "center" },
