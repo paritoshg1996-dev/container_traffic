@@ -103,6 +103,7 @@ type Profile = { name: string; phone: string; company: string };
 type Load = {
   id: string;
   short_id?: string;
+  verified?: boolean;
   origin_pincode: string;
   origin_locality: string;
   origin_city: string;
@@ -1162,6 +1163,7 @@ if (!destValid)
                       onChangeText={(t) => {
                         const digits = t.replace(/\D/g, "");
                         if (!digits) { setDimL(""); return; }
+                        if (parseInt(digits, 10) > 40) { setDimL(""); return; }
                         setDimL(digits);
                       }}
                       keyboardType="number-pad"
@@ -1183,6 +1185,7 @@ if (!destValid)
                       onChangeText={(t) => {
                         const digits = t.replace(/\D/g, "");
                         if (!digits) { setDimB(""); return; }
+                        if (parseInt(digits, 10) > 8) { setDimB(""); return; }
                         setDimB(digits);
                       }}
                       keyboardType="number-pad"
@@ -1204,6 +1207,7 @@ if (!destValid)
                       onChangeText={(t) => {
                         const digits = t.replace(/\D/g, "");
                         if (!digits) { setDimH(""); return; }
+                        if (parseInt(digits, 10) > 9) { setDimH(""); return; }
                         setDimH(digits);
                       }}
                       keyboardType="number-pad"
@@ -1624,7 +1628,8 @@ if (pricePerTon && parseInt(pricePerTon, 10) > 10000) return Alert.alert("Price 
         setOriginText(""); setOriginPin(""); setOriginInfo(null);
         setDestText(""); setDestPin(""); setDestInfo(null);
         setTruckType(""); setPlacement(""); setWeight(1.0); setImages([]);
-        setDimL(""); setDimB(""); setDimH(""); setPricePerTon("");
+        setDimL(""); setDimB(""); setDimH(""); setPricePerTon(""); setPriceError("");
+        setCargoTypes([]); setCargoOther(""); setShowCargoOtherInput(false);
       };
 
       if (alsoShare) {
@@ -1875,6 +1880,7 @@ return (
                   onChangeText={(t) => {
                     const digits = t.replace(/\D/g, "");
                     if (!digits) { setDimL(""); return; }
+                    if (parseInt(digits, 10) > 40) { setDimL(""); return; }
                     setDimL(digits);
                   }}
                   keyboardType="number-pad"
@@ -1896,6 +1902,7 @@ return (
                   onChangeText={(t) => {
                     const digits = t.replace(/\D/g, "");
                     if (!digits) { setDimB(""); return; }
+                    if (parseInt(digits, 10) > 8) { setDimB(""); return; }
                     setDimB(digits);
                   }}
                   keyboardType="number-pad"
@@ -1917,6 +1924,7 @@ return (
                   onChangeText={(t) => {
                     const digits = t.replace(/\D/g, "");
                     if (!digits) { setDimH(""); return; }
+                    if (parseInt(digits, 10) > 9) { setDimH(""); return; }
                     setDimH(digits);
                   }}
                   keyboardType="number-pad"
@@ -1966,8 +1974,8 @@ return (
 
         <CollapsibleSection
           icon="cube-outline"
-          title="Cargo Type"
-          summary={cargoTypes.length > 0 ? cargoTypes.join(", ") : ""}
+          title="Cargo in Truck"
+          summary={cargoTypes.length > 0 ? cargoTypes.map(c => c.startsWith("Others:") ? c.slice(8).trim() : c).join(", ") : ""}
           testID="opt-cargo-type"
         >
           <View style={cargoStyles.grid}>
@@ -1979,21 +1987,22 @@ return (
                   key={opt.key}
                   style={[cargoStyles.tile, selected && cargoStyles.tileSelected]}
                   onPress={() => {
-                    if (isOthers) {
-                      setShowCargoOtherInput(!showCargoOtherInput);
-                      if (selected) {
-                        setCargoTypes(prev => prev.filter(c => c !== opt.key && !c.startsWith("Others:")));
-                        setCargoOther("");
-                        setShowCargoOtherInput(false);
-                      } else {
-                        setCargoTypes(prev => [...prev.filter(c => c !== opt.key), opt.key]);
-                      }
+                    // Single-select: selecting a new type deselects the previous one
+                    if (selected) {
+                      // Tapping selected item deselects it
+                      setCargoTypes([]);
+                      setCargoOther("");
+                      setShowCargoOtherInput(false);
                     } else {
-                      setCargoTypes(prev =>
-                        prev.includes(opt.key)
-                          ? prev.filter(c => c !== opt.key)
-                          : [...prev, opt.key]
-                      );
+                      setCargoTypes([opt.key]);
+                      setCargoOther("");
+                      if (isOthers) {
+                        setShowCargoOtherInput(true);
+                      } else {
+                        setShowCargoOtherInput(false);
+                      }
+                    }
+                    if (false) { // dead branch to keep linter happy
                     }
                   }}
                   activeOpacity={0.75}
@@ -2016,10 +2025,8 @@ return (
                 value={cargoOther}
                 onChangeText={(t) => {
                   setCargoOther(t);
-                  setCargoTypes(prev => {
-                    const filtered = prev.filter(c => !c.startsWith("Others:") && c !== "Others");
-                    return t.trim() ? [...filtered, `Others: ${t.trim()}`] : [...filtered, "Others"];
-                  });
+                  // Single-select: cargoTypes is always just one entry
+                  setCargoTypes(t.trim() ? [`Others: ${t.trim()}`] : ["Others"]);
                 }}
                 placeholder="Describe cargo (e.g. Steel coils, Marble slabs…)"
                 placeholderTextColor={COLORS.textSubtle}
@@ -3408,9 +3415,16 @@ function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhon
         <View style={cardStyles.contactSection}>
           <View style={cardStyles.posterNameRow}>
             <TouchableOpacity onPress={() => !isMine && setShowPosterProfile(true)} activeOpacity={isMine ? 1 : 0.7}>
-              <Text style={[styles.posterName, !isMine && { color: COLORS.primary, textDecorationLine: "underline" }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>
-                {load.poster_name}{isMine && <Text style={styles.youTag}> · You</Text>}
-              </Text>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                <Text style={[styles.posterName, !isMine && { color: COLORS.primary, textDecorationLine: "underline" }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>
+                  {load.poster_name}{isMine && <Text style={styles.youTag}> · You</Text>}
+                </Text>
+                {load.verified && (
+                  <View style={cardStyles.verifiedBadge}>
+                    <Ionicons name="checkmark-circle" size={14} color="#1A9E5A" />
+                  </View>
+                )}
+              </View>
             </TouchableOpacity>
             {!isMine && contactName ? (
               <View
@@ -3571,6 +3585,12 @@ function PosterProfileModal({ visible, load, contactName, contactsMap, viewerPho
 
             {/* Contact relationship badges */}
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 10, justifyContent: "center" }}>
+              {load.verified && (
+                <View style={[posterProfileStyles.badge, { backgroundColor: "#E6F9F0", borderWidth: 1, borderColor: "#1A9E5A" }]}>
+                  <Ionicons name="checkmark-circle" size={14} color="#1A9E5A" />
+                  <Text style={{ fontSize: 11, color: "#1A9E5A", fontFamily: "Inter_700Bold", fontWeight: "700" }}>Verified Transporter</Text>
+                </View>
+              )}
               {isDirectContact ? (
                 <View style={[posterProfileStyles.badge, posterProfileStyles.directBadge]}>
                   <Ionicons name="person-circle" size={14} color={COLORS.primary} />
@@ -3802,6 +3822,7 @@ const cardStyles = StyleSheet.create({
   savedBadgeText: { fontSize: 10, color: COLORS.primary, fontFamily: "Inter_700Bold", fontWeight: "700", letterSpacing: 0.2 },
   noPhotos: { fontSize: 11, color: COLORS.textSubtle, fontStyle: "italic" },
   contactSection: { flex: 1 },
+  verifiedBadge: { flexDirection: "row", alignItems: "center" },
 });
 
 function Spec({ icon, label, value }: any) {
