@@ -3567,6 +3567,13 @@ function PosterProfileModal({ visible, load, contactName, contactsMap, viewerPho
   const [mutualContacts, setMutualContacts] = useState<string[]>([]);
   const [showMutuals, setShowMutuals] = useState(false);
 
+  // Keep a ref to contactsMap so the effect can read it without depending on it.
+  // contactsMap is a Map object — its reference changes every render even when
+  // contents are the same, which would cause an infinite fetch loop if listed
+  // as a dependency.
+  const contactsMapRef = useRef(contactsMap);
+  useEffect(() => { contactsMapRef.current = contactsMap; }, [contactsMap]);
+
   useEffect(() => {
     if (!visible) return;
     setLoading(true);
@@ -3599,7 +3606,7 @@ function PosterProfileModal({ visible, load, contactName, contactsMap, viewerPho
         // Resolve phone numbers → display names via viewer's local phonebook
         const mutualNames: string[] = [];
         for (const phone of mutualPhones) {
-          const name = contactsMap?.get(phone);
+          const name = contactsMapRef.current?.get(phone);
           if (name) mutualNames.push(name);
         }
         setMutualContacts(mutualNames.slice(0, 5));
@@ -3607,7 +3614,8 @@ function PosterProfileModal({ visible, load, contactName, contactsMap, viewerPho
         setLoading(false);
       }
     })();
-  }, [visible, load.poster_phone, viewerPhone, contactsMap]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, load.poster_phone, viewerPhone]);
 
   const initials = load.poster_name.split(" ").map((p: string) => p[0]).filter(Boolean).slice(0, 2).join("").toUpperCase();
   const isDirectContact = !!contactName;
