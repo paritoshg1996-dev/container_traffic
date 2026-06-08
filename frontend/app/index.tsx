@@ -3079,7 +3079,7 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
     })();
   }, [allLoads, contactsMap.size, profile.phone]);
 
- = useCallback(async (f: ActiveFilter) => {
+ const applyFilter = useCallback(async (f: ActiveFilter) => {
     const dist: Distances = {};
     const survivors: { load: Load; total: number }[] = [];
     for (const load of allLoads) {
