@@ -142,6 +142,7 @@ class LoadCreate(BaseModel):
 class Load(LoadCreate):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     short_id: Optional[str] = None   # set server-side after uniqueness check; never from client
+    verified: bool = False            # manually set by admin via PATCH /loads/{id}/verify
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
@@ -896,6 +897,28 @@ async def update_contacts(phone: str, contacts: List[str]):
         upsert=False,
     )
     return {"phone": phone, "contacts_saved": len(cleaned)}
+
+
+class VerifyLoadRequest(BaseModel):
+    verified: bool
+    admin_key: str          # simple shared secret; set ADMIN_KEY env var on Render
+
+
+@api_router.patch("/loads/{load_id}/verify")
+async def set_load_verified(load_id: str, payload: VerifyLoadRequest):
+    """Admin-only: set or unset the verified flag on a load.
+    Requires the ADMIN_KEY env var to match payload.admin_key."""
+    import os
+    admin_key = os.getenv("ADMIN_KEY", "")
+    if not admin_key or payload.admin_key != admin_key:
+        raise HTTPException(status_code=403, detail="Invalid admin key")
+    result = await db.loads.update_one(
+        {"id": load_id},
+        {"$set": {"verified": payload.verified, "verified_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Load not found")
+    return {"id": load_id, "verified": payload.verified}
 
 
 class ShortenRequest(BaseModel):
