@@ -2123,7 +2123,7 @@ return (
             ? <ActivityIndicator color={COLORS.surface} />
             : <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10 }}>
                 <Ionicons name="logo-whatsapp" size={22} color={COLORS.surface} />
-                <Text style={[styles.primaryBtnText, { fontSize: 16 }]}>Post & Share on WhatsApp</Text>
+                <Text style={[styles.primaryBtnText, { fontSize: 16 }]}>Post & Share</Text>
               </View>
           }
         </TouchableOpacity>
@@ -3517,12 +3517,14 @@ function PosterProfileModal({ visible, load, contactName, contactsMap, viewerPho
   const [posterLoads, setPosterLoads] = useState<Load[]>([]);
   const [loading, setLoading] = useState(true);
   const [mutualContacts, setMutualContacts] = useState<string[]>([]);
+  const [showMutuals, setShowMutuals] = useState(false);
 
   useEffect(() => {
     if (!visible) return;
     setLoading(true);
     setPosterLoads([]);
     setMutualContacts([]);
+    setShowMutuals(false);
     (async () => {
       try {
         // Run loads fetch and mutuals lookup in parallel
@@ -3604,20 +3606,40 @@ function PosterProfileModal({ visible, load, contactName, contactsMap, viewerPho
               )}
             </View>
 
-            {/* Mutual contacts */}
+            {/* Mutual contacts — tappable count, expands to show names */}
             {!loading && mutualContacts.length > 0 && (
               <View style={{ marginTop: 10, alignItems: "center" }}>
-                <Text style={{ fontSize: 12, color: COLORS.textMuted, fontFamily: "Inter_600SemiBold", marginBottom: 4 }}>
-                  {mutualContacts.length} mutual contact{mutualContacts.length > 1 ? "s" : ""} in common:
-                </Text>
-                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, justifyContent: "center" }}>
-                  {mutualContacts.map((name, i) => (
-                    <View key={i} style={[posterProfileStyles.badge, posterProfileStyles.mutualBadge]}>
-                      <Ionicons name="people" size={12} color="#0F6B36" />
-                      <Text style={posterProfileStyles.mutualBadgeText}>{name}</Text>
+                <TouchableOpacity
+                  onPress={() => setShowMutuals(v => !v)}
+                  activeOpacity={0.75}
+                  style={{
+                    flexDirection: "row", alignItems: "center", gap: 6,
+                    backgroundColor: "#E8F8EE", borderRadius: 100,
+                    paddingVertical: 5, paddingHorizontal: 12,
+                    borderWidth: 1, borderColor: "#25D366",
+                  }}
+                >
+                  <Ionicons name="people" size={14} color="#0F6B36" />
+                  <Text style={{ fontSize: 12, color: "#0F6B36", fontFamily: "Inter_700Bold", fontWeight: "700" }}>
+                    {mutualContacts.length} mutual contact{mutualContacts.length > 1 ? "s" : ""} in common
+                  </Text>
+                  <Ionicons name={showMutuals ? "chevron-up" : "chevron-down"} size={13} color="#0F6B36" />
+                </TouchableOpacity>
+                {showMutuals && (
+                  <View style={{ marginTop: 8, width: "100%", gap: 4 }}>
+                    <Text style={{ fontSize: 11, color: COLORS.textMuted, textAlign: "center", marginBottom: 2, fontFamily: "Inter_500Medium" }}>
+                      Contacts saved in your phone who also know this person:
+                    </Text>
+                    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, justifyContent: "center" }}>
+                      {mutualContacts.map((name, i) => (
+                        <View key={i} style={[posterProfileStyles.badge, posterProfileStyles.mutualBadge]}>
+                          <Ionicons name="person" size={11} color="#0F6B36" />
+                          <Text style={posterProfileStyles.mutualBadgeText}>{name}</Text>
+                        </View>
+                      ))}
                     </View>
-                  ))}
-                </View>
+                  </View>
+                )}
               </View>
             )}
             {!loading && mutualContacts.length === 0 && !isDirectContact && (
@@ -3639,23 +3661,7 @@ function PosterProfileModal({ visible, load, contactName, contactsMap, viewerPho
             </View>
           </View>
 
-          {/* Action buttons */}
-          <View style={{ flexDirection: "row", gap: 10, marginBottom: 16 }}>
-            <TouchableOpacity
-              style={[styles.primaryBtn, { flex: 1, marginTop: 0 }]}
-              onPress={() => Linking.openURL(`tel:${load.poster_phone}`).catch(() => Alert.alert("Error", "Cannot open dialer"))}
-            >
-              <Ionicons name="call" size={16} color={COLORS.surface} />
-              <Text style={styles.primaryBtnText}>Call</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.whatsappBtn, { flex: 1 }]}
-              onPress={() => Linking.openURL(`https://wa.me/91${load.poster_phone}`).catch(() => Alert.alert("Error", "Cannot open WhatsApp"))}
-            >
-              <Ionicons name="logo-whatsapp" size={16} color={COLORS.surface} />
-              <Text style={styles.primaryBtnText}>WhatsApp</Text>
-            </TouchableOpacity>
-          </View>
+          {/* Action buttons removed per UX feedback */}
 
           {/* Recent loads */}
           <Text style={styles.sectionHeading}>Posted Loads</Text>
