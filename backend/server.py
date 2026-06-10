@@ -746,6 +746,8 @@ class UserProfile(BaseModel):
     name: str
     company: Optional[str] = ""
     contacts: Optional[List[str]] = None   # normalized 10-digit phones from user's phonebook
+    pan_number: Optional[str] = None
+    aadhar_number: Optional[str] = None
 
 
 class UserProfileOut(BaseModel):
@@ -754,9 +756,12 @@ class UserProfileOut(BaseModel):
     company: Optional[str] = ""
     phone_full: Optional[str] = None
     uid: Optional[str] = None
+    profile_verified: bool = False
+    verification_submitted: bool = False   # True once docs have been submitted
     created_at: str
     updated_at: str
     # contacts intentionally excluded from outbound profile responses
+    # pan/aadhar intentionally excluded — never sent to clients
 
 
 def _norm_phone(p: str) -> str:
@@ -797,7 +802,10 @@ async def upsert_user(payload: UserProfile):
     existing = await db.users.find_one({"phone": phone}, {"_id": 0})
     if existing:
         await db.users.update_one({"phone": phone}, {"$set": set_fields})
-        doc = await db.users.find_one({"phone": phone}, {"_id": 0, "contacts": 0})
+        raw = await db.users.find_one({"phone": phone}, {"_id": 0, "contacts": 0, "pan_number": 0, "aadhar_number": 0})
+        doc = raw or {}
+        doc.setdefault("profile_verified", False)
+        doc.setdefault("verification_submitted", False)
     else:
         doc = {
             "phone": phone,
@@ -813,6 +821,10 @@ async def upsert_user(payload: UserProfile):
         await db.users.insert_one(doc)
         doc.pop("_id", None)
         doc.pop("contacts", None)
+        doc.pop("pan_number", None)
+        doc.pop("aadhar_number", None)
+        doc.setdefault("profile_verified", False)
+        doc.setdefault("verification_submitted", False)
     return UserProfileOut(**doc)
 
 
@@ -849,8 +861,56 @@ async def backfill_short_ids():
     return {"backfilled": updated, "message": "short_id index created on loads collection"}
 
 
-class MutualsResponse(BaseModel):
-    mutual_phones: List[str]
+class BatchMutualsRequest(BaseModel):
+    viewer_phone: str
+    poster_phones: List[str]   # list of poster phones to check against
+
+
+class BatchMutualsResponse(BaseModel):
+    # map of poster_phone → list of mutual phones (viewer resolves names client-side)
+    mutuals: dict
+
+
+@api_router.post("/users/mutuals/batch")
+async def get_mutual_contacts_batch(payload: BatchMutualsRequest):
+    """Return mutual contact phones between the viewer and multiple posters
+    in a single call. Used by the load market list to show mutual counts
+    on cards without N individual requests.
+    Caller resolves phone → display-name using their local phonebook."""
+    v = _norm_phone(payload.viewer_phone)
+    if len(v) != 10:
+        raise HTTPException(status_code=400, detail="viewer_phone must be 10 digits")
+
+    # Fetch viewer's contact list once
+    v_doc = await db.users.find_one({"phone": v}, {"_id": 0, "contacts": 1})
+    v_set: set = set((v_doc or {}).get("contacts") or [])
+    if not v_set:
+        return BatchMutualsResponse(mutuals={})
+
+    # Normalise poster phones, deduplicate, exclude viewer
+    poster_phones = list({
+        _norm_phone(p) for p in payload.poster_phones
+        if len(_norm_phone(p)) == 10 and _norm_phone(p) != v
+    })
+    if not poster_phones:
+        return BatchMutualsResponse(mutuals={})
+
+    # Fetch all poster contact lists in one query
+    cursor = db.users.find(
+        {"phone": {"$in": poster_phones}},
+        {"_id": 0, "phone": 1, "contacts": 1}
+    )
+    result: dict = {}
+    async for doc in cursor:
+        p_set: set = set(doc.get("contacts") or [])
+        mutual = list(v_set & p_set)
+        if mutual:
+            result[doc["phone"]] = mutual
+
+    return BatchMutualsResponse(mutuals=result)
+
+
+
 
 
 @api_router.get("/users/{viewer_phone}/mutuals/{poster_phone}", response_model=MutualsResponse)
@@ -897,6 +957,65 @@ async def update_contacts(phone: str, contacts: List[str]):
         upsert=False,
     )
     return {"phone": phone, "contacts_saved": len(cleaned)}
+
+
+class VerificationDocsRequest(BaseModel):
+    pan_number: str
+    aadhar_number: str
+
+
+@api_router.post("/users/{phone}/verify-docs")
+async def submit_verification_docs(phone: str, payload: VerificationDocsRequest):
+    """User submits PAN + Aadhar for manual verification.
+    Stores masked versions for admin review. Marks verification_submitted=True."""
+    phone = _norm_phone(phone)
+    if len(phone) != 10:
+        raise HTTPException(status_code=400, detail="phone must be 10 digits")
+
+    # Basic format validation
+    pan = payload.pan_number.strip().upper()
+    aadhar = payload.aadhar_number.strip().replace(" ", "")
+    import re as _re
+    if not _re.match(r"^[A-Z]{5}[0-9]{4}[A-Z]$", pan):
+        raise HTTPException(status_code=400, detail="Invalid PAN format (e.g. ABCDE1234F)")
+    if not _re.match(r"^\d{12}$", aadhar):
+        raise HTTPException(status_code=400, detail="Aadhar must be 12 digits")
+
+    now = datetime.now(timezone.utc).isoformat()
+    result = await db.users.update_one(
+        {"phone": phone},
+        {"$set": {
+            "pan_number": pan,
+            "aadhar_number": aadhar,
+            "verification_submitted": True,
+            "verification_submitted_at": now,
+            "profile_verified": False,   # Admin must manually approve
+        }},
+        upsert=False,
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"phone": phone, "verification_submitted": True,
+            "message": "Documents submitted. Verification is under review."}
+
+
+@api_router.patch("/users/{phone}/profile-verify")
+async def set_profile_verified(phone: str, payload: dict):
+    """Admin-only: approve or reject a user's profile verification."""
+    import os
+    admin_key = os.getenv("ADMIN_KEY", "")
+    if not admin_key or payload.get("admin_key") != admin_key:
+        raise HTTPException(status_code=403, detail="Invalid admin key")
+    phone = _norm_phone(phone)
+    verified = bool(payload.get("verified", False))
+    now = datetime.now(timezone.utc).isoformat()
+    result = await db.users.update_one(
+        {"phone": phone},
+        {"$set": {"profile_verified": verified, "profile_verified_at": now}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"phone": phone, "profile_verified": verified}
 
 
 class VerifyLoadRequest(BaseModel):
