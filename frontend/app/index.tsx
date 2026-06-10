@@ -97,7 +97,7 @@ const TRUCK_TYPES: { name: string; image: any }[] = [
   { name: "Trailer", image: require("../assets/trucks/trailer.png") },
 ];
 
-type Profile = { name: string; phone: string; company: string };
+type Profile = { name: string; phone: string; company: string; profile_verified?: boolean; verification_submitted?: boolean };
 
 type Load = {
   id: string;
@@ -215,6 +215,7 @@ export default function Index() {
   const [loaded, setLoaded] = useState(false);
   const [tab, setTab] = useState<"post" | "market">("post");
   const [showProfile, setShowProfile] = useState(false);
+  const [showEditProfile, setShowEditProfile] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -305,9 +306,19 @@ useEffect(() => {
   }, [profile]);
 
   const saveProfile = async (p: Profile) => {
-    await AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(p));
-    setProfile(p);
-    // Persist to backend (best-effort; doesn't block UX if offline).
+    // Fetch latest verified status from backend before saving
+    let enriched = { ...p };
+    try {
+      const r = await fetch(`${API}/users/${encodeURIComponent(p.phone)}`);
+      if (r.ok) {
+        const data = await r.json();
+        enriched.profile_verified = data.profile_verified ?? false;
+        enriched.verification_submitted = data.verification_submitted ?? false;
+      }
+    } catch {}
+    await AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(enriched));
+    setProfile(enriched);
+    // Persist name/company to backend (best-effort; doesn't block UX if offline).
     try {
       await fetch(`${API}/users`, {
         method: "POST",
@@ -368,12 +379,24 @@ useEffect(() => {
     return <ProfileSetup onSave={saveProfile} lockedPhone={phoneVerified.phone} />;
   }
 
+  if (showEditProfile && profile) {
+    return (
+      <ProfileSetup
+        onSave={async (p) => { await saveProfile({ ...p, phone: profile.phone }); setShowEditProfile(false); }}
+        lockedPhone={profile.phone}
+        initialName={profile.name}
+        initialCompany={profile.company}
+        isEditing
+      />
+    );
+  }
+
   if (showProfile) {
     return (
       <ProfileScreen
         profile={profile}
         onClose={() => setShowProfile(false)}
-        onEdit={() => { setShowProfile(false); setProfile(null); }}
+        onEdit={() => { setShowProfile(false); setShowEditProfile(true); }}
       />
     );
   }
@@ -465,10 +488,16 @@ function TabButton({ label, icon, active, onPress, testID }: any) {
 }
 
 // ============== Profile Setup ==============
-function ProfileSetup({ onSave, lockedPhone }: { onSave: (p: Profile) => void; lockedPhone?: string }) {
-  const [name, setName] = useState("");
+function ProfileSetup({ onSave, lockedPhone, initialName, initialCompany, isEditing }: {
+  onSave: (p: Profile) => void;
+  lockedPhone?: string;
+  initialName?: string;
+  initialCompany?: string;
+  isEditing?: boolean;
+}) {
+  const [name, setName] = useState(initialName || "");
   const [phone, setPhone] = useState(lockedPhone || "");
-  const [company, setCompany] = useState("");
+  const [company, setCompany] = useState(initialCompany || "");
   const phoneIsLocked = !!lockedPhone && /^\d{10}$/.test(lockedPhone);
 
   const submit = () => {
@@ -481,8 +510,8 @@ function ProfileSetup({ onSave, lockedPhone }: { onSave: (p: Profile) => void; l
     <SafeAreaView style={[styles.fill, { backgroundColor: COLORS.bg }]}>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.fill}>
         <ScrollView contentContainerStyle={styles.profileWrap} keyboardShouldPersistTaps="handled">
-          <Text style={styles.profileTitle}>Welcome to Truck Traffic PTL</Text>
-          <Text style={styles.profileSubtitle}>Set up your profile to start posting and finding loads</Text>
+          <Text style={styles.profileTitle}>{isEditing ? "Edit Profile" : "Welcome to Truck Traffic"}</Text>
+          <Text style={styles.profileSubtitle}>{isEditing ? "Update your name or company details" : "Set up your profile to start posting and finding loads"}</Text>
           <View style={{ height: 24 }} />
           <Field label="Your Name *">
             <TextInput testID="profile-name-input" style={styles.input} placeholder="e.g., Rajesh Kumar" placeholderTextColor={COLORS.textSubtle} value={name} onChangeText={setName} />
@@ -502,8 +531,8 @@ function ProfileSetup({ onSave, lockedPhone }: { onSave: (p: Profile) => void; l
             <TextInput testID="profile-company-input" style={styles.input} placeholder="Transport company name" placeholderTextColor={COLORS.textSubtle} value={company} onChangeText={setCompany} />
           </Field>
           <TouchableOpacity testID="profile-save-btn" style={styles.primaryBtn} onPress={submit}>
-            <Text style={styles.primaryBtnText}>Continue</Text>
-            <Ionicons name="arrow-forward" size={20} color={COLORS.surface} />
+            <Text style={styles.primaryBtnText}>{isEditing ? "Save Changes" : "Continue"}</Text>
+            <Ionicons name={isEditing ? "checkmark" : "arrow-forward"} size={20} color={COLORS.surface} />
           </TouchableOpacity>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -1344,14 +1373,118 @@ if (!destValid)
   );
 }
 
+// ============== VerificationDocsScreen ==============
+function VerificationDocsScreen({ phone, alreadySubmitted, onClose }: {
+  phone: string;
+  alreadySubmitted: boolean;
+  onClose: () => void;
+}) {
+  const [pan, setPan] = useState("");
+  const [aadhar, setAadhar] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [submitted, setSubmitted] = useState(alreadySubmitted);
+
+  const submit = async () => {
+    const panClean = pan.trim().toUpperCase();
+    const aadharClean = aadhar.replace(/\D/g, "");
+    if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(panClean))
+      return Alert.alert("Invalid PAN", "PAN must be in format ABCDE1234F");
+    if (aadharClean.length !== 12)
+      return Alert.alert("Invalid Aadhar", "Aadhar must be exactly 12 digits");
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/users/${encodeURIComponent(phone)}/verify-docs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pan_number: panClean, aadhar_number: aadharClean }),
+      });
+      const data = await res.json();
+      if (!res.ok) return Alert.alert("Error", data.detail || "Submission failed");
+      setSubmitted(true);
+      Alert.alert("Submitted ✅", "Your documents have been submitted. You will be verified within 24–48 hours.");
+    } catch {
+      Alert.alert("Error", "Could not submit. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Modal visible animationType="slide" onRequestClose={onClose}>
+      <SafeAreaView style={[styles.fill, { backgroundColor: COLORS.bg }]} edges={["top"]}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={onClose} style={styles.iconBtn}>
+            <Ionicons name="arrow-back" size={24} color={COLORS.text} />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Get Verified</Text>
+          <View style={{ width: 40 }} />
+        </View>
+        <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: 40 }}>
+          {submitted ? (
+            <View style={{ alignItems: "center", paddingTop: 40, gap: 16 }}>
+              <Ionicons name="time-outline" size={56} color={COLORS.secondary} />
+              <Text style={{ fontSize: 18, fontFamily: "Inter_700Bold", color: COLORS.text, textAlign: "center" }}>
+                Verification Under Review
+              </Text>
+              <Text style={{ fontSize: 14, color: COLORS.textMuted, textAlign: "center", lineHeight: 22 }}>
+                Your PAN and Aadhar have been submitted. Our team will verify your details within 24–48 hours. You will get a verified badge once approved.
+              </Text>
+            </View>
+          ) : (
+            <>
+              <View style={{ backgroundColor: "#EEF2FA", borderRadius: 12, padding: 14, marginBottom: 20 }}>
+                <Text style={{ fontSize: 13, color: COLORS.primary, fontFamily: "Inter_600SemiBold", lineHeight: 20 }}>
+                  Verified transporters get a ✅ badge on their profile, building trust with customers. Your documents are stored securely and never shared.
+                </Text>
+              </View>
+              <Field label="PAN Number *">
+                <TextInput
+                  style={styles.input}
+                  value={pan}
+                  onChangeText={(t) => setPan(t.toUpperCase())}
+                  placeholder="e.g. ABCDE1234F"
+                  placeholderTextColor={COLORS.textSubtle}
+                  autoCapitalize="characters"
+                  maxLength={10}
+                />
+              </Field>
+              <Field label="Aadhar Number *">
+                <TextInput
+                  style={styles.input}
+                  value={aadhar}
+                  onChangeText={(t) => setAadhar(t.replace(/\D/g, "").slice(0, 12))}
+                  placeholder="12-digit Aadhar number"
+                  placeholderTextColor={COLORS.textSubtle}
+                  keyboardType="number-pad"
+                  maxLength={12}
+                />
+              </Field>
+              <Text style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 20, lineHeight: 17 }}>
+                Your details are encrypted and only used for identity verification. We do not share this with third parties.
+              </Text>
+              <TouchableOpacity style={styles.primaryBtn} onPress={submit} disabled={loading}>
+                {loading
+                  ? <ActivityIndicator color={COLORS.surface} />
+                  : <><Ionicons name="shield-checkmark" size={18} color={COLORS.surface} /><Text style={styles.primaryBtnText}>Submit for Verification</Text></>
+                }
+              </TouchableOpacity>
+            </>
+          )}
+        </ScrollView>
+      </SafeAreaView>
+    </Modal>
+  );
+}
+
 // ============== Profile Screen ==============
 function ProfileScreen({ profile, onClose, onEdit }: { profile: Profile; onClose: () => void; onEdit: () => void }) {
   const [myLoads, setMyLoads] = useState<Load[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [editLoad, setEditLoad] = useState<Load | null>(null);
+  const [showVerifyDocs, setShowVerifyDocs] = useState(false);
 
-  const handleInvite = async () => {
+const handleInvite = async () => {
     const msg = `🚛 *Join me on Truck Traffic!*\n\nFind truck space & post loads instantly across India.\n\n📲 Download the app or visit: https://www.trucktraffic.in\n\nLet\'s connect on the platform!`;
     try {
       await Linking.openURL(`https://wa.me/?text=${encodeURIComponent(msg)}`);
@@ -1419,6 +1552,24 @@ function ProfileScreen({ profile, onClose, onEdit }: { profile: Profile; onClose
                 <Ionicons name="call-outline" size={14} color={COLORS.textMuted} />
                 <Text style={styles.profileCardPhone} testID="profile-card-phone">+91 {profile.phone}</Text>
               </View>
+              {/* Verification badge / CTA */}
+              {profile.profile_verified ? (
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 10, backgroundColor: "#E6F9F0", borderRadius: 100, paddingVertical: 5, paddingHorizontal: 14, borderWidth: 1, borderColor: "#1A9E5A" }}>
+                  <Ionicons name="checkmark-circle" size={16} color="#1A9E5A" />
+                  <Text style={{ fontSize: 12, color: "#1A9E5A", fontFamily: "Inter_700Bold", fontWeight: "700" }}>Verified Transporter</Text>
+                </View>
+              ) : (
+                <TouchableOpacity
+                  style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 10, backgroundColor: "#FFF4EE", borderRadius: 100, paddingVertical: 5, paddingHorizontal: 14, borderWidth: 1, borderColor: COLORS.secondary }}
+                  onPress={() => setShowVerifyDocs(true)}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="shield-checkmark-outline" size={16} color={COLORS.secondary} />
+                  <Text style={{ fontSize: 12, color: COLORS.secondary, fontFamily: "Inter_700Bold", fontWeight: "700" }}>
+                    {profile.verification_submitted ? "Verification Under Review" : "Get Verified →"}
+                  </Text>
+                </TouchableOpacity>
+              )}
             </View>
             <View style={styles.statsRow}>
               <View style={styles.statBox}><Text style={styles.statValue} testID="my-loads-count">{myLoads.length}</Text><Text style={styles.statLabel}>Loads Posted</Text></View>
@@ -1451,6 +1602,13 @@ function ProfileScreen({ profile, onClose, onEdit }: { profile: Profile; onClose
           </View>
         )}
       />
+      {showVerifyDocs && (
+        <VerificationDocsScreen
+          phone={profile.phone}
+          alreadySubmitted={!!profile.verification_submitted}
+          onClose={() => setShowVerifyDocs(false)}
+        />
+      )}
       {editLoad && (
         <EditLoadModal
           load={editLoad}
