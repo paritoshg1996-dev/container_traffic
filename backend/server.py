@@ -913,6 +913,10 @@ async def get_mutual_contacts_batch(payload: BatchMutualsRequest):
 
 
 
+class MutualsResponse(BaseModel):
+    mutual_phones: List[str]
+
+
 @api_router.get("/users/{viewer_phone}/mutuals/{poster_phone}", response_model=MutualsResponse)
 async def get_mutual_contacts(viewer_phone: str, poster_phone: str):
     """Return phones present in BOTH viewer's and poster's contact lists.
