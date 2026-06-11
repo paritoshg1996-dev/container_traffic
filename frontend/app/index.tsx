@@ -253,58 +253,6 @@ useEffect(() => {
   }
 }, []);
 
-	
-  // Ask for contacts permission once profile is set up, then sync the contact
-  // phone numbers to the backend. Only the 10-digit numbers are sent — no
-  // names, no other PII. This powers the mutual-contacts feature in the
-  // PosterProfileModal (poster's backend contacts ∩ viewer's backend contacts).
-  useEffect(() => {
-    if (!profile) return;
-    (async () => {
-      try {
-        const { status: cur } = await Contacts.getPermissionsAsync();
-        let granted = cur === "granted";
-        if (!granted) {
-          const asked = await AsyncStorage.getItem("contacts_perm_asked");
-          if (asked === "1") return; // already asked and denied — don't re-prompt
-          const { status } = await Contacts.requestPermissionsAsync();
-          await AsyncStorage.setItem("contacts_perm_asked", "1");
-          granted = status === "granted";
-          if (!granted) {
-            Alert.alert(
-              "Contacts permission",
-              "You can grant contacts access anytime from Settings to enable the mutual-contacts feature."
-            );
-            return;
-          }
-        }
-        // Permission granted — read all phone numbers and push to backend.
-        // Numbers only (no names). Backend normalises to 10-digit and stores.
-        const { data } = await Contacts.getContactsAsync({
-          fields: [Contacts.Fields.PhoneNumbers],
-        });
-        const phones: string[] = [];
-        for (const c of data) {
-          for (const n of ((c as any).phoneNumbers || [])) {
-            const digits = String(n?.number || "").replace(/\D/g, "");
-            if (digits.length >= 10) phones.push(digits.slice(-10));
-          }
-        }
-        if (phones.length > 0) {
-          try {
-            await fetch(`${API}/users/${encodeURIComponent(profile.phone)}/contacts`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ phone: profile.phone, contact_phones: phones }),
-            });
-          } catch (e) {
-            console.log("Contact sync to backend failed (non-critical):", e);
-          }
-        }
-      } catch {}
-    })();
-  }, [profile]);
-
   const saveProfile = async (p: Profile) => {
     // Fetch latest verified status from backend before saving
     let enriched = { ...p };
@@ -1374,6 +1322,7 @@ if (!destValid)
 }
 
 // ============== VerificationDocsScreen ==============
+// ============== VerificationDocsScreen ==============
 function VerificationDocsScreen({ phone, alreadySubmitted, onClose }: {
   phone: string;
   alreadySubmitted: boolean;
@@ -1381,22 +1330,80 @@ function VerificationDocsScreen({ phone, alreadySubmitted, onClose }: {
 }) {
   const [pan, setPan] = useState("");
   const [aadhar, setAadhar] = useState("");
+  const [aadharFrontImg, setAadharFrontImg] = useState<string | null>(null);
+  const [aadharBackImg, setAadharBackImg] = useState<string | null>(null);
+  const [panImg, setPanImg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [submitted, setSubmitted] = useState(alreadySubmitted);
+
+  const pickDocPhoto = async (setter: (uri: string) => void) => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) { Alert.alert("Permission needed", "Please grant photo library access."); return; }
+    const res = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      quality: 0.7,
+      base64: true,
+    });
+    if (!res.canceled && res.assets?.[0]?.base64) {
+      const a = res.assets[0];
+      const MAX = 5 * 1024 * 1024 * 4 / 3;
+      if (a.base64!.length > MAX) {
+        Alert.alert("File too large", "Please choose an image under 5 MB.");
+        return;
+      }
+      setter(`data:${a.mimeType || "image/jpeg"};base64,${a.base64}`);
+    }
+  };
+
+  const takeDocPhoto = async (setter: (uri: string) => void) => {
+    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!perm.granted) { Alert.alert("Permission needed", "Please grant camera access."); return; }
+    const res = await ImagePicker.launchCameraAsync({
+      allowsEditing: true,
+      quality: 0.7,
+      base64: true,
+    });
+    if (!res.canceled && res.assets?.[0]?.base64) {
+      const a = res.assets[0];
+      setter(`data:${a.mimeType || "image/jpeg"};base64,${a.base64}`);
+    }
+  };
+
+  const showPhotoOptions = (setter: (uri: string) => void, label: string) => {
+    Alert.alert(`Upload ${label}`, "Choose source", [
+      { text: "Camera", onPress: () => takeDocPhoto(setter) },
+      { text: "Gallery", onPress: () => pickDocPhoto(setter) },
+      { text: "Cancel", style: "cancel" },
+    ]);
+  };
 
   const submit = async () => {
     const panClean = pan.trim().toUpperCase();
     const aadharClean = aadhar.replace(/\D/g, "");
-    if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(panClean))
+
+    if (panClean && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(panClean))
       return Alert.alert("Invalid PAN", "PAN must be in format ABCDE1234F");
-    if (aadharClean.length !== 12)
+    if (aadharClean && aadharClean.length !== 12)
       return Alert.alert("Invalid Aadhar", "Aadhar must be exactly 12 digits");
+    if (!panClean && !panImg)
+      return Alert.alert("PAN required", "Please enter your PAN number or upload a photo of your PAN card.");
+    if (!aadharClean && !aadharFrontImg)
+      return Alert.alert("Aadhar required", "Please enter your Aadhar number or upload a photo of the front of your Aadhar card.");
+
     setLoading(true);
     try {
+      const body: any = {};
+      if (panClean) body.pan_number = panClean;
+      if (aadharClean) body.aadhar_number = aadharClean;
+      if (aadharFrontImg) body.aadhar_front_img = aadharFrontImg;
+      if (aadharBackImg) body.aadhar_back_img = aadharBackImg;
+      if (panImg) body.pan_img = panImg;
+
       const res = await fetch(`${API}/users/${encodeURIComponent(phone)}/verify-docs`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pan_number: panClean, aadhar_number: aadharClean }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (!res.ok) return Alert.alert("Error", data.detail || "Submission failed");
@@ -1409,6 +1416,48 @@ function VerificationDocsScreen({ phone, alreadySubmitted, onClose }: {
     }
   };
 
+  // Reusable photo upload tile
+  const DocPhotoTile = ({ label, img, setter }: { label: string; img: string | null; setter: (uri: string) => void }) => (
+    <View style={{ marginBottom: 14 }}>
+      <Text style={[styles.label, { marginBottom: 6 }]}>{label}</Text>
+      <TouchableOpacity
+        style={{
+          borderWidth: 1.5,
+          borderColor: img ? COLORS.primary : COLORS.border,
+          borderStyle: img ? "solid" : "dashed",
+          borderRadius: 12,
+          height: 110,
+          alignItems: "center",
+          justifyContent: "center",
+          backgroundColor: img ? "#F0F4FF" : COLORS.bg,
+          overflow: "hidden",
+        }}
+        onPress={() => showPhotoOptions(setter, label)}
+        activeOpacity={0.75}
+      >
+        {img ? (
+          <>
+            <Image source={{ uri: img }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
+            <View style={{ position: "absolute", bottom: 6, right: 8, backgroundColor: "rgba(0,0,0,0.55)", borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 }}>
+              <Text style={{ color: "#fff", fontSize: 10, fontFamily: "Inter_600SemiBold" }}>Tap to change</Text>
+            </View>
+          </>
+        ) : (
+          <View style={{ alignItems: "center", gap: 6 }}>
+            <Ionicons name="camera-outline" size={28} color={COLORS.textMuted} />
+            <Text style={{ fontSize: 12, color: COLORS.textMuted, fontFamily: "Inter_500Medium" }}>Tap to upload</Text>
+            <Text style={{ fontSize: 10, color: COLORS.textSubtle, fontFamily: "Inter_400Regular" }}>Camera or Gallery</Text>
+          </View>
+        )}
+      </TouchableOpacity>
+      {img && (
+        <TouchableOpacity onPress={() => setter("")} style={{ alignSelf: "flex-end", marginTop: 4 }}>
+          <Text style={{ fontSize: 11, color: COLORS.danger, fontFamily: "Inter_600SemiBold" }}>Remove</Text>
+        </TouchableOpacity>
+      )}
+    </View>
+  );
+
   return (
     <Modal visible animationType="slide" onRequestClose={onClose}>
       <SafeAreaView style={[styles.fill, { backgroundColor: COLORS.bg }]} edges={["top"]}>
@@ -1419,7 +1468,7 @@ function VerificationDocsScreen({ phone, alreadySubmitted, onClose }: {
           <Text style={styles.headerTitle}>Get Verified</Text>
           <View style={{ width: 40 }} />
         </View>
-        <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: 40 }}>
+        <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
           {submitted ? (
             <View style={{ alignItems: "center", paddingTop: 40, gap: 16 }}>
               <Ionicons name="time-outline" size={56} color={COLORS.secondary} />
@@ -1427,7 +1476,7 @@ function VerificationDocsScreen({ phone, alreadySubmitted, onClose }: {
                 Verification Under Review
               </Text>
               <Text style={{ fontSize: 14, color: COLORS.textMuted, textAlign: "center", lineHeight: 22 }}>
-                Your PAN and Aadhar have been submitted. Our team will verify your details within 24–48 hours. You will get a verified badge once approved.
+                Your documents have been submitted. Our team will verify your details within 24–48 hours. You will get a verified badge once approved.
               </Text>
             </View>
           ) : (
@@ -1437,7 +1486,10 @@ function VerificationDocsScreen({ phone, alreadySubmitted, onClose }: {
                   Verified transporters get a ✅ badge on their profile, building trust with customers. Your documents are stored securely and never shared.
                 </Text>
               </View>
-              <Field label="PAN Number *">
+
+              {/* ── PAN ── */}
+              <Text style={[styles.sectionHeading, { marginBottom: 8 }]}>PAN Card</Text>
+              <Field label="PAN Number (optional if photo uploaded)">
                 <TextInput
                   style={styles.input}
                   value={pan}
@@ -1448,7 +1500,13 @@ function VerificationDocsScreen({ phone, alreadySubmitted, onClose }: {
                   maxLength={10}
                 />
               </Field>
-              <Field label="Aadhar Number *">
+              <DocPhotoTile label="PAN Card Photo" img={panImg} setter={setPanImg} />
+
+              <View style={[styles.divider, { marginVertical: 16 }]} />
+
+              {/* ── AADHAR ── */}
+              <Text style={[styles.sectionHeading, { marginBottom: 8 }]}>Aadhar Card</Text>
+              <Field label="Aadhar Number (optional if photo uploaded)">
                 <TextInput
                   style={styles.input}
                   value={aadhar}
@@ -1459,9 +1517,13 @@ function VerificationDocsScreen({ phone, alreadySubmitted, onClose }: {
                   maxLength={12}
                 />
               </Field>
+              <DocPhotoTile label="Aadhar Front *" img={aadharFrontImg} setter={setAadharFrontImg} />
+              <DocPhotoTile label="Aadhar Back (optional)" img={aadharBackImg} setter={setAadharBackImg} />
+
               <Text style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 20, lineHeight: 17 }}>
-                Your details are encrypted and only used for identity verification. We do not share this with third parties.
+                Your details are encrypted and used only for identity verification. We do not share this with any third party.
               </Text>
+
               <TouchableOpacity style={styles.primaryBtn} onPress={submit} disabled={loading}>
                 {loading
                   ? <ActivityIndicator color={COLORS.surface} />
@@ -3136,6 +3198,7 @@ type Distances = Record<string, { origin: number; dest: number; offRoute: boolea
 // Map of 10-digit phone -> saved contact name from the user's address book.
 // Loaded once per app session if contacts permission is granted, so we can
 // show a "Saved" badge next to load posters the user already knows.
+// Also syncs {phone, name} entries to the backend for mutual-contacts matching.
 function useContactsMap(userPhone?: string): Map<string, string> {
   const [map, setMap] = useState<Map<string, string>>(new Map());
 
@@ -3149,7 +3212,9 @@ function useContactsMap(userPhone?: string): Map<string, string> {
           fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name],
         });
         const m = new Map<string, string>();
-        const phones: string[] = [];
+        // Each entry sent to the backend carries both the phone and the
+        // display name so the server can store them together.
+        const contactEntries: { phone: string; name: string }[] = [];
         for (const c of data) {
           const nums = (c as any).phoneNumbers || [];
           for (const n of nums) {
@@ -3157,20 +3222,21 @@ function useContactsMap(userPhone?: string): Map<string, string> {
             if (digits.length >= 10) {
               const local = digits.slice(-10);
               if (!m.has(local)) {
-                m.set(local, (c.name || "").trim());
-                phones.push(local);
+                const displayName = (c.name || "").trim();
+                m.set(local, displayName);
+                contactEntries.push({ phone: local, name: displayName });
               }
             }
           }
         }
         if (cancelled) return;
         setMap(m);
-        // Upload phone numbers to backend for mutual contact matching (best-effort)
-        if (userPhone && phones.length > 0) {
+        // Upload {phone, name} entries to backend for mutual contact matching
+        if (userPhone && contactEntries.length > 0) {
           fetch(`${API}/users/${encodeURIComponent(userPhone)}/contacts`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(phones),
+            body: JSON.stringify(contactEntries),
           }).catch(() => {});
         }
       } catch {}
