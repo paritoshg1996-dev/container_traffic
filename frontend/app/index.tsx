@@ -223,30 +223,11 @@ export default function Index() {
         AsyncStorage.getItem(PROFILE_KEY),
         AsyncStorage.getItem(PHONE_VERIFIED_KEY),
       ]);
-      let parsedProfile: Profile | null = null;
       if (rawProfile) {
-        try { parsedProfile = JSON.parse(rawProfile); setProfile(parsedProfile); } catch {}
+        try { setProfile(JSON.parse(rawProfile)); } catch {}
       }
       if (rawVerif) {
         try { setPhoneVerified(JSON.parse(rawVerif)); } catch {}
-      }
-      // Always re-fetch verified status from backend on startup so that
-      // admin changes to profile_verified / verification_submitted are
-      // reflected immediately without requiring the user to edit their profile.
-      if (parsedProfile?.phone) {
-        try {
-          const r = await fetch(`${API}/users/${encodeURIComponent(parsedProfile.phone)}`);
-          if (r.ok) {
-            const data = await r.json();
-            const refreshed: Profile = {
-              ...parsedProfile,
-              profile_verified: data.profile_verified ?? false,
-              verification_submitted: data.verification_submitted ?? false,
-            };
-            await AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(refreshed));
-            setProfile(refreshed);
-          }
-        } catch {}
       }
       setLoaded(true);
     })();
@@ -317,8 +298,6 @@ useEffect(() => {
               name: data.name,
               phone: data.phone,
               company: data.company || "",
-              profile_verified: data.profile_verified ?? false,
-              verification_submitted: data.verification_submitted ?? false,
             };
             await AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(restored));
             setProfile(restored);
@@ -1641,12 +1620,6 @@ const handleInvite = async () => {
                   <Ionicons name="checkmark-circle" size={16} color="#1A9E5A" />
                   <Text style={{ fontSize: 12, color: "#1A9E5A", fontFamily: "Inter_700Bold", fontWeight: "700" }}>Verified Transporter</Text>
                 </View>
-              ) : profile.verification_submitted ? (
-                // Docs submitted but not yet approved — non-tappable, informational only
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 10, backgroundColor: "#FFF8ED", borderRadius: 100, paddingVertical: 5, paddingHorizontal: 14, borderWidth: 1, borderColor: "#F59E0B" }}>
-                  <Ionicons name="time-outline" size={16} color="#F59E0B" />
-                  <Text style={{ fontSize: 12, color: "#F59E0B", fontFamily: "Inter_700Bold", fontWeight: "700" }}>Verification Under Review</Text>
-                </View>
               ) : (
                 <TouchableOpacity
                   style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 10, backgroundColor: "#FFF4EE", borderRadius: 100, paddingVertical: 5, paddingHorizontal: 14, borderWidth: 1, borderColor: COLORS.secondary }}
@@ -1654,7 +1627,9 @@ const handleInvite = async () => {
                   activeOpacity={0.8}
                 >
                   <Ionicons name="shield-checkmark-outline" size={16} color={COLORS.secondary} />
-                  <Text style={{ fontSize: 12, color: COLORS.secondary, fontFamily: "Inter_700Bold", fontWeight: "700" }}>Get Verified →</Text>
+                  <Text style={{ fontSize: 12, color: COLORS.secondary, fontFamily: "Inter_700Bold", fontWeight: "700" }}>
+                    {profile.verification_submitted ? "Verification Under Review" : "Get Verified →"}
+                  </Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -2689,7 +2664,7 @@ const pincode: string =
   await saveRecentSearch(testIDPrefix, { ...s, pincode: addressPin });
 
   onSelect(
-    s.placeName || s.name,
+    s.locality || s.placeName || s.name,
     addressPin,
     {
       city: s.city || "",
@@ -2753,7 +2728,7 @@ const pincode: string =
       locality: finalLocality,
     };
     await saveRecentSearch(testIDPrefix, enriched);
-    onSelect(enriched.name, enriched.pincode, {
+    onSelect(finalLocality || enriched.placeName || enriched.name, enriched.pincode, {
       city: finalCity,
       locality: finalLocality,
       state: finalState,
@@ -2920,7 +2895,7 @@ const pincode: string =
                   />
                 </View>
                 <View style={srm.rowBody}>
-                  <Text style={srm.rowName} numberOfLines={1}>{s.placeName || s.name}</Text>
+                  <Text style={srm.rowName} numberOfLines={1}>{s.locality || s.placeName || s.name}</Text>
                   {subLine ? <Text style={srm.rowSub} numberOfLines={1}>{subLine}</Text> : null}
                 </View>
                 <Text style={srm.rowPin}>{s.pincode}</Text>
