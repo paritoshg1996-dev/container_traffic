@@ -2650,16 +2650,10 @@ const pincode: string =
     }
   };
 
-  const pick = async (s: CitySuggestion, displayOverride?: string) => {
+  const pick = async (s: CitySuggestion) => {
   console.log("PICKED", s);
-  // displayLabel: what appears in the origin/destination input box after selection.
-  // Use the explicit override first (e.g. for recents where query is empty),
-  // then the query the user typed (the most recognisable label — e.g. "Vashi",
-  // "Whitefield"), then fall back to locality/placeName from Mappls.
-  const displayLabel =
-    displayOverride ||
-    (query.trim().length >= 2 ? query.trim() : "") ||
-    s.locality || s.placeName || s.name;
+	 
+	  
 	 if (!s.pincode) {
   // Autosuggest never returns lat/lon — but placeAddress always contains
   // the pincode (e.g. "Mumbai, Maharashtra, 400053"). Extract it and use
@@ -2667,14 +2661,18 @@ const pincode: string =
   // given that the Place Detail API does not return coords on our plan.
   const addressPin = (s.fullAddress || "").match(/\b(\d{6})\b/)?.[1] || "";
 
-  await saveRecentSearch(testIDPrefix, { ...s, pincode: addressPin, name: displayLabel });
+  await saveRecentSearch(testIDPrefix, { ...s, pincode: addressPin });
+
+  const displayLocality = (!isPincodeMode && query.trim().length >= 2)
+    ? query.trim()
+    : s.locality || s.name || "";
 
   onSelect(
-    displayLabel,
+    displayLocality,
     addressPin,
     {
       city: s.city || "",
-      locality: s.locality || s.name || "",
+      locality: displayLocality,
       state: s.state || "",
       valid: true,
       placeName: s.placeName || s.name || "",
@@ -2733,13 +2731,23 @@ const pincode: string =
       state: finalState,
       locality: finalLocality,
     };
-    await saveRecentSearch(testIDPrefix, { ...enriched, name: displayLabel });
-    onSelect(displayLabel, enriched.pincode, {
+    await saveRecentSearch(testIDPrefix, { ...enriched, locality: displayLocality });
+
+    // SmartRouteInput renders `info.locality` as the primary display line (line1).
+    // It ignores the first `text` argument of onSelect entirely.
+    // So we must put the user's typed query into locality — that's the label
+    // they recognise ("Vashi", "Whitefield"). finalLocality from the pincode
+    // API ("KU Bazar", "EPIP Zone") is Mappls/postal data the user never typed.
+    // We keep finalLocality in a separate field for backend storage.
+    const displayLocality = (!isPincodeMode && query.trim().length >= 2)
+      ? query.trim()
+      : finalLocality;
+
+    onSelect(displayLocality, enriched.pincode, {
       city: finalCity,
-      locality: finalLocality,
+      locality: displayLocality,
       state: finalState,
       valid: true,
-      // Precision tier — preserved exactly for backend storage.
       placeName: s.placeName || s.name || "",
       fullAddress: s.fullAddress || "",
       latitude: s.latitude ?? null,
@@ -2890,7 +2898,7 @@ const pincode: string =
               <TouchableOpacity
                 testID={`${testIDPrefix}-modal-suggest-${s.pincode}`}
                 style={srm.row}
-                onPress={() => pick(s, item.section === "recent" ? s.name : undefined)}
+                onPress={() => pick(s)}
                 activeOpacity={0.7}
               >
                 <View style={srm.rowIcon}>
@@ -2901,7 +2909,7 @@ const pincode: string =
                   />
                 </View>
                 <View style={srm.rowBody}>
-                  <Text style={srm.rowName} numberOfLines={1}>{s.name || s.placeName}</Text>
+                  <Text style={srm.rowName} numberOfLines={1}>{s.placeName || s.name}</Text>
                   {subLine ? <Text style={srm.rowSub} numberOfLines={1}>{subLine}</Text> : null}
                 </View>
                 <Text style={srm.rowPin}>{s.pincode}</Text>
