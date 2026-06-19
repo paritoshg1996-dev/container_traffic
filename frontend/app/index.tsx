@@ -2650,10 +2650,16 @@ const pincode: string =
     }
   };
 
-  const pick = async (s: CitySuggestion) => {
+  const pick = async (s: CitySuggestion, displayOverride?: string) => {
   console.log("PICKED", s);
-	 
-	  
+  // displayLabel: what appears in the origin/destination input box after selection.
+  // Use the explicit override first (e.g. for recents where query is empty),
+  // then the query the user typed (the most recognisable label — e.g. "Vashi",
+  // "Whitefield"), then fall back to locality/placeName from Mappls.
+  const displayLabel =
+    displayOverride ||
+    (query.trim().length >= 2 ? query.trim() : "") ||
+    s.locality || s.placeName || s.name;
 	 if (!s.pincode) {
   // Autosuggest never returns lat/lon — but placeAddress always contains
   // the pincode (e.g. "Mumbai, Maharashtra, 400053"). Extract it and use
@@ -2661,10 +2667,10 @@ const pincode: string =
   // given that the Place Detail API does not return coords on our plan.
   const addressPin = (s.fullAddress || "").match(/\b(\d{6})\b/)?.[1] || "";
 
-  await saveRecentSearch(testIDPrefix, { ...s, pincode: addressPin });
+  await saveRecentSearch(testIDPrefix, { ...s, pincode: addressPin, name: displayLabel });
 
   onSelect(
-    s.locality || s.placeName || s.name,
+    displayLabel,
     addressPin,
     {
       city: s.city || "",
@@ -2727,8 +2733,8 @@ const pincode: string =
       state: finalState,
       locality: finalLocality,
     };
-    await saveRecentSearch(testIDPrefix, enriched);
-    onSelect(finalLocality || enriched.placeName || enriched.name, enriched.pincode, {
+    await saveRecentSearch(testIDPrefix, { ...enriched, name: displayLabel });
+    onSelect(displayLabel, enriched.pincode, {
       city: finalCity,
       locality: finalLocality,
       state: finalState,
@@ -2884,7 +2890,7 @@ const pincode: string =
               <TouchableOpacity
                 testID={`${testIDPrefix}-modal-suggest-${s.pincode}`}
                 style={srm.row}
-                onPress={() => pick(s)}
+                onPress={() => pick(s, item.section === "recent" ? s.name : undefined)}
                 activeOpacity={0.7}
               >
                 <View style={srm.rowIcon}>
@@ -2895,7 +2901,7 @@ const pincode: string =
                   />
                 </View>
                 <View style={srm.rowBody}>
-                  <Text style={srm.rowName} numberOfLines={1}>{s.locality || s.placeName || s.name}</Text>
+                  <Text style={srm.rowName} numberOfLines={1}>{s.name || s.placeName}</Text>
                   {subLine ? <Text style={srm.rowSub} numberOfLines={1}>{subLine}</Text> : null}
                 </View>
                 <Text style={srm.rowPin}>{s.pincode}</Text>
