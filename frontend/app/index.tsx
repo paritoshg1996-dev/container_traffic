@@ -2663,10 +2663,7 @@ const pincode: string =
 
   await saveRecentSearch(testIDPrefix, { ...s, pincode: addressPin });
 
-  const displayLocality = (!isPincodeMode && query.trim().length >= 2)
-    ? query.trim()
-    : s.locality || s.name || "";
-
+  const displayLocality = (s.placeName || s.locality || s.name || "").trim();
   onSelect(
     displayLocality,
     addressPin,
@@ -2691,7 +2688,12 @@ const pincode: string =
     // Thane), even if the search result's parsed city/state was incomplete.
     let finalCity = s.city || "";
     let finalState = s.state || "";
-    let finalLocality = s.locality || s.name || "";
+    // Use s.placeName as the display locality — it is exactly the text shown
+    // in the dropdown row that the user saw and tapped. s.locality is derived
+    // from addressTokens and can differ from placeName. j.locality from the
+    // postal API is a post office name (e.g. "Sanpada", "KU Bazar") that the
+    // user never saw — we must never use it as the display label.
+    let finalLocality = (s.placeName || s.locality || s.name || "").trim();
 
     // Hard guard: state must never equal the pincode (frequent Mappls quirk).
     if (finalState && /^\d{6}$/.test(finalState.trim())) finalState = "";
@@ -2702,13 +2704,12 @@ const pincode: string =
       const r = await fetch(`${API}/pincode/${s.pincode}`);
       const j = await r.json();
       if (j && j.valid) {
-        // Prefer pincode-API city/state — authoritative & matches RTO naming.
+        // Postal API is authoritative for city and state only — never locality.
+        // j.locality is a post office admin name, not the area name the user knows.
         if (j.city)  finalCity  = j.city;
         if (j.state) finalState = j.state;
-        // Use the specific locality name (e.g. "Bhandup West") if returned,
-        // otherwise fall back to district ("Mumbai") or the search name.
-        if (j.locality) finalLocality = j.locality;
-        else if (!finalLocality) finalLocality = j.city || s.name;
+        // Only fill locality from postal API if Mappls gave us nothing at all.
+        if (!finalLocality) finalLocality = j.locality || j.city || s.name;
       }
     } catch {}
 
@@ -2731,21 +2732,10 @@ const pincode: string =
       state: finalState,
       locality: finalLocality,
     };
-    await saveRecentSearch(testIDPrefix, { ...enriched, locality: displayLocality });
-
-    // SmartRouteInput renders `info.locality` as the primary display line (line1).
-    // It ignores the first `text` argument of onSelect entirely.
-    // So we must put the user's typed query into locality — that's the label
-    // they recognise ("Vashi", "Whitefield"). finalLocality from the pincode
-    // API ("KU Bazar", "EPIP Zone") is Mappls/postal data the user never typed.
-    // We keep finalLocality in a separate field for backend storage.
-    const displayLocality = (!isPincodeMode && query.trim().length >= 2)
-      ? query.trim()
-      : finalLocality;
-
-    onSelect(displayLocality, enriched.pincode, {
+    await saveRecentSearch(testIDPrefix, enriched);
+    onSelect(finalLocality, enriched.pincode, {
       city: finalCity,
-      locality: displayLocality,
+      locality: finalLocality,
       state: finalState,
       valid: true,
       placeName: s.placeName || s.name || "",
