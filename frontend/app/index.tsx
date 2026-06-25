@@ -4740,13 +4740,14 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute }: {
   );
 }
 
-function PtlGroupDetailModal({ visible, groupId, profile, onClose, onChanged, onJoinNew }: {
+function PtlGroupDetailModal({ visible, groupId, profile, onClose, onChanged, onJoinNew, banner }: {
   visible: boolean;
   groupId: string | null;
   profile: Profile;
   onClose: () => void;
   onChanged: () => void;
   onJoinNew: () => void;
+  banner?: { tone: "success" | "info" | "warn"; title: string; body: string };
 }) {
   const [group, setGroup] = useState<PtlGroup | null>(null);
   const [loading, setLoading] = useState(false);
@@ -4809,6 +4810,36 @@ function PtlGroupDetailModal({ visible, groupId, profile, onClose, onChanged, on
           </View>
         ) : (
           <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+            {banner && (
+              <View
+                testID="ptl-result-banner"
+                style={[
+                  styles.ptlBanner,
+                  banner.tone === "success" && { backgroundColor: "#DCFCE7", borderColor: "#86EFAC" },
+                  banner.tone === "info" && { backgroundColor: "#DBEAFE", borderColor: "#93C5FD" },
+                  banner.tone === "warn" && { backgroundColor: "#FEF3C7", borderColor: "#FDE68A" },
+                ]}
+              >
+                <Ionicons
+                  name={banner.tone === "success" ? "checkmark-circle" : banner.tone === "info" ? "information-circle" : "alert-circle"}
+                  size={22}
+                  color={banner.tone === "success" ? "#15803D" : banner.tone === "info" ? "#1D4ED8" : "#B45309"}
+                />
+                <View style={{ flex: 1, marginLeft: 10 }}>
+                  <Text
+                    style={[
+                      styles.ptlBannerTitle,
+                      banner.tone === "success" && { color: "#15803D" },
+                      banner.tone === "info" && { color: "#1D4ED8" },
+                      banner.tone === "warn" && { color: "#B45309" },
+                    ]}
+                  >
+                    {banner.title}
+                  </Text>
+                  <Text style={styles.ptlBannerBody}>{banner.body}</Text>
+                </View>
+              </View>
+            )}
             <View style={styles.ptlDetailRouteCard}>
               <Text style={styles.ptlDetailCorridor}>{group.corridor}</Text>
               <View style={{ flexDirection: "row", alignItems: "center", marginTop: 6 }}>
@@ -4902,26 +4933,56 @@ function PtlGroupDetailModal({ visible, groupId, profile, onClose, onChanged, on
 }
 
 // ============== Post Partial Load Screen (3rd bottom-nav tab) ==============
-// Shipper-side form to post a partial load. Triggers backend auto-matching.
-// Layout mirrors PostLoadScreen: route inputs → cargo type cards → truck type
-// cards → loading date → weight.
+// Mirrors PostLoadScreen layout 1:1 — same stepper UI for date & weight, same
+// CollapsibleSection blocks for optional fields. On submit, opens the matched
+// or newly-created group inside PtlGroupDetailModal.
 function PostPtlLoadScreen({ profile }: { profile: Profile }) {
+  // Route
   const [originText, setOriginText] = useState("");
   const [originPin, setOriginPin] = useState("");
   const [originInfo, setOriginInfo] = useState<any>(null);
   const [destText, setDestText] = useState("");
   const [destPin, setDestPin] = useState("");
   const [destInfo, setDestInfo] = useState<any>(null);
-  const [cargoType, setCargoType] = useState<string>("");
-  const [cargoCategory, setCargoCategory] = useState<string>("GENERAL");
-  const [truckType, setTruckType] = useState<string>("");
-  const [weightInput, setWeightInput] = useState("");
-  const [date, setDate] = useState<Date>(new Date());
-  const [showDatePicker, setShowDatePicker] = useState(false);
-  const [busy, setBusy] = useState(false);
 
+  // Date & weight (tons)
   const today = useMemo(() => { const d = new Date(); d.setHours(0,0,0,0); return d; }, []);
   const maxDate = useMemo(() => { const d = new Date(today); d.setDate(d.getDate() + 14); return d; }, [today]);
+  const [date, setDate] = useState<Date>(new Date());
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [weight, setWeight] = useState(1.0);                   // tons
+  const [weightModalVisible, setWeightModalVisible] = useState(false);
+  const [weightInput, setWeightInput] = useState("");
+
+  // Product type
+  const [cargoTypes, setCargoTypes] = useState<string[]>([]);   // single-select array
+  const [cargoOther, setCargoOther] = useState("");
+  const [showCargoOtherInput, setShowCargoOtherInput] = useState(false);
+
+  // Optional sections
+  const [dimL, setDimL] = useState("");
+  const [dimB, setDimB] = useState("");
+  const [dimH, setDimH] = useState("");
+  const [truckType, setTruckType] = useState<string>("");
+  const [placement, setPlacement] = useState<string>("");
+  const [images, setImages] = useState<string[]>([]);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+
+  // Result-flow
+  const [busy, setBusy] = useState(false);
+  const [resultGroupId, setResultGroupId] = useState<string | null>(null);
+  const [resultMatched, setResultMatched] = useState<boolean>(false);
+
+  const cargoType = cargoTypes[0] || "";
+  const cargoCategory = useMemo(() => {
+    const ct = (cargoType || "").startsWith("Others:") ? "Others" : cargoType;
+    if (ct === "Fresh Produce") return "PERISHABLE";
+    if (ct === "Drums") return _drumsCat;   // resolved below
+    return "GENERAL";
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cargoType]);
+  // For "Drums" we need to prompt HAZMAT/GENERAL. Keep that choice in a ref.
+  const [_drumsCat, setDrumsCat] = useState<"GENERAL" | "HAZMAT">("GENERAL");
 
   const onDateChange = (event: any, selected?: Date) => {
     if (Platform.OS !== "ios") setShowDatePicker(false);
@@ -4933,37 +4994,75 @@ function PostPtlLoadScreen({ profile }: { profile: Profile }) {
     }
   };
 
-  const handleCargoSelect = (ct: string) => {
-    setCargoType(ct);
-    if (ct === "Drums") {
+  const selectCargoType = (key: string) => {
+    const isOthers = key === "Others";
+    if (cargoTypes.includes(key)) {
+      // Tap selected → deselect
+      setCargoTypes([]);
+      setCargoOther("");
+      setShowCargoOtherInput(false);
+      return;
+    }
+    setCargoTypes([key]);
+    setCargoOther("");
+    setShowCargoOtherInput(isOthers);
+    if (key === "Drums") {
       Alert.alert(
         "Hazardous cargo?",
         "Do these drums contain hazardous material (chemicals, fuel, solvents)?",
         [
-          { text: "No, general cargo", onPress: () => setCargoCategory("GENERAL") },
-          { text: "Yes, HAZMAT", style: "destructive", onPress: () => setCargoCategory("HAZMAT") },
+          { text: "No, general cargo", onPress: () => setDrumsCat("GENERAL") },
+          { text: "Yes, HAZMAT", style: "destructive", onPress: () => setDrumsCat("HAZMAT") },
         ],
         { cancelable: true },
       );
-    } else if (ct === "Fresh Produce") {
-      setCargoCategory("PERISHABLE");
-    } else {
-      setCargoCategory("GENERAL");
     }
   };
+
+  const pickImage = async () => {
+    if (images.length >= 3) { Alert.alert("Limit", "You can attach up to 3 photos."); return; }
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) { Alert.alert("Permission needed", "Please grant photo library access to attach images."); return; }
+    const remaining = 3 - images.length;
+    const res = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: false, allowsMultipleSelection: true, selectionLimit: remaining,
+      quality: 0.7, base64: true,
+    });
+    if (!res.canceled && res.assets && res.assets.length > 0) {
+      const MAX = 50 * 1024 * 1024;
+      const valid = res.assets.slice(0, remaining).filter((a: any) => {
+        if (!a.base64) return false;
+        const bytes = (a.base64.length * 3) / 4;
+        if (bytes > MAX) { Alert.alert("File too large", `"${a.fileName || "Photo"}" exceeds the 50 MB limit.`); return false; }
+        return true;
+      });
+      if (!valid.length) return;
+      setUploadProgress(0);
+      const newOnes: string[] = [];
+      for (let i = 0; i < valid.length; i++) {
+        const a = valid[i];
+        newOnes.push(`data:${a.mimeType || "image/jpeg"};base64,${a.base64}`);
+        setUploadProgress(Math.round(((i + 1) / valid.length) * 100));
+        await new Promise(r => setTimeout(r, 80));
+      }
+      setImages(prev => [...prev, ...newOnes].slice(0, 3));
+      setTimeout(() => setUploadProgress(null), 600);
+    }
+  };
+
+  const removeImage = (idx: number) => setImages(prev => prev.filter((_, i) => i !== idx));
 
   const reset = () => {
     setOriginText(""); setOriginPin(""); setOriginInfo(null);
     setDestText(""); setDestPin(""); setDestInfo(null);
-    setCargoType(""); setCargoCategory("GENERAL"); setTruckType("");
-    setWeightInput(""); setDate(new Date());
+    setDate(new Date()); setWeight(1.0); setWeightInput("");
+    setCargoTypes([]); setCargoOther(""); setShowCargoOtherInput(false); setDrumsCat("GENERAL");
+    setDimL(""); setDimB(""); setDimH("");
+    setTruckType(""); setPlacement(""); setImages([]);
   };
 
   const submit = async () => {
-    // Accept the location if we have EITHER a 6-digit pincode OR enough
-    // location info (city/locality/coords) — matches PostLoadScreen's rule
-    // so users can post with a CITY-level Mappls pick (e.g. "Gurugram") that
-    // has no pincode.
     const originValid =
       /^\d{6}$/.test(originPin) ||
       (originInfo && (
@@ -4978,14 +5077,22 @@ function PostPtlLoadScreen({ profile }: { profile: Profile }) {
       ));
     if (!originValid) return Alert.alert("Origin", "Please select a valid origin from the list.");
     if (!destValid) return Alert.alert("Destination", "Please select a valid destination from the list.");
-    if (!cargoType) return Alert.alert("Cargo type", "Please select a cargo type.");
-    if (!truckType) return Alert.alert("Truck type", "Please select a preferred truck type.");
-    const w = parseFloat(weightInput);
-    if (!w || w <= 0) return Alert.alert("Weight", "Please enter a valid weight in kg.");
-    if (w > TRUCK_CAPACITY_KG) return Alert.alert("Too heavy", `A single partial load can't exceed ${TRUCK_CAPACITY_KG} kg. Use the Post Space flow for a full truck instead.`);
+    if (!cargoType) return Alert.alert("Product type", "Please select a product type.");
+    if (weight <= 0) return Alert.alert("Weight", "Please enter a valid weight in tons.");
+    if (weight > 20) return Alert.alert("Too heavy", "A single partial load can't exceed 20 tons. Use Post Space for a full truck.");
+
+    // Dimension validation (only if entered)
+    const L = dimL ? parseInt(dimL, 10) : null;
+    const B = dimB ? parseInt(dimB, 10) : null;
+    const H = dimH ? parseInt(dimH, 10) : null;
+    if (L !== null && L > 40) return Alert.alert("Invalid length", "Length cannot exceed 40 ft.");
+    if (B !== null && B > 8) return Alert.alert("Invalid breadth", "Breadth cannot exceed 8 ft.");
+    if (H !== null && H > 9) return Alert.alert("Invalid height", "Height cannot exceed 9 ft.");
 
     setBusy(true);
     try {
+      const cargoTypeFinal = cargoType.startsWith("Others:") && cargoOther.trim()
+        ? `Others: ${cargoOther.trim()}` : cargoType;
       const res = await fetch(`${API}/ptl/loads`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -5001,11 +5108,16 @@ function PostPtlLoadScreen({ profile }: { profile: Profile }) {
           destination_pincode: destPin || "",
           destination_latitude: destInfo?.latitude ?? null,
           destination_longitude: destInfo?.longitude ?? null,
-          cargo_type: cargoType,
+          cargo_type: cargoTypeFinal,
           cargo_category: cargoCategory,
-          weight_kg: w,
+          weight_kg: Math.round(weight * 1000),    // tons → kg
           truck_type: truckType,
           loading_date: date.toISOString().slice(0, 10),
+          dimension_length: L,
+          dimension_breadth: B,
+          dimension_height: H,
+          cargo_placement: placement,
+          images,
         }),
       });
       const text = await res.text();
@@ -5019,12 +5131,9 @@ function PostPtlLoadScreen({ profile }: { profile: Profile }) {
         Alert.alert("Could not post", reason);
         return;
       }
-      Alert.alert(
-        "Load posted!",
-        data.group_id
-          ? `You've been matched to group ${data.group_id}. Open your Profile to view it.`
-          : "Starting a new group on this route. Open your Profile to track it.",
-      );
+      // Open the group detail modal with the right banner
+      setResultGroupId(data.group_id);
+      setResultMatched(!!data.matched);
       reset();
     } catch (e: any) {
       Alert.alert("Network error", e?.message || "Please try again.");
@@ -5036,6 +5145,7 @@ function PostPtlLoadScreen({ profile }: { profile: Profile }) {
   return (
     <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.fill}>
       <ScrollView contentContainerStyle={styles.formWrap} keyboardShouldPersistTaps="handled" testID="post-ptl-screen">
+        {/* 1. Route */}
         <SectionTitle icon="navigate-outline" title="Route" />
         <View style={styles.routeInputsRow}>
           <SmartRouteInput
@@ -5059,17 +5169,138 @@ function PostPtlLoadScreen({ profile }: { profile: Profile }) {
           />
         </View>
 
-        <SectionTitle icon="cube-outline" title="Cargo type" />
+        {/* 2. Loading Date — same stepper as Post Space */}
+        <SectionTitle icon="calendar-outline" title="Loading Date" />
+        <View style={[styles.stepperRow, styles.filledBorder]}>
+          <TouchableOpacity
+            testID="ptl-date-minus"
+            style={styles.stepperBtn}
+            onPress={() => {
+              setDate(prev => {
+                const d = new Date(prev); d.setDate(d.getDate() - 1);
+                return d < today ? today : d;
+              });
+            }}
+          >
+            <Text style={styles.stepperBtnText}>-</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            testID="ptl-date-btn"
+            style={styles.stepperCenter}
+            activeOpacity={0.8}
+            onPress={() => setShowDatePicker(true)}
+          >
+            <Ionicons name="calendar" size={14} color={COLORS.primary} />
+            <Text
+              style={styles.stepperDateText}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.6}
+              allowFontScaling={false}
+            >
+              {date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            testID="ptl-date-plus"
+            style={styles.stepperBtn}
+            onPress={() => {
+              setDate(prev => {
+                const d = new Date(prev); d.setDate(d.getDate() + 1);
+                return d > maxDate ? maxDate : d;
+              });
+            }}
+          >
+            <Text style={styles.stepperBtnText}>+</Text>
+          </TouchableOpacity>
+        </View>
+        {showDatePicker && (
+          <DateTimePicker
+            value={date}
+            mode="date"
+            display={Platform.OS === "ios" ? "spinner" : "default"}
+            minimumDate={today}
+            maximumDate={maxDate}
+            onChange={onDateChange}
+          />
+        )}
+
+        {/* 3. Weight in Tons — same stepper + modal as Post Space */}
+        <SectionTitle icon="scale-outline" title="Weight" />
+        <View style={[styles.stepperRow, weight > 0 && styles.filledBorder]}>
+          <TouchableOpacity
+            testID="ptl-weight-minus"
+            style={styles.stepperBtn}
+            onPress={() => setWeight(w => Math.max(0.5, parseFloat((w - 0.5).toFixed(1))))}
+          >
+            <Text style={styles.stepperBtnText}>-</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            testID="ptl-weight-btn"
+            style={styles.stepperCenter}
+            activeOpacity={0.8}
+            onPress={() => { setWeightInput(String(weight)); setWeightModalVisible(true); }}
+          >
+            <Text style={styles.stepperValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6} allowFontScaling={false}>{weight.toFixed(1)}</Text>
+            <Text style={styles.stepperUnit} numberOfLines={1} allowFontScaling={false}>tons</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            testID="ptl-weight-plus"
+            style={styles.stepperBtn}
+            onPress={() => setWeight(w => Math.min(20, parseFloat((w + 0.5).toFixed(1))))}
+          >
+            <Text style={styles.stepperBtnText}>+</Text>
+          </TouchableOpacity>
+        </View>
+
+        <Modal visible={weightModalVisible} transparent animationType="fade" onRequestClose={() => setWeightModalVisible(false)}>
+          <TouchableOpacity style={wmStyles.backdrop} activeOpacity={1} onPress={() => setWeightModalVisible(false)}>
+            <TouchableOpacity style={wmStyles.sheet} activeOpacity={1}>
+              <Text style={wmStyles.title}>Enter Weight</Text>
+              <TextInput
+                style={wmStyles.input}
+                value={weightInput}
+                onChangeText={setWeightInput}
+                keyboardType="decimal-pad"
+                autoFocus
+                placeholder="e.g. 3.5"
+                placeholderTextColor={COLORS.textSubtle}
+              />
+              <View style={wmStyles.presets}>
+                {[1, 2, 3, 5, 8, 12, 18].map(n => (
+                  <TouchableOpacity key={n} style={wmStyles.preset} onPress={() => setWeightInput(String(n))}>
+                    <Text style={wmStyles.presetText}>{n}T</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <TouchableOpacity style={wmStyles.btn} onPress={() => {
+                const n = parseFloat(weightInput);
+                if (!isNaN(n) && n > 20) {
+                  setWeightInput("");
+                  Alert.alert("Weight limit exceeded", "A partial load can't exceed 20 tons. Use Post Space for a full truck.");
+                  return;
+                }
+                if (!isNaN(n) && n > 0) setWeight(parseFloat(n.toFixed(1)));
+                setWeightModalVisible(false);
+              }}>
+                <Text style={wmStyles.btnText}>Set Weight</Text>
+              </TouchableOpacity>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </Modal>
+
+        {/* 4. Product Type */}
+        <SectionTitle icon="cube-outline" title="Product Type" />
         <View style={cargoStyles.grid} testID="ptl-cargo-grid">
           {CARGO_TYPE_OPTIONS.map((opt) => {
-            const selected = cargoType === opt.key;
+            const selected = cargoTypes.includes(opt.key);
             return (
               <TouchableOpacity
                 key={opt.key}
                 testID={`ptl-cargo-${opt.key}`}
                 style={[cargoStyles.tile, selected && cargoStyles.tileSelected]}
-                onPress={() => handleCargoSelect(opt.key)}
-                activeOpacity={0.85}
+                onPress={() => selectCargoType(opt.key)}
+                activeOpacity={0.75}
               >
                 <Image source={opt.image} style={cargoStyles.tileImage} resizeMode="contain" />
                 <Text style={[cargoStyles.tileLabel, selected && cargoStyles.tileLabelSelected]} numberOfLines={1}>{opt.label}</Text>
@@ -5078,6 +5309,21 @@ function PostPtlLoadScreen({ profile }: { profile: Profile }) {
             );
           })}
         </View>
+        {showCargoOtherInput && (
+          <View style={cargoStyles.otherInputWrap}>
+            <TextInput
+              style={cargoStyles.otherInput}
+              value={cargoOther}
+              onChangeText={(t) => {
+                setCargoOther(t);
+                setCargoTypes(t.trim() ? [`Others: ${t.trim()}`] : ["Others"]);
+              }}
+              placeholder="Describe cargo (e.g. Steel coils, Marble slabs…)"
+              placeholderTextColor={COLORS.textSubtle}
+              returnKeyType="done"
+            />
+          </View>
+        )}
         {cargoCategory !== "GENERAL" && cargoType ? (
           <View style={[styles.ptlHazmatBanner, cargoCategory === "PERISHABLE" && { backgroundColor: "#DCFCE7" }]}>
             <Ionicons
@@ -5093,65 +5339,185 @@ function PostPtlLoadScreen({ profile }: { profile: Profile }) {
           </View>
         ) : null}
 
-        <SectionTitle icon="bus-outline" title="Preferred truck" />
-        <View style={styles.truckRow} testID="ptl-truck-row">
-          {TRUCK_TYPES.map((t) => {
-            const selected = truckType === t.name;
-            return (
-              <TouchableOpacity
-                key={t.name}
-                testID={`ptl-truck-${t.name}`}
-                style={[styles.truckCard, selected && styles.truckCardOn, selected && styles.filledBorder]}
-                onPress={() => setTruckType(t.name)}
-                activeOpacity={0.85}
-              >
-                <Image source={t.image} style={[styles.truckImg, selected && styles.truckImgOn]} resizeMode="contain" />
-                <Text style={[styles.truckLabel, selected && styles.truckLabelOn]} numberOfLines={1} allowFontScaling={false}>{t.name}</Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
+        {/* ===== Optional fields (collapsible) ===== */}
+        <Text style={styles.optionalHeading}>Add more details (optional)</Text>
 
-        <SectionTitle icon="calendar-outline" title="Loading date" />
-        <TouchableOpacity
-          testID="ptl-date-btn"
-          style={styles.ptlDateBtn}
-          onPress={() => setShowDatePicker(true)}
-          activeOpacity={0.85}
+        <CollapsibleSection
+          icon="resize-outline"
+          title="Available Space"
+          summary={(dimL || dimB || dimH) ? `${dimL || "-"} x ${dimB || "-"} x ${dimH || "-"} ft` : ""}
+          testID="ptl-opt-space"
         >
-          <Ionicons name="calendar" size={18} color={COLORS.primary} />
-          <Text style={styles.ptlDateBtnText}>
-            {date.toLocaleDateString("en-IN", { weekday: "short", day: "2-digit", month: "short", year: "numeric" })}
-          </Text>
-          <Ionicons name="chevron-down" size={16} color={COLORS.textMuted} />
-        </TouchableOpacity>
-        {showDatePicker && (
-          <DateTimePicker
-            value={date}
-            mode="date"
-            display={Platform.OS === "ios" ? "spinner" : "default"}
-            minimumDate={today}
-            maximumDate={maxDate}
-            onChange={onDateChange}
-          />
-        )}
+          <View style={styles.dimRow} testID="ptl-dimension-row">
+            <View style={styles.dimItem}>
+              <Text style={styles.dimLabel}>Length</Text>
+              <View style={[styles.dimInputWrap, dimL && styles.filledBorder]}>
+                <TextInput
+                  testID="ptl-dim-length-input"
+                  style={styles.dimInputText}
+                  value={dimL}
+                  onChangeText={(t) => {
+                    const digits = t.replace(/\D/g, "");
+                    if (!digits) { setDimL(""); return; }
+                    if (parseInt(digits, 10) > 40) { setDimL(""); return; }
+                    setDimL(digits);
+                  }}
+                  keyboardType="number-pad"
+                  maxLength={3}
+                  placeholder="0"
+                  placeholderTextColor={COLORS.textSubtle}
+                />
+                <Text style={styles.dimSuffix}>ft</Text>
+              </View>
+              {dimL && parseInt(dimL, 10) > 40 ? <Text style={styles.errorText}>Max length: 40 ft</Text> : null}
+            </View>
+            <View style={styles.dimItem}>
+              <Text style={styles.dimLabel}>Breadth</Text>
+              <View style={[styles.dimInputWrap, dimB && styles.filledBorder]}>
+                <TextInput
+                  testID="ptl-dim-breadth-input"
+                  style={styles.dimInputText}
+                  value={dimB}
+                  onChangeText={(t) => {
+                    const digits = t.replace(/\D/g, "");
+                    if (!digits) { setDimB(""); return; }
+                    if (parseInt(digits, 10) > 8) { setDimB(""); return; }
+                    setDimB(digits);
+                  }}
+                  keyboardType="number-pad"
+                  maxLength={2}
+                  placeholder="0"
+                  placeholderTextColor={COLORS.textSubtle}
+                />
+                <Text style={styles.dimSuffix}>ft</Text>
+              </View>
+              {dimB && parseInt(dimB, 10) > 8 ? <Text style={styles.errorText}>Max breadth: 8 ft</Text> : null}
+            </View>
+            <View style={styles.dimItem}>
+              <Text style={styles.dimLabel}>Height</Text>
+              <View style={[styles.dimInputWrap, dimH && styles.filledBorder]}>
+                <TextInput
+                  testID="ptl-dim-height-input"
+                  style={styles.dimInputText}
+                  value={dimH}
+                  onChangeText={(t) => {
+                    const digits = t.replace(/\D/g, "");
+                    if (!digits) { setDimH(""); return; }
+                    if (parseInt(digits, 10) > 9) { setDimH(""); return; }
+                    setDimH(digits);
+                  }}
+                  keyboardType="number-pad"
+                  maxLength={2}
+                  placeholder="0"
+                  placeholderTextColor={COLORS.textSubtle}
+                />
+                <Text style={styles.dimSuffix}>ft</Text>
+              </View>
+              {dimH && parseInt(dimH, 10) > 9 ? <Text style={styles.errorText}>Max height: 9 ft</Text> : null}
+            </View>
+          </View>
+        </CollapsibleSection>
 
-        <SectionTitle icon="barbell-outline" title="Weight" />
-        <View style={styles.ptlWeightRow}>
-          <TextInput
-            testID="ptl-weight-input"
-            style={[styles.input, { flex: 1 }]}
-            placeholder="e.g. 3500"
-            placeholderTextColor={COLORS.textSubtle}
-            keyboardType="number-pad"
-            value={weightInput}
-            onChangeText={(t) => setWeightInput(t.replace(/[^0-9]/g, "").slice(0, 5))}
-          />
-          <Text style={styles.ptlWeightUnit}>kg</Text>
-        </View>
-        <Text style={styles.hintMuted}>
-          Max {TRUCK_CAPACITY_KG.toLocaleString()} kg per partial load. We'll match you with others on the same route.
-        </Text>
+        <CollapsibleSection
+          icon="bus-outline"
+          title="Truck Preference"
+          summary={truckType}
+          testID="ptl-opt-truck"
+        >
+          <View style={styles.truckRow} testID="ptl-truck-row">
+            {TRUCK_TYPES.map((t) => {
+              const on = truckType === t.name;
+              return (
+                <TouchableOpacity
+                  key={t.name}
+                  testID={`ptl-truck-${t.name}`}
+                  style={[styles.truckCard, on && styles.truckCardOn, on && styles.filledBorder]}
+                  onPress={() => setTruckType(prev => prev === t.name ? "" : t.name)}
+                  activeOpacity={0.7}
+                >
+                  <Image source={t.image} style={[styles.truckImg, on && styles.truckImgOn]} resizeMode="contain" />
+                  <Text style={[styles.truckLabel, on && styles.truckLabelOn]} numberOfLines={1} allowFontScaling={false}>{t.name}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </CollapsibleSection>
+
+        <CollapsibleSection
+          icon="layers-outline"
+          title="Cargo Placement"
+          summary={placement}
+          testID="ptl-opt-placement"
+        >
+          <View style={styles.placementRow} testID="ptl-placement-segment">
+            {PLACEMENT_OPTIONS.map((p) => {
+              const on = placement === p.key;
+              return (
+                <TouchableOpacity
+                  key={p.key}
+                  testID={`ptl-placement-${p.key.replace(" ", "-")}`}
+                  style={[
+                    styles.placementCardCompact,
+                    on && (p.key === "Stackable" ? styles.placementCardGreen : styles.placementCardRed),
+                  ]}
+                  onPress={() => setPlacement(prev => prev === p.key ? "" : p.key)}
+                  activeOpacity={0.7}
+                >
+                  <Image source={p.image} style={styles.placementImgCompact} resizeMode="contain" />
+                  <Text
+                    style={[
+                      styles.placementLabelCompact,
+                      on && (p.key === "Stackable" ? styles.placementLabelGreen : styles.placementLabelRed),
+                    ]}
+                  >
+                    {p.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </CollapsibleSection>
+
+        <CollapsibleSection
+          icon="image-outline"
+          title="Photos"
+          summary={images.length > 0 ? `${images.length} photo${images.length > 1 ? "s" : ""}` : ""}
+          testID="ptl-opt-photos"
+        >
+          <Text style={styles.label}>Attach up to 3 photos of the cargo (max 50 MB each)</Text>
+          {uploadProgress !== null && (
+            <View style={{ marginBottom: 10 }}>
+              <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 4 }}>
+                <Text style={{ fontSize: 12, color: COLORS.textMuted, fontFamily: "Inter_500Medium" }}>Uploading photos…</Text>
+                <Text style={{ fontSize: 12, color: COLORS.primary, fontFamily: "Inter_700Bold" }}>{uploadProgress}%</Text>
+              </View>
+              <View style={{ height: 6, backgroundColor: COLORS.border, borderRadius: 3, overflow: "hidden" }}>
+                <View style={{ height: 6, backgroundColor: COLORS.primary, borderRadius: 3, width: `${uploadProgress}%` as any }} />
+              </View>
+            </View>
+          )}
+          <View style={styles.photoRow} testID="ptl-photos-row">
+            {[0, 1, 2].map((idx) => {
+              const img = images[idx];
+              if (img) {
+                return (
+                  <View key={idx} style={styles.photoCell} testID={`ptl-photo-${idx}`}>
+                    <Image source={{ uri: img }} style={styles.photoImg} resizeMode="cover" />
+                    <TouchableOpacity testID={`ptl-photo-remove-${idx}`} onPress={() => removeImage(idx)} style={styles.photoRemoveBtn}>
+                      <Ionicons name="close" size={14} color={COLORS.surface} />
+                    </TouchableOpacity>
+                  </View>
+                );
+              }
+              return (
+                <TouchableOpacity key={idx} testID={`ptl-photo-add-${idx}`} onPress={pickImage} style={[styles.photoCell, styles.photoEmpty]} activeOpacity={0.7}>
+                  <Ionicons name="add" size={28} color={COLORS.textMuted} />
+                  <Text style={styles.photoAddLabel}>Add</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </CollapsibleSection>
 
         <TouchableOpacity
           testID="ptl-post-submit-btn"
@@ -5167,9 +5533,23 @@ function PostPtlLoadScreen({ profile }: { profile: Profile }) {
           )}
         </TouchableOpacity>
         <Text style={[styles.hintMuted, { textAlign: "center", marginTop: 8 }]}>
-          Track this load in your Profile → My Partial Loads.
+          You can track this load in your Profile → My Posted Partial Loads.
         </Text>
       </ScrollView>
+
+      <PtlGroupDetailModal
+        visible={!!resultGroupId}
+        groupId={resultGroupId}
+        profile={profile}
+        onClose={() => setResultGroupId(null)}
+        onChanged={() => {}}
+        onJoinNew={() => setResultGroupId(null)}
+        banner={resultGroupId ? (resultMatched
+          ? { tone: "success", title: "Matched to an existing group", body: "We found a group going on this route — your load has been added." }
+          : { tone: "info",    title: "No existing group found",     body: "We've started a new group on this route. You'll be matched as soon as another shipper joins." })
+          : undefined
+        }
+      />
     </KeyboardAvoidingView>
   );
 }
@@ -5847,6 +6227,9 @@ ptlMyStatusPill: { flexDirection: "row", alignItems: "center", gap: 6, paddingHo
 ptlMyStatusText: { fontSize: 12, fontFamily: "Inter_700Bold", fontWeight: "700" },
 ptlCancelBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 12, paddingVertical: 8, borderRadius: 10, borderWidth: 1, borderColor: "#FECACA" },
 ptlCancelText: { color: COLORS.danger, fontFamily: "Inter_600SemiBold", fontWeight: "600", fontSize: 13 },
+ptlBanner: { flexDirection: "row", alignItems: "flex-start", padding: 14, borderRadius: 12, borderWidth: 1, marginBottom: 14 },
+ptlBannerTitle: { fontSize: 14, fontFamily: "Inter_700Bold", fontWeight: "700" },
+ptlBannerBody: { fontSize: 12, color: COLORS.text, marginTop: 2, lineHeight: 17 },
 ptlDateBtn: { flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border, borderRadius: 14, paddingVertical: 14, paddingHorizontal: 14 },
 ptlDateBtnText: { flex: 1, fontSize: 15, fontFamily: "Inter_600SemiBold", fontWeight: "600", color: COLORS.text },
 ptlWeightRow: { flexDirection: "row", alignItems: "center", gap: 10 },

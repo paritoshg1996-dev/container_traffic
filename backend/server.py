@@ -1247,6 +1247,12 @@ class PtlLoadPost(BaseModel):
     truck_type: Optional[str] = ""   # preferred truck: Open / Container / Trailer
     loading_date: Optional[str] = None   # YYYY-MM-DD
     ready_date: Optional[str] = None     # legacy alias for loading_date
+    # Optional details (collapsible section in the UI)
+    dimension_length: Optional[float] = None    # ft
+    dimension_breadth: Optional[float] = None   # ft
+    dimension_height: Optional[float] = None    # ft
+    cargo_placement: Optional[str] = ""         # "Stackable" | "Non Stackable"
+    images: Optional[List[str]] = None          # base64 data URIs (max 3)
 
 
 class PtlGroupResponse(BaseModel):
@@ -1280,21 +1286,12 @@ def derive_corridor(city: str) -> str:
     return (city or "").strip().upper()
 
 
-async def match_ptl_load(new_load: dict) -> Optional[str]:
+async def match_ptl_load(new_load: dict) -> tuple[str, bool]:
     """Try to assign new_load to an existing FORMING group on the same corridor.
 
-    Steps:
-      1. Corridor check — same origin AND destination city corridor
-      2. Cargo check    — every category already in the group must be compatible
-                          with the new load's category
-      3. Capacity check — group has room for the new weight
-      4. Proximity check — both origin and destination points within
-                          PROXIMITY_KM of the group's anchor coords
-                          (skipped if either side has no coordinates)
-      5. Score & pick   — best score = highest fill % after adding the new load
-      6. Assign or create new group
-
-    Returns the group_id the load was assigned to (existing or newly created).
+    Returns a tuple `(group_id, matched_existing)`:
+      • matched_existing=True  → load was added to an existing FORMING group
+      • matched_existing=False → no group fit; a brand-new group was created
     """
     origin_corridor = derive_corridor(new_load["origin"]["city"])
     dest_corridor = derive_corridor(new_load["destination"]["city"])
@@ -1372,7 +1369,7 @@ async def match_ptl_load(new_load: dict) -> Optional[str]:
             {"id": new_load["id"]},
             {"$set": {"group_id": gid, "status": "MATCHED"}},
         )
-        return gid
+        return gid, True
 
     # No suitable group — create a new one
     gid = f"GRP-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{new_load['poster_phone'][-4:]}-{_gen_short_id(4)}"
@@ -1399,7 +1396,7 @@ async def match_ptl_load(new_load: dict) -> Optional[str]:
         {"id": new_load["id"]},
         {"$set": {"group_id": gid, "status": "MATCHED"}},
     )
-    return gid
+    return gid, False
 
 
 def _strip_group_internals(g: dict) -> dict:
@@ -1449,14 +1446,19 @@ async def post_ptl_load(payload: PtlLoadPost):
         "truck_type": payload.truck_type or "",
         "loading_date": payload.loading_date or payload.ready_date,
         "ready_date": payload.ready_date,
+        "dimension_length": payload.dimension_length,
+        "dimension_breadth": payload.dimension_breadth,
+        "dimension_height": payload.dimension_height,
+        "cargo_placement": payload.cargo_placement or "",
+        "images": payload.images or [],
         "status": "OPEN",
         "group_id": None,
         "posted_at": now.isoformat(),
         "expires_at": (now + timedelta(days=7)),
     }
     await db.ptl_loads.insert_one(doc)
-    group_id = await match_ptl_load(doc)
-    return {"load_id": load_id, "group_id": group_id}
+    group_id, matched = await match_ptl_load(doc)
+    return {"load_id": load_id, "group_id": group_id, "matched": matched}
 
 
 # ── GET my PTL loads ───────────────────────────────────────────────────────
