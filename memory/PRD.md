@@ -1,7 +1,7 @@
 # Truck Traffic PTL — PRD
 
 ## Original Problem Statement
-Add PTL (Partial Truck Load) consolidation feature to existing Truck Traffic app.
+Add PTL (Partial Truck Load) consolidation to existing Truck Traffic app.
 Multiple shippers with small loads on the same route are grouped into a single
 40 ft truck (20,000 kg), splitting cost proportionally by weight.
 
@@ -14,28 +14,22 @@ Multiple shippers with small loads on the same route are grouped into a single
 - **Transporter** — lists truck space (existing flow, unchanged)
 
 ## What's been implemented (Jan 2026)
-### Backend (`server.py`)
-- `PtlLoadPost`, `PtlGroupResponse` Pydantic models
-- Matching algorithm: corridor + cargo compat + 20 t capacity + 25 km proximity
-- Endpoints:
-  - POST `/api/ptl/loads` — post a partial load, auto-matches to FORMING group
-  - GET `/api/ptl/loads/my/{phone}` — list a shipper's own loads
-  - DELETE `/api/ptl/loads/{load_id}?phone=` — cancel (auto-recomputes group)
-  - GET `/api/ptl/groups` — list FORMING / FULL groups (optional `origin_city`, `dest_city`)
-  - GET `/api/ptl/groups/{id}?viewer_phone=` — single group detail (phone exposed only to confirmed mutual members)
-  - POST `/api/ptl/groups/{id}/confirm?phone=` — confirm membership; group → FULL when all confirm
-- Indexes on poster_phone, group_id, status+posted_at, corridor+status, fill_pct
-- TTL index on `expires_at` (7-day auto-expiry)
 
-### Frontend (`index.tsx`)
-- Bottom navigation with 3 tabs: Post Space · Find Truck · My PTL
-- LoadMarketScreen has a Full Truck / Partial Load segmented toggle
-- `PtlGroupCard`, `PostPtlModal` (reuses `SmartRouteInput`), `PtlGroupDetailModal`, `MyPtlScreen`
-- Fill-bar color logic: green <60%, amber 60-85%, orange >85%
-- Drum-cargo HAZMAT confirmation prompt
+### Iteration 1 — MVP
+- Backend models, matching algorithm, 6 endpoints, indexes + TTL
+- Frontend: bottom nav (3 tabs), market mode toggle, PTL group cards, post modal, group detail modal, my-PTL screen
+
+### Iteration 2 — UX refactor (current)
+- **Bottom nav**: Post Space · **Marketplace** (renamed from "Find Truck") · **Post Load** (renamed from "My PTL", now a posting form)
+- **Marketplace toggle**: **Find Truck** / **Find Partial Load** (renamed from Full / Partial)
+- **Removed** "Post your partial load" CTA from marketplace
+- **Post Load tab** is now a full posting form (mirrors `PostLoadScreen` layout): SmartRouteInput origin/dest, cargo-type grid (Bags / Carton Box / Pipes / Drums / Fresh Produce / Others), truck-type cards (Open / Container / Trailer), loading date picker, weight (kg). Drums → HAZMAT confirmation; Fresh Produce auto-tags PERISHABLE
+- **Profile page** now shows both "My Posted Truck Spaces" (existing) AND "My Posted Partial Loads" with status pills + cancel actions
+- Backend `PtlLoadPost` accepts new optional fields: `truck_type`, `loading_date` (alongside legacy `ready_date`)
 
 ## Backlog
-- P1: Push notifications when a group reaches 85% (FULL)
-- P1: Cost split UI (per-member ₹ share = weight_kg / total_kg × truck_cost)
+- P1: Push notifications when group hits 85% (FULL)
+- P1: Cost split UI — ₹ share per member = weight_kg ÷ total_kg × truck_cost
+- P2: DISPATCHED status separate from FULL
+- P2: Atomic findOneAndUpdate on group capacity (race-safe matching at scale)
 - P2: Map preview of pickup points
-- P2: Dispatcher assignment + handover flow

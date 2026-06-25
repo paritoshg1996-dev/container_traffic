@@ -1244,7 +1244,9 @@ class PtlLoadPost(BaseModel):
     cargo_type: str          # e.g. "Bags", "Carton Box", "Drums"
     cargo_category: str      # "GENERAL" | "FRAGILE" | "HAZMAT" | "PERISHABLE"
     weight_kg: float
-    ready_date: Optional[str] = None
+    truck_type: Optional[str] = ""   # preferred truck: Open / Container / Trailer
+    loading_date: Optional[str] = None   # YYYY-MM-DD
+    ready_date: Optional[str] = None     # legacy alias for loading_date
 
 
 class PtlGroupResponse(BaseModel):
@@ -1444,6 +1446,8 @@ async def post_ptl_load(payload: PtlLoadPost):
         "cargo_type": payload.cargo_type,
         "cargo_category": payload.cargo_category,
         "weight_kg": payload.weight_kg,
+        "truck_type": payload.truck_type or "",
+        "loading_date": payload.loading_date or payload.ready_date,
         "ready_date": payload.ready_date,
         "status": "OPEN",
         "group_id": None,

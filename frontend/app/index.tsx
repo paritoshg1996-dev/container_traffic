@@ -452,13 +452,13 @@ useEffect(() => {
       <View style={{ flex: 1 }}>
         {tab === "post"   && <PostLoadScreen profile={profile} onPosted={() => setTab("market")} />}
         {tab === "market" && <LoadMarketScreen profile={profile} />}
-        {tab === "myPtl"  && <MyPtlScreen profile={profile} />}
+        {tab === "myPtl"  && <PostPtlLoadScreen profile={profile} />}
       </View>
 
       <View style={styles.bottomNav} testID="bottom-nav">
         <BottomNavBtn icon="add-circle-outline" label="Post Space" active={tab === "post"}   onPress={() => setTab("post")}   testID="bottom-nav-post" />
-        <BottomNavBtn icon="search-outline"     label="Find Truck" active={tab === "market"} onPress={() => setTab("market")} testID="bottom-nav-market" />
-        <BottomNavBtn icon="cube-outline"       label="My PTL"     active={tab === "myPtl"}  onPress={() => setTab("myPtl")}  testID="bottom-nav-myptl" />
+        <BottomNavBtn icon="search-outline"     label="Marketplace" active={tab === "market"} onPress={() => setTab("market")} testID="bottom-nav-market" />
+        <BottomNavBtn icon="cube-outline"       label="Post Load"  active={tab === "myPtl"}  onPress={() => setTab("myPtl")}  testID="bottom-nav-postload" />
       </View>
     </SafeAreaView>
   );
@@ -1717,17 +1717,23 @@ const handleInvite = async () => {
               <View style={styles.statBox}><Text style={styles.statValue} testID="my-loads-count">{myLoads.length}</Text><Text style={styles.statLabel}>Loads Posted</Text></View>
               <View style={styles.statBox}><Text style={styles.statValue}>{myLoads.reduce((s, l) => s + (l.weight_tons || 0), 0).toFixed(1)} T</Text><Text style={styles.statLabel}>Total Weight</Text></View>
             </View>
-            <Text style={styles.sectionHeading}>My Posted Loads</Text>
+            <Text style={styles.sectionHeading}>My Posted Truck Spaces</Text>
             {loading ? <ActivityIndicator color={COLORS.primary} style={{ marginTop: 24 }} /> : null}
           </>
         }
         ListEmptyComponent={!loading ? (
           <View style={styles.emptyWrap} testID="profile-empty">
             <Ionicons name="cube-outline" size={42} color={COLORS.textSubtle} />
-            <Text style={styles.emptyTitle}>No loads posted yet</Text>
-            <Text style={styles.emptySub}>Post your first load to see it listed here.</Text>
+            <Text style={styles.emptyTitle}>No truck spaces posted yet</Text>
+            <Text style={styles.emptySub}>Post your first truck space from the "Post Space" tab.</Text>
           </View>
         ) : null}
+        ListFooterComponent={
+          <>
+            <Text style={[styles.sectionHeading, { marginTop: 24 }]}>My Posted Partial Loads</Text>
+            <MyPtlLoadsList profile={profile} />
+          </>
+        }
         renderItem={({ item }) => (
           <View>
             <LoadCard load={item} isMine={true} />
@@ -3439,7 +3445,7 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
           onPress={() => setMarketMode("full")}
         >
           <Ionicons name="car-outline" size={14} color={marketMode === "full" ? COLORS.surface : COLORS.textMuted} />
-          <Text style={[styles.modeToggleText, marketMode === "full" && styles.modeToggleTextActive]}>Full Truck</Text>
+          <Text style={[styles.modeToggleText, marketMode === "full" && styles.modeToggleTextActive]}>Find Truck</Text>
         </TouchableOpacity>
         <TouchableOpacity
           testID="market-mode-ptl"
@@ -3447,7 +3453,7 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
           onPress={() => { setMarketMode("ptl"); fetchPtlGroups(); }}
         >
           <Ionicons name="cube-outline" size={14} color={marketMode === "ptl" ? COLORS.surface : COLORS.textMuted} />
-          <Text style={[styles.modeToggleText, marketMode === "ptl" && styles.modeToggleTextActive]}>Partial Load</Text>
+          <Text style={[styles.modeToggleText, marketMode === "ptl" && styles.modeToggleTextActive]}>Find Partial Load</Text>
         </TouchableOpacity>
       </View>
 
@@ -3499,22 +3505,6 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
           keyExtractor={(g) => g.id}
           contentContainerStyle={{ padding: 12, paddingBottom: 40 }}
           refreshControl={<RefreshControl refreshing={ptlRefreshing} onRefresh={() => { setPtlRefreshing(true); fetchPtlGroups(); }} />}
-          ListHeaderComponent={
-            <TouchableOpacity
-              testID="ptl-post-cta"
-              style={styles.ptlPostCta}
-              onPress={() => setShowPostPtl(true)}
-              activeOpacity={0.85}
-            >
-              <View style={{ flex: 1 }}>
-                <Text style={styles.ptlPostCtaTitle}>Post your partial load</Text>
-                <Text style={styles.ptlPostCtaSub}>Pay only for what you ship. Get matched with others.</Text>
-              </View>
-              <View style={styles.ptlPostCtaBtn}>
-                <Ionicons name="add" size={22} color={COLORS.surface} />
-              </View>
-            </TouchableOpacity>
-          }
           ListEmptyComponent={
             ptlLoading ? (
               <View style={[styles.center, { paddingVertical: 48 }]}>
@@ -3524,7 +3514,7 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
               <View style={styles.emptyWrap} testID="ptl-empty-state">
                 <Ionicons name="cube-outline" size={48} color={COLORS.textSubtle} />
                 <Text style={styles.emptyTitle}>No groups forming yet</Text>
-                <Text style={styles.emptySub}>Post the first partial load on your route to start a group.</Text>
+                <Text style={styles.emptySub}>Tap "Post Load" below to post a partial load — it will start a new group if no match is found.</Text>
               </View>
             )
           }
@@ -4893,10 +4883,262 @@ function PtlGroupDetailModal({ visible, groupId, profile, onClose, onChanged, on
   );
 }
 
-function MyPtlScreen({ profile }: { profile: Profile }) {
+// ============== Post Partial Load Screen (3rd bottom-nav tab) ==============
+// Shipper-side form to post a partial load. Triggers backend auto-matching.
+// Layout mirrors PostLoadScreen: route inputs → cargo type cards → truck type
+// cards → loading date → weight.
+function PostPtlLoadScreen({ profile }: { profile: Profile }) {
+  const [originText, setOriginText] = useState("");
+  const [originPin, setOriginPin] = useState("");
+  const [originInfo, setOriginInfo] = useState<any>(null);
+  const [destText, setDestText] = useState("");
+  const [destPin, setDestPin] = useState("");
+  const [destInfo, setDestInfo] = useState<any>(null);
+  const [cargoType, setCargoType] = useState<string>("");
+  const [cargoCategory, setCargoCategory] = useState<string>("GENERAL");
+  const [truckType, setTruckType] = useState<string>("");
+  const [weightInput, setWeightInput] = useState("");
+  const [date, setDate] = useState<Date>(new Date());
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const today = useMemo(() => { const d = new Date(); d.setHours(0,0,0,0); return d; }, []);
+  const maxDate = useMemo(() => { const d = new Date(today); d.setDate(d.getDate() + 14); return d; }, [today]);
+
+  const onDateChange = (event: any, selected?: Date) => {
+    if (Platform.OS !== "ios") setShowDatePicker(false);
+    if (event?.type === "dismissed") return;
+    if (selected) {
+      if (selected < today) setDate(today);
+      else if (selected > maxDate) setDate(maxDate);
+      else setDate(selected);
+    }
+  };
+
+  const handleCargoSelect = (ct: string) => {
+    setCargoType(ct);
+    if (ct === "Drums") {
+      Alert.alert(
+        "Hazardous cargo?",
+        "Do these drums contain hazardous material (chemicals, fuel, solvents)?",
+        [
+          { text: "No, general cargo", onPress: () => setCargoCategory("GENERAL") },
+          { text: "Yes, HAZMAT", style: "destructive", onPress: () => setCargoCategory("HAZMAT") },
+        ],
+        { cancelable: true },
+      );
+    } else if (ct === "Fresh Produce") {
+      setCargoCategory("PERISHABLE");
+    } else {
+      setCargoCategory("GENERAL");
+    }
+  };
+
+  const reset = () => {
+    setOriginText(""); setOriginPin(""); setOriginInfo(null);
+    setDestText(""); setDestPin(""); setDestInfo(null);
+    setCargoType(""); setCargoCategory("GENERAL"); setTruckType("");
+    setWeightInput(""); setDate(new Date());
+  };
+
+  const submit = async () => {
+    if (!originInfo?.city || !originPin) return Alert.alert("Origin", "Please select an origin location.");
+    if (!destInfo?.city || !destPin) return Alert.alert("Destination", "Please select a destination location.");
+    if (!cargoType) return Alert.alert("Cargo type", "Please select a cargo type.");
+    if (!truckType) return Alert.alert("Truck type", "Please select a preferred truck type.");
+    const w = parseFloat(weightInput);
+    if (!w || w <= 0) return Alert.alert("Weight", "Please enter a valid weight in kg.");
+    if (w > TRUCK_CAPACITY_KG) return Alert.alert("Too heavy", `A single partial load can't exceed ${TRUCK_CAPACITY_KG} kg. Use the Post Space flow for a full truck instead.`);
+
+    setBusy(true);
+    try {
+      const res = await fetch(`${API}/ptl/loads`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          poster_phone: profile.phone,
+          origin_locality: originInfo.locality || originText,
+          origin_city: originInfo.city,
+          origin_pincode: originPin,
+          origin_latitude: originInfo.latitude ?? null,
+          origin_longitude: originInfo.longitude ?? null,
+          destination_locality: destInfo.locality || destText,
+          destination_city: destInfo.city,
+          destination_pincode: destPin,
+          destination_latitude: destInfo.latitude ?? null,
+          destination_longitude: destInfo.longitude ?? null,
+          cargo_type: cargoType,
+          cargo_category: cargoCategory,
+          weight_kg: w,
+          truck_type: truckType,
+          loading_date: date.toISOString().slice(0, 10),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        Alert.alert("Could not post", data?.detail || "Please try again.");
+        return;
+      }
+      Alert.alert(
+        "Load posted!",
+        data.group_id
+          ? `You've been matched to group ${data.group_id}. Open your Profile to view it.`
+          : "Starting a new group on this route. Open your Profile to track it.",
+      );
+      reset();
+    } catch (e: any) {
+      Alert.alert("Network error", e?.message || "Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.fill}>
+      <ScrollView contentContainerStyle={styles.formWrap} keyboardShouldPersistTaps="handled" testID="post-ptl-screen">
+        <SectionTitle icon="navigate-outline" title="Route" />
+        <View style={styles.routeInputsRow}>
+          <SmartRouteInput
+            label="Origin"
+            testIDPrefix="ptl-post-origin"
+            text={originText}
+            pin={originPin}
+            info={originInfo}
+            onChange={(t, p, i) => { setOriginText(t); setOriginPin(p); setOriginInfo(i); }}
+          />
+          <View style={styles.routeArrowMid}>
+            <Ionicons name="arrow-forward" size={20} color={COLORS.secondary} />
+          </View>
+          <SmartRouteInput
+            label="Destination"
+            testIDPrefix="ptl-post-dest"
+            text={destText}
+            pin={destPin}
+            info={destInfo}
+            onChange={(t, p, i) => { setDestText(t); setDestPin(p); setDestInfo(i); }}
+          />
+        </View>
+
+        <SectionTitle icon="cube-outline" title="Cargo type" />
+        <View style={cargoStyles.grid} testID="ptl-cargo-grid">
+          {CARGO_TYPE_OPTIONS.map((opt) => {
+            const selected = cargoType === opt.key;
+            return (
+              <TouchableOpacity
+                key={opt.key}
+                testID={`ptl-cargo-${opt.key}`}
+                style={[cargoStyles.tile, selected && cargoStyles.tileSelected]}
+                onPress={() => handleCargoSelect(opt.key)}
+                activeOpacity={0.85}
+              >
+                <Image source={opt.image} style={cargoStyles.tileImage} resizeMode="contain" />
+                <Text style={[cargoStyles.tileLabel, selected && cargoStyles.tileLabelSelected]} numberOfLines={1}>{opt.label}</Text>
+                {selected && <View style={cargoStyles.checkDot}><Ionicons name="checkmark" size={9} color="#fff" /></View>}
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+        {cargoCategory !== "GENERAL" && cargoType ? (
+          <View style={[styles.ptlHazmatBanner, cargoCategory === "PERISHABLE" && { backgroundColor: "#DCFCE7" }]}>
+            <Ionicons
+              name={cargoCategory === "HAZMAT" ? "warning" : "snow-outline"}
+              size={16}
+              color={cargoCategory === "HAZMAT" ? "#B91C1C" : "#15803D"}
+            />
+            <Text style={[styles.ptlHazmatText, cargoCategory === "PERISHABLE" && { color: "#15803D" }]}>
+              {cargoCategory === "HAZMAT"
+                ? "HAZMAT — will only group with other HAZMAT loads"
+                : "PERISHABLE — will only group with other perishable loads"}
+            </Text>
+          </View>
+        ) : null}
+
+        <SectionTitle icon="bus-outline" title="Preferred truck" />
+        <View style={styles.truckRow} testID="ptl-truck-row">
+          {TRUCK_TYPES.map((t) => {
+            const selected = truckType === t.name;
+            return (
+              <TouchableOpacity
+                key={t.name}
+                testID={`ptl-truck-${t.name}`}
+                style={[styles.truckCard, selected && styles.truckCardOn, selected && styles.filledBorder]}
+                onPress={() => setTruckType(t.name)}
+                activeOpacity={0.85}
+              >
+                <Image source={t.image} style={[styles.truckImg, selected && styles.truckImgOn]} resizeMode="contain" />
+                <Text style={[styles.truckLabel, selected && styles.truckLabelOn]} numberOfLines={1} allowFontScaling={false}>{t.name}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        <SectionTitle icon="calendar-outline" title="Loading date" />
+        <TouchableOpacity
+          testID="ptl-date-btn"
+          style={styles.ptlDateBtn}
+          onPress={() => setShowDatePicker(true)}
+          activeOpacity={0.85}
+        >
+          <Ionicons name="calendar" size={18} color={COLORS.primary} />
+          <Text style={styles.ptlDateBtnText}>
+            {date.toLocaleDateString("en-IN", { weekday: "short", day: "2-digit", month: "short", year: "numeric" })}
+          </Text>
+          <Ionicons name="chevron-down" size={16} color={COLORS.textMuted} />
+        </TouchableOpacity>
+        {showDatePicker && (
+          <DateTimePicker
+            value={date}
+            mode="date"
+            display={Platform.OS === "ios" ? "spinner" : "default"}
+            minimumDate={today}
+            maximumDate={maxDate}
+            onChange={onDateChange}
+          />
+        )}
+
+        <SectionTitle icon="barbell-outline" title="Weight" />
+        <View style={styles.ptlWeightRow}>
+          <TextInput
+            testID="ptl-weight-input"
+            style={[styles.input, { flex: 1 }]}
+            placeholder="e.g. 3500"
+            placeholderTextColor={COLORS.textSubtle}
+            keyboardType="number-pad"
+            value={weightInput}
+            onChangeText={(t) => setWeightInput(t.replace(/[^0-9]/g, "").slice(0, 5))}
+          />
+          <Text style={styles.ptlWeightUnit}>kg</Text>
+        </View>
+        <Text style={styles.hintMuted}>
+          Max {TRUCK_CAPACITY_KG.toLocaleString()} kg per partial load. We'll match you with others on the same route.
+        </Text>
+
+        <TouchableOpacity
+          testID="ptl-post-submit-btn"
+          style={[styles.primaryBtn, busy && { opacity: 0.6 }]}
+          onPress={submit}
+          disabled={busy}
+        >
+          {busy ? <ActivityIndicator color={COLORS.surface} /> : (
+            <>
+              <Text style={styles.primaryBtnText}>Post & find a group</Text>
+              <Ionicons name="search" size={18} color={COLORS.surface} />
+            </>
+          )}
+        </TouchableOpacity>
+        <Text style={[styles.hintMuted, { textAlign: "center", marginTop: 8 }]}>
+          Track this load in your Profile → My Partial Loads.
+        </Text>
+      </ScrollView>
+    </KeyboardAvoidingView>
+  );
+}
+
+
+// ============== My Partial Loads list (used inside ProfileScreen) ==============
+function MyPtlLoadsList({ profile }: { profile: Profile }) {
   const [loads, setLoads] = useState<PtlLoad[]>([]);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const [groupCache, setGroupCache] = useState<Record<string, PtlGroup>>({});
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
 
@@ -4906,7 +5148,6 @@ function MyPtlScreen({ profile }: { profile: Profile }) {
       const data = await r.json();
       const list: PtlLoad[] = Array.isArray(data) ? data : [];
       setLoads(list);
-      // Hydrate group cache for matched / confirmed loads
       const gids = Array.from(new Set(list.map((l) => l.group_id).filter(Boolean) as string[]));
       const fetched: Record<string, PtlGroup> = {};
       await Promise.all(
@@ -4922,9 +5163,9 @@ function MyPtlScreen({ profile }: { profile: Profile }) {
       );
       setGroupCache(fetched);
     } catch {
-      // ignore — leave loads as-is
+      // ignore
     } finally {
-      setLoading(false); setRefreshing(false);
+      setLoading(false);
     }
   }, [profile.phone]);
 
@@ -4957,94 +5198,82 @@ function MyPtlScreen({ profile }: { profile: Profile }) {
   };
 
   if (loading) {
+    return <ActivityIndicator color={COLORS.primary} style={{ marginVertical: 24 }} />;
+  }
+  if (!loads.length) {
     return (
-      <View style={[styles.fill, styles.center]}>
-        <ActivityIndicator size="large" color={COLORS.primary} />
+      <View style={styles.emptyWrap} testID="myptl-empty">
+        <Ionicons name="cube-outline" size={42} color={COLORS.textSubtle} />
+        <Text style={styles.emptyTitle}>No partial loads yet</Text>
+        <Text style={styles.emptySub}>Open the Post Load tab to post your first partial load.</Text>
       </View>
     );
   }
 
   return (
-    <View style={styles.fill}>
-      <FlatList
-        testID="myptl-list"
-        data={loads}
-        keyExtractor={(l) => l.id}
-        contentContainerStyle={{ padding: 12, paddingBottom: 40 }}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchMyLoads(); }} />}
-        ListHeaderComponent={
-          <Text style={[styles.ptlSectionLabel, { marginTop: 4, marginLeft: 4 }]}>My partial loads</Text>
-        }
-        ListEmptyComponent={
-          <View style={styles.emptyWrap} testID="myptl-empty">
-            <Ionicons name="cube-outline" size={48} color={COLORS.textSubtle} />
-            <Text style={styles.emptyTitle}>No partial loads yet</Text>
-            <Text style={styles.emptySub}>Go to Find Truck → Partial Load to post one.</Text>
-          </View>
-        }
-        renderItem={({ item }) => {
-          const g = item.group_id ? groupCache[item.group_id] : null;
-          const fill = g?.fill_pct ?? 0;
-          const color = ptlFillColor(fill);
-          const pill = (() => {
-            if (item.status === "OPEN") return { bg: "#FEF3C7", fg: "#92400E", text: "Searching for match…", icon: "search-outline" };
-            if (item.status === "MATCHED") return { bg: "#DBEAFE", fg: "#1D4ED8", text: "Matched · View group", icon: "people-outline" };
-            if (item.status === "CONFIRMED") return { bg: "#DCFCE7", fg: "#15803D", text: "Confirmed ✓", icon: "checkmark-circle-outline" };
-            return { bg: "#F3F4F6", fg: "#6B7280", text: "Cancelled", icon: "close-circle-outline" };
-          })();
-          const tappable = item.status === "MATCHED" || item.status === "CONFIRMED";
-          return (
-            <View style={styles.ptlCard} testID={`myptl-card-${item.id}`}>
-              <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 6 }}>
-                <Text style={styles.ptlRouteText} numberOfLines={1}>{item.origin_locality || item.origin_city}</Text>
-                <Ionicons name="arrow-forward" size={14} color={COLORS.textMuted} style={{ marginHorizontal: 8 }} />
-                <Text style={styles.ptlRouteText} numberOfLines={1}>{item.destination_locality || item.destination_city}</Text>
-              </View>
+    <View testID="myptl-list">
+      {loads.map((item) => {
+        const g = item.group_id ? groupCache[item.group_id] : null;
+        const fill = g?.fill_pct ?? 0;
+        const color = ptlFillColor(fill);
+        const pill = (() => {
+          if (item.status === "OPEN") return { bg: "#FEF3C7", fg: "#92400E", text: "Searching for match…", icon: "search-outline" };
+          if (item.status === "MATCHED") return { bg: "#DBEAFE", fg: "#1D4ED8", text: "Matched · View group", icon: "people-outline" };
+          if (item.status === "CONFIRMED") return { bg: "#DCFCE7", fg: "#15803D", text: "Confirmed ✓", icon: "checkmark-circle-outline" };
+          return { bg: "#F3F4F6", fg: "#6B7280", text: "Cancelled", icon: "close-circle-outline" };
+        })();
+        const tappable = item.status === "MATCHED" || item.status === "CONFIRMED";
+        return (
+          <View key={item.id} style={styles.ptlCard} testID={`myptl-card-${item.id}`}>
+            <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 6 }}>
+              <Text style={styles.ptlRouteText} numberOfLines={1}>{item.origin_locality || item.origin_city}</Text>
+              <Ionicons name="arrow-forward" size={14} color={COLORS.textMuted} style={{ marginHorizontal: 8 }} />
+              <Text style={styles.ptlRouteText} numberOfLines={1}>{item.destination_locality || item.destination_city}</Text>
+            </View>
 
-              <TouchableOpacity
-                disabled={!tappable}
-                onPress={() => item.group_id && setSelectedGroupId(item.group_id)}
-                style={[styles.ptlMyStatusPill, { backgroundColor: pill.bg }]}
-                testID={`myptl-status-${item.id}`}
-              >
-                <Ionicons name={pill.icon as any} size={14} color={pill.fg} />
-                <Text style={[styles.ptlMyStatusText, { color: pill.fg }]}>{pill.text}</Text>
-                {tappable && <Ionicons name="chevron-forward" size={14} color={pill.fg} />}
-              </TouchableOpacity>
+            <TouchableOpacity
+              disabled={!tappable}
+              onPress={() => item.group_id && setSelectedGroupId(item.group_id)}
+              style={[styles.ptlMyStatusPill, { backgroundColor: pill.bg }]}
+              testID={`myptl-status-${item.id}`}
+            >
+              <Ionicons name={pill.icon as any} size={14} color={pill.fg} />
+              <Text style={[styles.ptlMyStatusText, { color: pill.fg }]}>{pill.text}</Text>
+              {tappable && <Ionicons name="chevron-forward" size={14} color={pill.fg} />}
+            </TouchableOpacity>
 
-              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
-                <View style={styles.ptlChip}><Text style={styles.ptlChipText}>{item.cargo_type}</Text></View>
-                <View style={styles.ptlChip}><Text style={styles.ptlChipText}>{Math.round(item.weight_kg).toLocaleString()} kg</Text></View>
-                {item.cargo_category && item.cargo_category !== "GENERAL" && (
-                  <View style={[styles.ptlChip, { backgroundColor: "#FEE2E2" }]}><Text style={[styles.ptlChipText, { color: "#B91C1C" }]}>{item.cargo_category}</Text></View>
-                )}
-              </View>
-
-              {g && (
-                <>
-                  <View style={[styles.ptlFillBg, { marginTop: 10 }]}>
-                    <View style={[styles.ptlFillInner, { width: `${Math.min(100, fill)}%`, backgroundColor: color }]} />
-                  </View>
-                  <Text style={[styles.ptlMetaText, { marginTop: 4 }]}>
-                    Group: {Math.round(g.total_weight_kg).toLocaleString()} / {g.capacity_kg.toLocaleString()} kg ({fill.toFixed(1)}%)
-                  </Text>
-                </>
-              )}
-
-              {(item.status === "OPEN" || item.status === "MATCHED") && (
-                <TouchableOpacity
-                  testID={`myptl-cancel-${item.id}`}
-                  style={styles.ptlCancelBtn}
-                  onPress={() => cancelLoad(item)}
-                >
-                  <Ionicons name="trash-outline" size={14} color={COLORS.danger} />
-                  <Text style={styles.ptlCancelText}>Cancel load</Text>
-                </TouchableOpacity>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
+              <View style={styles.ptlChip}><Text style={styles.ptlChipText}>{item.cargo_type}</Text></View>
+              <View style={styles.ptlChip}><Text style={styles.ptlChipText}>{Math.round(item.weight_kg).toLocaleString()} kg</Text></View>
+              {item.cargo_category && item.cargo_category !== "GENERAL" && (
+                <View style={[styles.ptlChip, { backgroundColor: "#FEE2E2" }]}><Text style={[styles.ptlChipText, { color: "#B91C1C" }]}>{item.cargo_category}</Text></View>
               )}
             </View>
-          );
-        }}
-      />
+
+            {g && (
+              <>
+                <View style={[styles.ptlFillBg, { marginTop: 10 }]}>
+                  <View style={[styles.ptlFillInner, { width: `${Math.min(100, fill)}%`, backgroundColor: color }]} />
+                </View>
+                <Text style={[styles.ptlMetaText, { marginTop: 4 }]}>
+                  Group: {Math.round(g.total_weight_kg).toLocaleString()} / {g.capacity_kg.toLocaleString()} kg ({fill.toFixed(1)}%)
+                </Text>
+              </>
+            )}
+
+            {(item.status === "OPEN" || item.status === "MATCHED") && (
+              <TouchableOpacity
+                testID={`myptl-cancel-${item.id}`}
+                style={styles.ptlCancelBtn}
+                onPress={() => cancelLoad(item)}
+              >
+                <Ionicons name="trash-outline" size={14} color={COLORS.danger} />
+                <Text style={styles.ptlCancelText}>Cancel load</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        );
+      })}
       <PtlGroupDetailModal
         visible={!!selectedGroupId}
         groupId={selectedGroupId}
@@ -5578,4 +5807,8 @@ ptlMyStatusPill: { flexDirection: "row", alignItems: "center", gap: 6, paddingHo
 ptlMyStatusText: { fontSize: 12, fontFamily: "Inter_700Bold", fontWeight: "700" },
 ptlCancelBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 12, paddingVertical: 8, borderRadius: 10, borderWidth: 1, borderColor: "#FECACA" },
 ptlCancelText: { color: COLORS.danger, fontFamily: "Inter_600SemiBold", fontWeight: "600", fontSize: 13 },
+ptlDateBtn: { flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border, borderRadius: 14, paddingVertical: 14, paddingHorizontal: 14 },
+ptlDateBtnText: { flex: 1, fontSize: 15, fontFamily: "Inter_600SemiBold", fontWeight: "600", color: COLORS.text },
+ptlWeightRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+ptlWeightUnit: { fontSize: 16, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.primary, minWidth: 30 },
 });
