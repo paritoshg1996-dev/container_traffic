@@ -4593,8 +4593,20 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute }: {
   };
 
   const submit = async () => {
-    if (!originInfo?.city || !originPin) return Alert.alert("Origin", "Please select an origin location.");
-    if (!destInfo?.city || !destPin) return Alert.alert("Destination", "Please select a destination location.");
+    const originValid =
+      /^\d{6}$/.test(originPin) ||
+      (originInfo && (
+        (originInfo.latitude != null && originInfo.longitude != null) ||
+        !!(originInfo.city || originInfo.locality || originInfo.placeName)
+      ));
+    const destValid =
+      /^\d{6}$/.test(destPin) ||
+      (destInfo && (
+        (destInfo.latitude != null && destInfo.longitude != null) ||
+        !!(destInfo.city || destInfo.locality || destInfo.placeName)
+      ));
+    if (!originValid) return Alert.alert("Origin", "Please select a valid origin from the list.");
+    if (!destValid) return Alert.alert("Destination", "Please select a valid destination from the list.");
     const w = parseFloat(weightKg);
     if (!w || w <= 0) return Alert.alert("Weight", "Please enter a valid weight in kg.");
     if (w > TRUCK_CAPACITY_KG) return Alert.alert("Too heavy", `A single PTL load can't exceed ${TRUCK_CAPACITY_KG} kg. Use full-truck booking instead.`);
@@ -4606,24 +4618,30 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute }: {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           poster_phone: profile.phone,
-          origin_locality: originInfo.locality || originText,
-          origin_city: originInfo.city,
-          origin_pincode: originPin,
-          origin_latitude: originInfo.latitude ?? null,
-          origin_longitude: originInfo.longitude ?? null,
-          destination_locality: destInfo.locality || destText,
-          destination_city: destInfo.city,
-          destination_pincode: destPin,
-          destination_latitude: destInfo.latitude ?? null,
-          destination_longitude: destInfo.longitude ?? null,
+          origin_locality: originInfo?.locality || originText || originInfo?.placeName || "",
+          origin_city: originInfo?.city || originInfo?.locality || originInfo?.placeName || originText || "",
+          origin_pincode: originPin || "",
+          origin_latitude: originInfo?.latitude ?? null,
+          origin_longitude: originInfo?.longitude ?? null,
+          destination_locality: destInfo?.locality || destText || destInfo?.placeName || "",
+          destination_city: destInfo?.city || destInfo?.locality || destInfo?.placeName || destText || "",
+          destination_pincode: destPin || "",
+          destination_latitude: destInfo?.latitude ?? null,
+          destination_longitude: destInfo?.longitude ?? null,
           cargo_type: cargoType,
           cargo_category: cargoCategory,
           weight_kg: w,
         }),
       });
-      const data = await res.json();
+      const text = await res.text();
+      let data: any = {};
+      try { data = JSON.parse(text); } catch { data = { detail: text }; }
       if (!res.ok) {
-        Alert.alert("Could not post", data?.detail || "Please try again.");
+        const reason =
+          res.status === 404
+            ? "The PTL endpoint isn't available on the server yet. Please ask the team to deploy the latest backend."
+            : (data?.detail || `Server returned HTTP ${res.status}.`);
+        Alert.alert("Could not post", reason);
         return;
       }
       Alert.alert(
@@ -4942,8 +4960,24 @@ function PostPtlLoadScreen({ profile }: { profile: Profile }) {
   };
 
   const submit = async () => {
-    if (!originInfo?.city || !originPin) return Alert.alert("Origin", "Please select an origin location.");
-    if (!destInfo?.city || !destPin) return Alert.alert("Destination", "Please select a destination location.");
+    // Accept the location if we have EITHER a 6-digit pincode OR enough
+    // location info (city/locality/coords) — matches PostLoadScreen's rule
+    // so users can post with a CITY-level Mappls pick (e.g. "Gurugram") that
+    // has no pincode.
+    const originValid =
+      /^\d{6}$/.test(originPin) ||
+      (originInfo && (
+        (originInfo.latitude != null && originInfo.longitude != null) ||
+        !!(originInfo.city || originInfo.locality || originInfo.placeName)
+      ));
+    const destValid =
+      /^\d{6}$/.test(destPin) ||
+      (destInfo && (
+        (destInfo.latitude != null && destInfo.longitude != null) ||
+        !!(destInfo.city || destInfo.locality || destInfo.placeName)
+      ));
+    if (!originValid) return Alert.alert("Origin", "Please select a valid origin from the list.");
+    if (!destValid) return Alert.alert("Destination", "Please select a valid destination from the list.");
     if (!cargoType) return Alert.alert("Cargo type", "Please select a cargo type.");
     if (!truckType) return Alert.alert("Truck type", "Please select a preferred truck type.");
     const w = parseFloat(weightInput);
@@ -4957,16 +4991,16 @@ function PostPtlLoadScreen({ profile }: { profile: Profile }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           poster_phone: profile.phone,
-          origin_locality: originInfo.locality || originText,
-          origin_city: originInfo.city,
-          origin_pincode: originPin,
-          origin_latitude: originInfo.latitude ?? null,
-          origin_longitude: originInfo.longitude ?? null,
-          destination_locality: destInfo.locality || destText,
-          destination_city: destInfo.city,
-          destination_pincode: destPin,
-          destination_latitude: destInfo.latitude ?? null,
-          destination_longitude: destInfo.longitude ?? null,
+          origin_locality: originInfo?.locality || originText || originInfo?.placeName || "",
+          origin_city: originInfo?.city || originInfo?.locality || originInfo?.placeName || originText || "",
+          origin_pincode: originPin || "",
+          origin_latitude: originInfo?.latitude ?? null,
+          origin_longitude: originInfo?.longitude ?? null,
+          destination_locality: destInfo?.locality || destText || destInfo?.placeName || "",
+          destination_city: destInfo?.city || destInfo?.locality || destInfo?.placeName || destText || "",
+          destination_pincode: destPin || "",
+          destination_latitude: destInfo?.latitude ?? null,
+          destination_longitude: destInfo?.longitude ?? null,
           cargo_type: cargoType,
           cargo_category: cargoCategory,
           weight_kg: w,
@@ -4974,9 +5008,15 @@ function PostPtlLoadScreen({ profile }: { profile: Profile }) {
           loading_date: date.toISOString().slice(0, 10),
         }),
       });
-      const data = await res.json();
+      const text = await res.text();
+      let data: any = {};
+      try { data = JSON.parse(text); } catch { data = { detail: text }; }
       if (!res.ok) {
-        Alert.alert("Could not post", data?.detail || "Please try again.");
+        const reason =
+          res.status === 404
+            ? "The PTL endpoint isn't available on the server yet. Please ask the team to deploy the latest backend."
+            : (data?.detail || `Server returned HTTP ${res.status}.`);
+        Alert.alert("Could not post", reason);
         return;
       }
       Alert.alert(

@@ -1233,12 +1233,12 @@ class PtlLoadPost(BaseModel):
     poster_phone: str
     origin_locality: str
     origin_city: str
-    origin_pincode: str
+    origin_pincode: Optional[str] = ""
     origin_latitude: Optional[float] = None
     origin_longitude: Optional[float] = None
     destination_locality: str
     destination_city: str
-    destination_pincode: str
+    destination_pincode: Optional[str] = ""
     destination_latitude: Optional[float] = None
     destination_longitude: Optional[float] = None
     cargo_type: str          # e.g. "Bags", "Carton Box", "Drums"
@@ -1375,7 +1375,7 @@ async def match_ptl_load(new_load: dict) -> Optional[str]:
         return gid
 
     # No suitable group — create a new one
-    gid = f"GRP-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{new_load['poster_phone'][-4:]}"
+    gid = f"GRP-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{new_load['poster_phone'][-4:]}-{_gen_short_id(4)}"
     group_doc = {
         "id": gid,
         "corridor": f"{origin_corridor}→{dest_corridor}",
@@ -1423,7 +1423,7 @@ async def post_ptl_load(payload: PtlLoadPost):
 
     user = await db.users.find_one({"phone": phone}, {"_id": 0, "name": 1, "company": 1})
     now = datetime.now(timezone.utc)
-    load_id = f"PTL-{now.strftime('%Y%m%d%H%M%S')}-{phone[-4:]}"
+    load_id = f"PTL-{now.strftime('%Y%m%d%H%M%S')}-{phone[-4:]}-{_gen_short_id(4)}"
     doc = {
         "id": load_id,
         "poster_phone": phone,
