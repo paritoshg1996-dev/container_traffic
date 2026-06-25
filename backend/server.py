@@ -10,7 +10,8 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+import math
 import re
 import requests
 import urllib3
@@ -1211,6 +1212,428 @@ async def verify_firebase_token(payload: VerifyTokenRequest):
     )
 
 
+# ============================================================================
+# ===== PTL (Partial Truck Load) Consolidation =====
+# ============================================================================
+# Multiple shippers with small loads on the same route are grouped together
+# to fill a single 40ft truck (20,000 kg), splitting cost proportionally.
+
+CARGO_COMPATIBILITY = {
+    "GENERAL":    ["GENERAL", "FMCG", "AUTO_PARTS", "TEXTILES"],
+    "FRAGILE":    ["FRAGILE", "GENERAL"],
+    "HAZMAT":     ["HAZMAT"],
+    "PERISHABLE": ["PERISHABLE"],
+}
+TRUCK_CAPACITY_KG = 20000
+PROXIMITY_KM = 25            # max straight-line distance between pickup points
+DISPATCH_THRESHOLD = 0.85    # group triggers FULL notification at 85% capacity
+
+
+class PtlLoadPost(BaseModel):
+    poster_phone: str
+    origin_locality: str
+    origin_city: str
+    origin_pincode: str
+    origin_latitude: Optional[float] = None
+    origin_longitude: Optional[float] = None
+    destination_locality: str
+    destination_city: str
+    destination_pincode: str
+    destination_latitude: Optional[float] = None
+    destination_longitude: Optional[float] = None
+    cargo_type: str          # e.g. "Bags", "Carton Box", "Drums"
+    cargo_category: str      # "GENERAL" | "FRAGILE" | "HAZMAT" | "PERISHABLE"
+    weight_kg: float
+    ready_date: Optional[str] = None
+
+
+class PtlGroupResponse(BaseModel):
+    id: str
+    corridor: str
+    origin_display: str
+    destination_display: str
+    load_ids: List[str]
+    total_weight_kg: float
+    capacity_kg: float
+    capacity_remaining_kg: float
+    fill_pct: float
+    cargo_categories: List[str]
+    status: str
+    created_at: str
+    members: Optional[List[dict]] = None
+
+
+def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance between two lat/lon points, in kilometres."""
+    R = 6371
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlam = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2) ** 2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def derive_corridor(city: str) -> str:
+    """Normalise city name to a corridor tag used for group matching."""
+    return (city or "").strip().upper()
+
+
+async def match_ptl_load(new_load: dict) -> Optional[str]:
+    """Try to assign new_load to an existing FORMING group on the same corridor.
+
+    Steps:
+      1. Corridor check — same origin AND destination city corridor
+      2. Cargo check    — every category already in the group must be compatible
+                          with the new load's category
+      3. Capacity check — group has room for the new weight
+      4. Proximity check — both origin and destination points within
+                          PROXIMITY_KM of the group's anchor coords
+                          (skipped if either side has no coordinates)
+      5. Score & pick   — best score = highest fill % after adding the new load
+      6. Assign or create new group
+
+    Returns the group_id the load was assigned to (existing or newly created).
+    """
+    origin_corridor = derive_corridor(new_load["origin"]["city"])
+    dest_corridor = derive_corridor(new_load["destination"]["city"])
+    new_category = new_load["cargo_category"]
+    compatible_cats = CARGO_COMPATIBILITY.get(new_category, [new_category])
+
+    candidates = await db.ptl_groups.find({
+        "corridor": f"{origin_corridor}→{dest_corridor}",
+        "status": "FORMING",
+        "capacity_remaining_kg": {"$gte": new_load["weight_kg"]},
+    }).to_list(length=100)
+
+    best_group = None
+    best_score = -1.0
+
+    for g in candidates:
+        # Cargo compatibility — every existing category must be one the new
+        # category accepts, AND the new category must be one each existing
+        # group member accepts.
+        group_cats = g.get("cargo_categories", [])
+        ok = True
+        for cat in group_cats:
+            allowed_for_cat = CARGO_COMPATIBILITY.get(cat, [cat])
+            if cat not in compatible_cats or new_category not in allowed_for_cat:
+                ok = False
+                break
+        if not ok:
+            continue
+
+        # Proximity check — only if we have coordinates on both sides
+        new_olat = new_load["origin"].get("latitude")
+        new_olon = new_load["origin"].get("longitude")
+        new_dlat = new_load["destination"].get("latitude")
+        new_dlon = new_load["destination"].get("longitude")
+
+        if (new_olat is not None and new_olon is not None
+                and g.get("origin_lat") is not None and g.get("origin_lon") is not None
+                and new_dlat is not None and new_dlon is not None
+                and g.get("dest_lat") is not None and g.get("dest_lon") is not None):
+            dist_o = haversine_km(new_olat, new_olon, g["origin_lat"], g["origin_lon"])
+            dist_d = haversine_km(new_dlat, new_dlon, g["dest_lat"], g["dest_lon"])
+            if dist_o > PROXIMITY_KM or dist_d > PROXIMITY_KM:
+                continue
+
+        # Score = fill % after adding the new load
+        new_weight = g["total_weight_kg"] + new_load["weight_kg"]
+        score = new_weight / TRUCK_CAPACITY_KG
+        if score > best_score:
+            best_score = score
+            best_group = g
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    if best_group:
+        gid = best_group["id"]
+        new_total = best_group["total_weight_kg"] + new_load["weight_kg"]
+        new_remaining = TRUCK_CAPACITY_KG - new_total
+        new_fill = new_total / TRUCK_CAPACITY_KG * 100
+        new_status = "FULL" if new_fill >= DISPATCH_THRESHOLD * 100 else "FORMING"
+        merged_cats = list(set(best_group.get("cargo_categories", [])) | {new_category})
+        await db.ptl_groups.update_one(
+            {"id": gid},
+            {
+                "$set": {
+                    "total_weight_kg": new_total,
+                    "capacity_remaining_kg": new_remaining,
+                    "fill_pct": round(new_fill, 1),
+                    "status": new_status,
+                    "cargo_categories": merged_cats,
+                },
+                "$push": {"load_ids": new_load["id"]},
+            },
+        )
+        await db.ptl_loads.update_one(
+            {"id": new_load["id"]},
+            {"$set": {"group_id": gid, "status": "MATCHED"}},
+        )
+        return gid
+
+    # No suitable group — create a new one
+    gid = f"GRP-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{new_load['poster_phone'][-4:]}"
+    group_doc = {
+        "id": gid,
+        "corridor": f"{origin_corridor}→{dest_corridor}",
+        "origin_display": new_load["origin"]["locality"] or new_load["origin"]["city"],
+        "destination_display": new_load["destination"]["locality"] or new_load["destination"]["city"],
+        "origin_lat": new_load["origin"].get("latitude"),
+        "origin_lon": new_load["origin"].get("longitude"),
+        "dest_lat": new_load["destination"].get("latitude"),
+        "dest_lon": new_load["destination"].get("longitude"),
+        "load_ids": [new_load["id"]],
+        "total_weight_kg": new_load["weight_kg"],
+        "capacity_kg": TRUCK_CAPACITY_KG,
+        "capacity_remaining_kg": TRUCK_CAPACITY_KG - new_load["weight_kg"],
+        "fill_pct": round(new_load["weight_kg"] / TRUCK_CAPACITY_KG * 100, 1),
+        "cargo_categories": [new_category],
+        "status": "FORMING",
+        "created_at": now_iso,
+    }
+    await db.ptl_groups.insert_one(group_doc)
+    await db.ptl_loads.update_one(
+        {"id": new_load["id"]},
+        {"$set": {"group_id": gid, "status": "MATCHED"}},
+    )
+    return gid
+
+
+def _strip_group_internals(g: dict) -> dict:
+    """Remove anchor lat/lon fields the client should not see."""
+    out = {k: v for k, v in g.items() if k not in {"origin_lat", "origin_lon", "dest_lat", "dest_lon"}}
+    return out
+
+
+# ── POST a new partial load + trigger matching ─────────────────────────────
+@api_router.post("/ptl/loads")
+async def post_ptl_load(payload: PtlLoadPost):
+    phone = _norm_phone(payload.poster_phone)
+    if len(phone) != 10:
+        raise HTTPException(status_code=400, detail="poster_phone must be a 10-digit number")
+    if payload.weight_kg <= 0:
+        raise HTTPException(status_code=400, detail="weight_kg must be > 0")
+    if payload.weight_kg > TRUCK_CAPACITY_KG:
+        raise HTTPException(status_code=400, detail=f"weight_kg cannot exceed {TRUCK_CAPACITY_KG} kg (one full truck)")
+    if payload.cargo_category not in CARGO_COMPATIBILITY:
+        raise HTTPException(status_code=400, detail=f"cargo_category must be one of {list(CARGO_COMPATIBILITY.keys())}")
+
+    user = await db.users.find_one({"phone": phone}, {"_id": 0, "name": 1, "company": 1})
+    now = datetime.now(timezone.utc)
+    load_id = f"PTL-{now.strftime('%Y%m%d%H%M%S')}-{phone[-4:]}"
+    doc = {
+        "id": load_id,
+        "poster_phone": phone,
+        "poster_name": (user or {}).get("name", ""),
+        "poster_company": (user or {}).get("company", ""),
+        "origin": {
+            "locality": payload.origin_locality,
+            "city": payload.origin_city,
+            "pincode": payload.origin_pincode,
+            "latitude": payload.origin_latitude,
+            "longitude": payload.origin_longitude,
+        },
+        "destination": {
+            "locality": payload.destination_locality,
+            "city": payload.destination_city,
+            "pincode": payload.destination_pincode,
+            "latitude": payload.destination_latitude,
+            "longitude": payload.destination_longitude,
+        },
+        "cargo_type": payload.cargo_type,
+        "cargo_category": payload.cargo_category,
+        "weight_kg": payload.weight_kg,
+        "ready_date": payload.ready_date,
+        "status": "OPEN",
+        "group_id": None,
+        "posted_at": now.isoformat(),
+        "expires_at": (now + timedelta(days=7)),
+    }
+    await db.ptl_loads.insert_one(doc)
+    group_id = await match_ptl_load(doc)
+    return {"load_id": load_id, "group_id": group_id}
+
+
+# ── GET my PTL loads ───────────────────────────────────────────────────────
+@api_router.get("/ptl/loads/my/{phone}")
+async def get_my_ptl_loads(phone: str):
+    phone = _norm_phone(phone)
+    if len(phone) != 10:
+        raise HTTPException(status_code=400, detail="phone must be a 10-digit number")
+    cursor = db.ptl_loads.find(
+        {"poster_phone": phone, "status": {"$ne": "CANCELLED"}},
+        {"_id": 0, "expires_at": 0},
+    ).sort("posted_at", -1).limit(50)
+    loads = await cursor.to_list(length=50)
+    # Flatten origin/destination so the frontend type matches PtlLoad
+    out = []
+    for l in loads:
+        o = l.get("origin") or {}
+        d = l.get("destination") or {}
+        out.append({
+            **{k: v for k, v in l.items() if k not in ("origin", "destination")},
+            "origin_locality": o.get("locality", ""),
+            "origin_city": o.get("city", ""),
+            "origin_pincode": o.get("pincode", ""),
+            "origin_latitude": o.get("latitude"),
+            "origin_longitude": o.get("longitude"),
+            "destination_locality": d.get("locality", ""),
+            "destination_city": d.get("city", ""),
+            "destination_pincode": d.get("pincode", ""),
+            "destination_latitude": d.get("latitude"),
+            "destination_longitude": d.get("longitude"),
+        })
+    return out
+
+
+# ── CANCEL a PTL load ──────────────────────────────────────────────────────
+@api_router.delete("/ptl/loads/{load_id}")
+async def cancel_ptl_load(load_id: str, phone: str):
+    load = await db.ptl_loads.find_one({"id": load_id})
+    if not load:
+        raise HTTPException(status_code=404, detail="Load not found")
+    if load["poster_phone"] != _norm_phone(phone):
+        raise HTTPException(status_code=403, detail="Not your load")
+    if load.get("status") == "CANCELLED":
+        return {"cancelled": True}
+
+    await db.ptl_loads.update_one({"id": load_id}, {"$set": {"status": "CANCELLED", "group_id": None}})
+
+    # Remove from group and recompute group totals
+    gid = load.get("group_id")
+    if gid:
+        g = await db.ptl_groups.find_one({"id": gid})
+        if g:
+            remaining_ids = [lid for lid in g.get("load_ids", []) if lid != load_id]
+            new_total = max(0.0, g["total_weight_kg"] - load["weight_kg"])
+            new_rem = TRUCK_CAPACITY_KG - new_total
+            new_fill = (new_total / TRUCK_CAPACITY_KG * 100) if TRUCK_CAPACITY_KG else 0
+            new_status = "FORMING" if new_fill < DISPATCH_THRESHOLD * 100 else "FULL"
+
+            if not remaining_ids:
+                # No members left — delete the group
+                await db.ptl_groups.delete_one({"id": gid})
+            else:
+                # Recompute cargo_categories from remaining loads
+                rem_loads = await db.ptl_loads.find(
+                    {"id": {"$in": remaining_ids}, "status": {"$ne": "CANCELLED"}},
+                    {"_id": 0, "cargo_category": 1},
+                ).to_list(length=50)
+                rem_cats = list({l["cargo_category"] for l in rem_loads})
+                await db.ptl_groups.update_one(
+                    {"id": gid},
+                    {
+                        "$set": {
+                            "load_ids": remaining_ids,
+                            "total_weight_kg": new_total,
+                            "capacity_remaining_kg": new_rem,
+                            "fill_pct": round(new_fill, 1),
+                            "status": new_status,
+                            "cargo_categories": rem_cats or g.get("cargo_categories", []),
+                        }
+                    },
+                )
+    return {"cancelled": True}
+
+
+# ── GET all FORMING / FULL groups (for browsing in the market) ─────────────
+@api_router.get("/ptl/groups")
+async def list_ptl_groups(
+    origin_city: Optional[str] = None,
+    dest_city: Optional[str] = None,
+):
+    query: dict = {"status": {"$in": ["FORMING", "FULL"]}}
+    if origin_city and dest_city:
+        query["corridor"] = f"{derive_corridor(origin_city)}→{derive_corridor(dest_city)}"
+    elif origin_city:
+        query["corridor"] = {"$regex": f"^{re.escape(derive_corridor(origin_city))}→", "$options": "i"}
+    elif dest_city:
+        query["corridor"] = {"$regex": f"→{re.escape(derive_corridor(dest_city))}$", "$options": "i"}
+
+    groups = await db.ptl_groups.find(query, {"_id": 0}).sort("fill_pct", -1).to_list(length=50)
+
+    out: List[dict] = []
+    for g in groups:
+        # Attach lightweight member summaries (no phone numbers exposed here)
+        load_ids = g.get("load_ids", [])
+        members: List[dict] = []
+        if load_ids:
+            loads = await db.ptl_loads.find(
+                {"id": {"$in": load_ids}, "status": {"$ne": "CANCELLED"}},
+                {"_id": 0, "poster_name": 1, "poster_company": 1,
+                 "origin": 1, "weight_kg": 1, "cargo_type": 1, "status": 1},
+            ).to_list(length=20)
+            for l in loads:
+                members.append({
+                    "name": l.get("poster_name", ""),
+                    "company": l.get("poster_company", ""),
+                    "origin_locality": (l.get("origin") or {}).get("locality", ""),
+                    "weight_kg": l.get("weight_kg", 0),
+                    "cargo_type": l.get("cargo_type", ""),
+                    "confirmed": l.get("status") == "CONFIRMED",
+                })
+        g_out = _strip_group_internals(g)
+        g_out["members"] = members
+        out.append(g_out)
+    return out
+
+
+# ── GET single group detail ────────────────────────────────────────────────
+@api_router.get("/ptl/groups/{group_id}")
+async def get_ptl_group(group_id: str, viewer_phone: Optional[str] = None):
+    g = await db.ptl_groups.find_one({"id": group_id}, {"_id": 0})
+    if not g:
+        raise HTTPException(status_code=404, detail="Group not found")
+    viewer = _norm_phone(viewer_phone) if viewer_phone else ""
+    load_ids = g.get("load_ids", [])
+    loads = await db.ptl_loads.find(
+        {"id": {"$in": load_ids}, "status": {"$ne": "CANCELLED"}},
+        {"_id": 0},
+    ).to_list(length=20) if load_ids else []
+    members: List[dict] = []
+    for l in loads:
+        # Only expose phone if the viewer is themselves in this group (mutual confirm)
+        viewer_in_group = any(ll["poster_phone"] == viewer for ll in loads) if viewer else False
+        expose_phone = viewer_in_group and l.get("status") == "CONFIRMED"
+        members.append({
+            "load_id": l.get("id"),
+            "name": l.get("poster_name", ""),
+            "company": l.get("poster_company", ""),
+            "origin_locality": (l.get("origin") or {}).get("locality", ""),
+            "weight_kg": l.get("weight_kg", 0),
+            "cargo_type": l.get("cargo_type", ""),
+            "cargo_category": l.get("cargo_category", ""),
+            "confirmed": l.get("status") == "CONFIRMED",
+            "phone": l.get("poster_phone", "") if expose_phone else None,
+            "is_me": (viewer and l.get("poster_phone") == viewer) or False,
+        })
+    g_out = _strip_group_internals(g)
+    g_out["members"] = members
+    return g_out
+
+
+# ── CONFIRM joining a group ────────────────────────────────────────────────
+@api_router.post("/ptl/groups/{group_id}/confirm")
+async def confirm_group_membership(group_id: str, phone: str):
+    phone = _norm_phone(phone)
+    if len(phone) != 10:
+        raise HTTPException(status_code=400, detail="phone must be a 10-digit number")
+    load = await db.ptl_loads.find_one({"group_id": group_id, "poster_phone": phone, "status": {"$ne": "CANCELLED"}})
+    if not load:
+        raise HTTPException(status_code=404, detail="You are not in this group")
+    await db.ptl_loads.update_one({"id": load["id"]}, {"$set": {"status": "CONFIRMED"}})
+    group = await db.ptl_groups.find_one({"id": group_id})
+    if group:
+        all_loads = await db.ptl_loads.find(
+            {"id": {"$in": group.get("load_ids", [])}, "status": {"$ne": "CANCELLED"}},
+            {"_id": 0, "status": 1},
+        ).to_list(length=20)
+        if all_loads and all(l["status"] == "CONFIRMED" for l in all_loads):
+            await db.ptl_groups.update_one({"id": group_id}, {"$set": {"status": "FULL"}})
+    return {"confirmed": True}
+
+
 app.include_router(api_router)
 
 app.add_middleware(
@@ -1228,6 +1651,16 @@ async def startup():
     try:
         await db.loads.create_index("short_id", unique=True, sparse=True, background=True)
         await db.loads.create_index("id", unique=True, background=True)
+        # PTL indexes
+        await db.ptl_loads.create_index([("poster_phone", 1), ("status", 1)], background=True)
+        await db.ptl_loads.create_index([("group_id", 1)], background=True)
+        await db.ptl_loads.create_index([("status", 1), ("posted_at", -1)], background=True)
+        await db.ptl_loads.create_index("id", unique=True, background=True)
+        await db.ptl_groups.create_index([("corridor", 1), ("status", 1)], background=True)
+        await db.ptl_groups.create_index([("status", 1), ("fill_pct", -1)], background=True)
+        await db.ptl_groups.create_index("id", unique=True, background=True)
+        # TTL — auto-delete expired PTL loads (expires_at is a BSON Date)
+        await db.ptl_loads.create_index([("expires_at", 1)], expireAfterSeconds=0, background=True)
         logger.info("MongoDB indexes ensured on startup.")
     except Exception as e:
         logger.warning(f"Index creation on startup failed (non-fatal): {e}")

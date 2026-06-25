@@ -146,6 +146,75 @@ type MapplsSuggestion = {
   eLoc: string;
 };
 
+// ============== PTL (Partial Truck Load) types ==============
+type PtlLoad = {
+  id: string;
+  poster_phone: string;
+  poster_name: string;
+  poster_company?: string;
+  origin_locality: string;
+  origin_city: string;
+  origin_pincode: string;
+  origin_latitude?: number | null;
+  origin_longitude?: number | null;
+  destination_locality: string;
+  destination_city: string;
+  destination_pincode: string;
+  destination_latitude?: number | null;
+  destination_longitude?: number | null;
+  cargo_type: string;
+  cargo_category: string;
+  weight_kg: number;
+  status: "OPEN" | "MATCHED" | "CONFIRMED" | "CANCELLED";
+  group_id?: string | null;
+  posted_at: string;
+};
+
+type PtlMember = {
+  load_id?: string;
+  phone?: string | null;
+  name: string;
+  company?: string;
+  origin_locality: string;
+  weight_kg: number;
+  cargo_type: string;
+  cargo_category?: string;
+  confirmed?: boolean;
+  is_me?: boolean;
+};
+
+type PtlGroup = {
+  id: string;
+  corridor: string;
+  origin_display: string;
+  destination_display: string;
+  load_ids: string[];
+  total_weight_kg: number;
+  capacity_kg: number;
+  capacity_remaining_kg: number;
+  fill_pct: number;
+  cargo_categories: string[];
+  status: "FORMING" | "FULL" | "DISPATCHED";
+  created_at: string;
+  members?: PtlMember[];
+};
+
+const TRUCK_CAPACITY_KG = 20000;
+const PTL_CARGO_TYPES = ["Bags", "Carton Box", "Drums", "Loose", "Others"];
+const CARGO_TYPE_TO_CATEGORY: Record<string, string> = {
+  "Bags": "GENERAL",
+  "Carton Box": "GENERAL",
+  "Loose": "GENERAL",
+  "Others": "GENERAL",
+  "Drums": "GENERAL", // Drums prompts for HAZMAT confirmation in UI
+};
+
+function ptlFillColor(pct: number): string {
+  if (pct >= 85) return "#FF6B00";
+  if (pct >= 60) return "#F59E0B";
+  return "#22C55E";
+}
+
 // Extract 6-digit pincode from Mappls placeAddress string
 function extractPincode(address: string): string {
   const match = address.match(/\b(\d{6})\b/);
@@ -213,7 +282,7 @@ export default function Index() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [phoneVerified, setPhoneVerified] = useState<PhoneVerified | null>(null);
   const [loaded, setLoaded] = useState(false);
-  const [tab, setTab] = useState<"post" | "market">("post");
+  const [tab, setTab] = useState<"post" | "market" | "myPtl">("post");
   const [showProfile, setShowProfile] = useState(false);
   const [showEditProfile, setShowEditProfile] = useState(false);
 
@@ -380,20 +449,31 @@ useEffect(() => {
         </View>
       </View>
 
-      <View style={styles.tabs} testID="tabs">
-        <TabButton label="Post Truck Space" icon="add-circle-outline" active={tab === "post"} onPress={() => setTab("post")} testID="tab-post" />
-        <TabButton label="Find Truck Space" icon="search-outline" active={tab === "market"} onPress={() => setTab("market")} testID="tab-market" />
+      <View style={{ flex: 1 }}>
+        {tab === "post"   && <PostLoadScreen profile={profile} onPosted={() => setTab("market")} />}
+        {tab === "market" && <LoadMarketScreen profile={profile} />}
+        {tab === "myPtl"  && <MyPtlScreen profile={profile} />}
       </View>
 
-      <SwipeableTabs tab={tab} setTab={setTab}>
-        <View style={[StyleSheet.absoluteFill, { display: tab === "post" ? "flex" : "none" }]} testID="post-tab-pane">
-          <PostLoadScreen profile={profile} onPosted={() => setTab("market")} />
-        </View>
-        <View style={[StyleSheet.absoluteFill, { display: tab === "market" ? "flex" : "none" }]} testID="market-tab-pane">
-          <LoadMarketScreen profile={profile} />
-        </View>
-      </SwipeableTabs>
+      <View style={styles.bottomNav} testID="bottom-nav">
+        <BottomNavBtn icon="add-circle-outline" label="Post Space" active={tab === "post"}   onPress={() => setTab("post")}   testID="bottom-nav-post" />
+        <BottomNavBtn icon="search-outline"     label="Find Truck" active={tab === "market"} onPress={() => setTab("market")} testID="bottom-nav-market" />
+        <BottomNavBtn icon="cube-outline"       label="My PTL"     active={tab === "myPtl"}  onPress={() => setTab("myPtl")}  testID="bottom-nav-myptl" />
+      </View>
     </SafeAreaView>
+  );
+}
+
+// ============== Bottom Nav Button ==============
+function BottomNavBtn({ icon, label, active, onPress, testID }: {
+  icon: any; label: string; active: boolean; onPress: () => void; testID?: string;
+}) {
+  return (
+    <TouchableOpacity testID={testID} onPress={onPress} style={styles.bottomNavBtn} activeOpacity={0.7}>
+      <Ionicons name={icon} size={24} color={active ? COLORS.primary : COLORS.textMuted} />
+      <Text style={[styles.bottomNavLabel, active && styles.bottomNavLabelActive]}>{label}</Text>
+      {active ? <View style={styles.bottomNavDot} /> : null}
+    </TouchableOpacity>
   );
 }
 
@@ -3254,6 +3334,7 @@ function useContactsMap(userPhone?: string): Map<string, string> {
 }
 
 function LoadMarketScreen({ profile }: { profile: Profile }) {
+  const [marketMode, setMarketMode] = useState<"full" | "ptl">("full");
   const [allLoads, setAllLoads] = useState<Load[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -3262,6 +3343,27 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
   const [filteredLoads, setFilteredLoads] = useState<Load[] | null>(null);
   const [distances, setDistances] = useState<Distances>({});
   const contactsMap = useContactsMap(profile.phone);
+
+  // PTL state
+  const [ptlGroups, setPtlGroups] = useState<PtlGroup[]>([]);
+  const [ptlLoading, setPtlLoading] = useState(false);
+  const [ptlRefreshing, setPtlRefreshing] = useState(false);
+  const [showPostPtl, setShowPostPtl] = useState(false);
+  const [selectedGroup, setSelectedGroup] = useState<PtlGroup | null>(null);
+
+  const fetchPtlGroups = useCallback(async () => {
+    setPtlLoading(true);
+    try {
+      const r = await fetch(`${API}/ptl/groups`);
+      const j = await r.json();
+      setPtlGroups(Array.isArray(j) ? j : []);
+    } catch {
+      Alert.alert("Error", "Failed to fetch PTL groups");
+    } finally {
+      setPtlLoading(false);
+      setPtlRefreshing(false);
+    }
+  }, []);
 
   const fetchLoads = useCallback(async () => {
     try { const r = await fetch(`${API}/loads`); const j = await r.json(); setAllLoads(j); }
@@ -3330,7 +3432,28 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
 
   return (
     <View style={styles.fill}>
-      <View style={styles.marketTop}>
+      <View style={styles.modeToggleBar} testID="market-mode-toggle">
+        <TouchableOpacity
+          testID="market-mode-full"
+          style={[styles.modeToggleBtn, marketMode === "full" && styles.modeToggleBtnActive]}
+          onPress={() => setMarketMode("full")}
+        >
+          <Ionicons name="car-outline" size={14} color={marketMode === "full" ? COLORS.surface : COLORS.textMuted} />
+          <Text style={[styles.modeToggleText, marketMode === "full" && styles.modeToggleTextActive]}>Full Truck</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          testID="market-mode-ptl"
+          style={[styles.modeToggleBtn, marketMode === "ptl" && styles.modeToggleBtnActive]}
+          onPress={() => { setMarketMode("ptl"); fetchPtlGroups(); }}
+        >
+          <Ionicons name="cube-outline" size={14} color={marketMode === "ptl" ? COLORS.surface : COLORS.textMuted} />
+          <Text style={[styles.modeToggleText, marketMode === "ptl" && styles.modeToggleTextActive]}>Partial Load</Text>
+        </TouchableOpacity>
+      </View>
+
+      {marketMode === "full" ? (
+        <>
+          <View style={styles.marketTop}>
         <Text style={styles.marketCount} testID="loads-count">{displayLoads.length} {displayLoads.length === 1 ? "truck" : "trucks"} {isFiltered ? "matched" : "available"}</Text>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
           {isFiltered && (
@@ -3368,6 +3491,63 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
         />
       )}
       <FindSpaceModal visible={showFilter} initial={activeFilter} onClose={() => setShowFilter(false)} onApply={onApplyFilter} />
+        </>
+      ) : (
+        <FlatList
+          testID="ptl-groups-list"
+          data={ptlGroups}
+          keyExtractor={(g) => g.id}
+          contentContainerStyle={{ padding: 12, paddingBottom: 40 }}
+          refreshControl={<RefreshControl refreshing={ptlRefreshing} onRefresh={() => { setPtlRefreshing(true); fetchPtlGroups(); }} />}
+          ListHeaderComponent={
+            <TouchableOpacity
+              testID="ptl-post-cta"
+              style={styles.ptlPostCta}
+              onPress={() => setShowPostPtl(true)}
+              activeOpacity={0.85}
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.ptlPostCtaTitle}>Post your partial load</Text>
+                <Text style={styles.ptlPostCtaSub}>Pay only for what you ship. Get matched with others.</Text>
+              </View>
+              <View style={styles.ptlPostCtaBtn}>
+                <Ionicons name="add" size={22} color={COLORS.surface} />
+              </View>
+            </TouchableOpacity>
+          }
+          ListEmptyComponent={
+            ptlLoading ? (
+              <View style={[styles.center, { paddingVertical: 48 }]}>
+                <ActivityIndicator size="large" color={COLORS.primary} />
+              </View>
+            ) : (
+              <View style={styles.emptyWrap} testID="ptl-empty-state">
+                <Ionicons name="cube-outline" size={48} color={COLORS.textSubtle} />
+                <Text style={styles.emptyTitle}>No groups forming yet</Text>
+                <Text style={styles.emptySub}>Post the first partial load on your route to start a group.</Text>
+              </View>
+            )
+          }
+          renderItem={({ item }) => (
+            <PtlGroupCard group={item} onPress={() => setSelectedGroup(item)} />
+          )}
+        />
+      )}
+
+      <PostPtlModal
+        visible={showPostPtl}
+        profile={profile}
+        onClose={() => setShowPostPtl(false)}
+        onPosted={() => { setShowPostPtl(false); fetchPtlGroups(); }}
+      />
+      <PtlGroupDetailModal
+        visible={!!selectedGroup}
+        groupId={selectedGroup?.id || null}
+        profile={profile}
+        onClose={() => setSelectedGroup(null)}
+        onChanged={() => fetchPtlGroups()}
+        onJoinNew={() => { setSelectedGroup(null); setShowPostPtl(true); }}
+      />
     </View>
   );
 }
@@ -4293,6 +4473,591 @@ function SectionTitle({ icon, title }: { icon: any; title: string }) {
   );
 }
 
+// ==========================================================================
+// ============== PTL (Partial Truck Load) Components ==============
+// ==========================================================================
+
+function PtlGroupCard({ group, onPress }: { group: PtlGroup; onPress: () => void }) {
+  const color = ptlFillColor(group.fill_pct);
+  const isNearlyFull = group.fill_pct >= 85;
+  return (
+    <TouchableOpacity
+      testID={`ptl-group-card-${group.id}`}
+      onPress={onPress}
+      activeOpacity={0.85}
+      style={styles.ptlCard}
+    >
+      <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 8 }}>
+        <Text style={styles.ptlRouteText} numberOfLines={1}>
+          {group.origin_display}
+        </Text>
+        <Ionicons name="arrow-forward" size={14} color={COLORS.textMuted} style={{ marginHorizontal: 8 }} />
+        <Text style={styles.ptlRouteText} numberOfLines={1}>
+          {group.destination_display}
+        </Text>
+        <View style={{ flex: 1 }} />
+        <View style={[styles.ptlStatusPill, group.status === "FULL" && { backgroundColor: "#FFEDD5" }]}>
+          <Text style={[styles.ptlStatusText, group.status === "FULL" && { color: "#C2410C" }]}>{group.status}</Text>
+        </View>
+      </View>
+
+      <View style={styles.ptlFillBg}>
+        <View style={[styles.ptlFillInner, { width: `${Math.min(100, group.fill_pct)}%`, backgroundColor: color }]} />
+      </View>
+
+      <View style={{ flexDirection: "row", justifyContent: "space-between", marginTop: 4 }}>
+        <Text style={styles.ptlMetaText}>
+          {Math.round(group.total_weight_kg).toLocaleString()} / {group.capacity_kg.toLocaleString()} kg
+        </Text>
+        <Text style={[styles.ptlMetaText, { color }]}>
+          {group.fill_pct.toFixed(1)}% filled
+        </Text>
+      </View>
+
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
+        {(group.members || []).slice(0, 4).map((m, i) => (
+          <View key={i} style={styles.ptlChip}>
+            <Text style={styles.ptlChipText}>{m.cargo_type}</Text>
+          </View>
+        ))}
+        <View style={styles.ptlChip}>
+          <Ionicons name="people-outline" size={12} color={COLORS.textMuted} />
+          <Text style={styles.ptlChipText}> {(group.members || []).length} co-loader{(group.members || []).length === 1 ? "" : "s"}</Text>
+        </View>
+      </View>
+
+      <View style={[styles.ptlJoinBtn, { backgroundColor: isNearlyFull ? "#F59E0B" : COLORS.success }]}>
+        <Text style={styles.ptlJoinBtnText}>{isNearlyFull ? "Request to Join" : "Join Group"}</Text>
+        <Ionicons name="arrow-forward" size={14} color={COLORS.surface} />
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute }: {
+  visible: boolean;
+  profile: Profile;
+  onClose: () => void;
+  onPosted: (resp: { load_id: string; group_id: string | null }) => void;
+  prefillRoute?: { origin?: { locality: string; city: string; pincode: string; latitude?: number | null; longitude?: number | null }; dest?: { locality: string; city: string; pincode: string; latitude?: number | null; longitude?: number | null } };
+}) {
+  const [originText, setOriginText] = useState("");
+  const [originPin, setOriginPin] = useState("");
+  const [originInfo, setOriginInfo] = useState<any>(null);
+  const [destText, setDestText] = useState("");
+  const [destPin, setDestPin] = useState("");
+  const [destInfo, setDestInfo] = useState<any>(null);
+  const [cargoType, setCargoType] = useState("Bags");
+  const [cargoCategory, setCargoCategory] = useState("GENERAL");
+  const [weightKg, setWeightKg] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (visible && prefillRoute) {
+      if (prefillRoute.origin) {
+        setOriginText(prefillRoute.origin.locality || prefillRoute.origin.city || "");
+        setOriginPin(prefillRoute.origin.pincode || "");
+        setOriginInfo({
+          locality: prefillRoute.origin.locality,
+          city: prefillRoute.origin.city,
+          pincode: prefillRoute.origin.pincode,
+          latitude: prefillRoute.origin.latitude,
+          longitude: prefillRoute.origin.longitude,
+        });
+      }
+      if (prefillRoute.dest) {
+        setDestText(prefillRoute.dest.locality || prefillRoute.dest.city || "");
+        setDestPin(prefillRoute.dest.pincode || "");
+        setDestInfo({
+          locality: prefillRoute.dest.locality,
+          city: prefillRoute.dest.city,
+          pincode: prefillRoute.dest.pincode,
+          latitude: prefillRoute.dest.latitude,
+          longitude: prefillRoute.dest.longitude,
+        });
+      }
+    }
+  }, [visible, prefillRoute]);
+
+  const handleCargoSelect = (ct: string) => {
+    setCargoType(ct);
+    if (ct === "Drums") {
+      Alert.alert(
+        "Hazardous cargo?",
+        "Do these drums contain hazardous material (chemicals, fuel, solvents)?",
+        [
+          { text: "No, general cargo", onPress: () => setCargoCategory("GENERAL") },
+          { text: "Yes, HAZMAT", style: "destructive", onPress: () => setCargoCategory("HAZMAT") },
+        ],
+        { cancelable: true },
+      );
+    } else {
+      setCargoCategory(CARGO_TYPE_TO_CATEGORY[ct] || "GENERAL");
+    }
+  };
+
+  const reset = () => {
+    setOriginText(""); setOriginPin(""); setOriginInfo(null);
+    setDestText(""); setDestPin(""); setDestInfo(null);
+    setCargoType("Bags"); setCargoCategory("GENERAL"); setWeightKg("");
+  };
+
+  const submit = async () => {
+    if (!originInfo?.city || !originPin) return Alert.alert("Origin", "Please select an origin location.");
+    if (!destInfo?.city || !destPin) return Alert.alert("Destination", "Please select a destination location.");
+    const w = parseFloat(weightKg);
+    if (!w || w <= 0) return Alert.alert("Weight", "Please enter a valid weight in kg.");
+    if (w > TRUCK_CAPACITY_KG) return Alert.alert("Too heavy", `A single PTL load can't exceed ${TRUCK_CAPACITY_KG} kg. Use full-truck booking instead.`);
+
+    setBusy(true);
+    try {
+      const res = await fetch(`${API}/ptl/loads`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          poster_phone: profile.phone,
+          origin_locality: originInfo.locality || originText,
+          origin_city: originInfo.city,
+          origin_pincode: originPin,
+          origin_latitude: originInfo.latitude ?? null,
+          origin_longitude: originInfo.longitude ?? null,
+          destination_locality: destInfo.locality || destText,
+          destination_city: destInfo.city,
+          destination_pincode: destPin,
+          destination_latitude: destInfo.latitude ?? null,
+          destination_longitude: destInfo.longitude ?? null,
+          cargo_type: cargoType,
+          cargo_category: cargoCategory,
+          weight_kg: w,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        Alert.alert("Could not post", data?.detail || "Please try again.");
+        return;
+      }
+      Alert.alert(
+        "Load posted!",
+        data.group_id
+          ? `You've been matched to group ${data.group_id}.`
+          : "Starting a new group on this route.",
+      );
+      reset();
+      onPosted(data);
+    } catch (e: any) {
+      Alert.alert("Network error", e?.message || "Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+      <View style={styles.ptlModalBackdrop}>
+        <View style={styles.ptlModalSheet} testID="post-ptl-modal">
+          <View style={styles.ptlModalHeader}>
+            <Text style={styles.ptlModalTitle}>Post partial load</Text>
+            <TouchableOpacity onPress={onClose} testID="post-ptl-close">
+              <Ionicons name="close" size={26} color={COLORS.text} />
+            </TouchableOpacity>
+          </View>
+          <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 32 }} keyboardShouldPersistTaps="handled">
+            <SmartRouteInput
+              label="Origin"
+              testIDPrefix="ptl-origin"
+              text={originText}
+              pin={originPin}
+              info={originInfo}
+              onChange={(t, p, i) => { setOriginText(t); setOriginPin(p); setOriginInfo(i); }}
+            />
+            <View style={{ height: 12 }} />
+            <SmartRouteInput
+              label="Destination"
+              testIDPrefix="ptl-dest"
+              text={destText}
+              pin={destPin}
+              info={destInfo}
+              onChange={(t, p, i) => { setDestText(t); setDestPin(p); setDestInfo(i); }}
+            />
+
+            <Text style={[styles.label, { marginTop: 18 }]}>Cargo type</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+              {PTL_CARGO_TYPES.map((ct) => (
+                <TouchableOpacity
+                  key={ct}
+                  testID={`ptl-cargo-${ct}`}
+                  style={[styles.ptlCargoChip, cargoType === ct && styles.ptlCargoChipActive]}
+                  onPress={() => handleCargoSelect(ct)}
+                >
+                  <Text style={[styles.ptlCargoChipText, cargoType === ct && styles.ptlCargoChipTextActive]}>{ct}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            {cargoCategory === "HAZMAT" && (
+              <View style={styles.ptlHazmatBanner}>
+                <Ionicons name="warning" size={16} color="#B91C1C" />
+                <Text style={styles.ptlHazmatText}>HAZMAT — will be grouped only with other HAZMAT loads</Text>
+              </View>
+            )}
+
+            <Text style={[styles.label, { marginTop: 18 }]}>Weight (kg)</Text>
+            <TextInput
+              testID="ptl-weight-input"
+              style={styles.input}
+              placeholder="e.g. 3500"
+              placeholderTextColor={COLORS.textSubtle}
+              keyboardType="number-pad"
+              value={weightKg}
+              onChangeText={(t) => setWeightKg(t.replace(/[^0-9]/g, "").slice(0, 5))}
+            />
+            <Text style={styles.hintMuted}>Max {TRUCK_CAPACITY_KG.toLocaleString()} kg per partial load</Text>
+
+            <TouchableOpacity
+              testID="ptl-submit-btn"
+              style={[styles.primaryBtn, busy && { opacity: 0.6 }]}
+              onPress={submit}
+              disabled={busy}
+            >
+              {busy ? <ActivityIndicator color={COLORS.surface} /> : (
+                <>
+                  <Text style={styles.primaryBtnText}>Find me a group</Text>
+                  <Ionicons name="search" size={18} color={COLORS.surface} />
+                </>
+              )}
+            </TouchableOpacity>
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function PtlGroupDetailModal({ visible, groupId, profile, onClose, onChanged, onJoinNew }: {
+  visible: boolean;
+  groupId: string | null;
+  profile: Profile;
+  onClose: () => void;
+  onChanged: () => void;
+  onJoinNew: () => void;
+}) {
+  const [group, setGroup] = useState<PtlGroup | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const fetchGroup = useCallback(async () => {
+    if (!groupId) return;
+    setLoading(true);
+    try {
+      const r = await fetch(`${API}/ptl/groups/${groupId}?viewer_phone=${encodeURIComponent(profile.phone)}`);
+      const j = await r.json();
+      if (r.ok) setGroup(j);
+    } catch {} finally { setLoading(false); }
+  }, [groupId, profile.phone]);
+
+  useEffect(() => {
+    if (visible && groupId) fetchGroup();
+    if (!visible) setGroup(null);
+  }, [visible, groupId, fetchGroup]);
+
+  const myMember = (group?.members || []).find((m) => m.is_me);
+  const largest = (group?.members || []).slice().sort((a, b) => b.weight_kg - a.weight_kg)[0];
+
+  const confirmMembership = async () => {
+    if (!group) return;
+    try {
+      const r = await fetch(`${API}/ptl/groups/${group.id}/confirm?phone=${encodeURIComponent(profile.phone)}`, { method: "POST" });
+      const j = await r.json();
+      if (!r.ok) return Alert.alert("Could not confirm", j?.detail || "Try again");
+      Alert.alert("Confirmed", "You're locked in for this trip.");
+      fetchGroup();
+      onChanged();
+    } catch (e: any) {
+      Alert.alert("Network error", e?.message || "Try again");
+    }
+  };
+
+  const contactCoordinator = async () => {
+    const phone = largest?.phone;
+    if (!phone) {
+      Alert.alert("Not available", "The coordinator's number will be shared after everyone confirms.");
+      return;
+    }
+    const msg = `Hi ${largest?.name || ""}, regarding Truck Traffic group ${group?.id} (${group?.origin_display} → ${group?.destination_display}).`;
+    try { await Linking.openURL(`https://wa.me/91${phone}?text=${encodeURIComponent(msg)}`); } catch {}
+  };
+
+  return (
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+      <SafeAreaView style={[styles.fill, { backgroundColor: COLORS.bg }]} edges={["top"]}>
+        <View style={styles.ptlDetailHeader}>
+          <TouchableOpacity onPress={onClose} testID="ptl-detail-close">
+            <Ionicons name="arrow-back" size={24} color={COLORS.text} />
+          </TouchableOpacity>
+          <Text style={styles.ptlDetailHeaderTitle} numberOfLines={1}>Group details</Text>
+          <View style={{ width: 24 }} />
+        </View>
+        {loading || !group ? (
+          <View style={[styles.fill, styles.center]}>
+            <ActivityIndicator size="large" color={COLORS.primary} />
+          </View>
+        ) : (
+          <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+            <View style={styles.ptlDetailRouteCard}>
+              <Text style={styles.ptlDetailCorridor}>{group.corridor}</Text>
+              <View style={{ flexDirection: "row", alignItems: "center", marginTop: 6 }}>
+                <Text style={styles.ptlDetailRouteText} numberOfLines={1}>{group.origin_display}</Text>
+                <Ionicons name="arrow-forward" size={16} color={COLORS.textMuted} style={{ marginHorizontal: 10 }} />
+                <Text style={styles.ptlDetailRouteText} numberOfLines={1}>{group.destination_display}</Text>
+              </View>
+              <View style={[styles.ptlStatusPill, { marginTop: 10, alignSelf: "flex-start" }, group.status === "FULL" && { backgroundColor: "#FFEDD5" }]}>
+                <Text style={[styles.ptlStatusText, group.status === "FULL" && { color: "#C2410C" }]}>{group.status}</Text>
+              </View>
+            </View>
+
+            <View style={{ marginTop: 18 }}>
+              <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
+                <Text style={styles.ptlMetaText}>{Math.round(group.total_weight_kg).toLocaleString()} kg loaded</Text>
+                <Text style={[styles.ptlMetaText, { color: ptlFillColor(group.fill_pct) }]}>{group.fill_pct.toFixed(1)}% full</Text>
+              </View>
+              <View style={[styles.ptlFillBg, { height: 10 }]}>
+                <View style={[styles.ptlFillInner, { width: `${Math.min(100, group.fill_pct)}%`, backgroundColor: ptlFillColor(group.fill_pct) }]} />
+              </View>
+              <Text style={[styles.hintMuted, { marginTop: 4 }]}>
+                {Math.round(group.capacity_remaining_kg).toLocaleString()} kg of {group.capacity_kg.toLocaleString()} kg still available
+              </Text>
+            </View>
+
+            <Text style={styles.ptlSectionLabel}>Members ({(group.members || []).length})</Text>
+            {(group.members || []).map((m, i) => (
+              <View key={i} style={[styles.ptlMemberRow, m.is_me && { backgroundColor: "#EEF2FA" }]}>
+                <View style={styles.ptlAvatar}>
+                  <Text style={styles.ptlAvatarText}>{(m.name || "?").trim().slice(0, 1).toUpperCase()}</Text>
+                </View>
+                <View style={{ flex: 1, marginLeft: 12 }}>
+                  <Text style={styles.ptlMemberName} numberOfLines={1}>
+                    {m.name || "—"}{m.is_me ? "  (you)" : ""}
+                  </Text>
+                  {!!m.company && <Text style={styles.ptlMemberSub} numberOfLines={1}>{m.company}</Text>}
+                  <Text style={styles.ptlMemberSub} numberOfLines={1}>
+                    {m.origin_locality} · {m.cargo_type} · {Math.round(m.weight_kg).toLocaleString()} kg
+                  </Text>
+                </View>
+                {m.confirmed ? (
+                  <Ionicons name="checkmark-circle" size={22} color={COLORS.success} />
+                ) : (
+                  <Ionicons name="time-outline" size={22} color={COLORS.textMuted} />
+                )}
+              </View>
+            ))}
+
+            <Text style={styles.ptlSectionLabel}>Compatibility</Text>
+            <View style={styles.ptlCompatRow}>
+              <Ionicons name="checkmark-circle" size={18} color={COLORS.success} />
+              <Text style={styles.ptlCompatText}>All cargo is {group.cargo_categories.join(", ")} — safe to co-load</Text>
+            </View>
+            <View style={styles.ptlCompatRow}>
+              <Ionicons name="checkmark-circle" size={18} color={COLORS.success} />
+              <Text style={styles.ptlCompatText}>Pickup points within 25 km of each other</Text>
+            </View>
+            <View style={styles.ptlCompatRow}>
+              <Ionicons name="checkmark-circle" size={18} color={COLORS.success} />
+              <Text style={styles.ptlCompatText}>Drop points within 25 km of each other</Text>
+            </View>
+
+            <View style={{ height: 24 }} />
+            {myMember ? (
+              myMember.confirmed ? (
+                <View style={[styles.ptlConfirmedBanner]}>
+                  <Ionicons name="checkmark-circle" size={20} color={COLORS.success} />
+                  <Text style={styles.ptlConfirmedText}>You've confirmed your spot</Text>
+                </View>
+              ) : (
+                <TouchableOpacity testID="ptl-confirm-btn" style={styles.primaryBtn} onPress={confirmMembership}>
+                  <Text style={styles.primaryBtnText}>Confirm my spot</Text>
+                  <Ionicons name="checkmark" size={18} color={COLORS.surface} />
+                </TouchableOpacity>
+              )
+            ) : (
+              <TouchableOpacity testID="ptl-join-new-btn" style={styles.primaryBtn} onPress={onJoinNew}>
+                <Text style={styles.primaryBtnText}>Join this group</Text>
+                <Ionicons name="add" size={18} color={COLORS.surface} />
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity testID="ptl-contact-coordinator-btn" style={[styles.whatsappBtn, { marginTop: 10 }]} onPress={contactCoordinator}>
+              <Ionicons name="logo-whatsapp" size={18} color={COLORS.surface} />
+              <Text style={styles.primaryBtnText}>Contact coordinator</Text>
+            </TouchableOpacity>
+          </ScrollView>
+        )}
+      </SafeAreaView>
+    </Modal>
+  );
+}
+
+function MyPtlScreen({ profile }: { profile: Profile }) {
+  const [loads, setLoads] = useState<PtlLoad[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [groupCache, setGroupCache] = useState<Record<string, PtlGroup>>({});
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+
+  const fetchMyLoads = useCallback(async () => {
+    try {
+      const r = await fetch(`${API}/ptl/loads/my/${encodeURIComponent(profile.phone)}`);
+      const data = await r.json();
+      const list: PtlLoad[] = Array.isArray(data) ? data : [];
+      setLoads(list);
+      // Hydrate group cache for matched / confirmed loads
+      const gids = Array.from(new Set(list.map((l) => l.group_id).filter(Boolean) as string[]));
+      const fetched: Record<string, PtlGroup> = {};
+      await Promise.all(
+        gids.map(async (gid) => {
+          try {
+            const gr = await fetch(`${API}/ptl/groups/${gid}?viewer_phone=${encodeURIComponent(profile.phone)}`);
+            if (gr.ok) {
+              const gj = await gr.json();
+              fetched[gid] = gj;
+            }
+          } catch {}
+        }),
+      );
+      setGroupCache(fetched);
+    } catch {
+      // ignore — leave loads as-is
+    } finally {
+      setLoading(false); setRefreshing(false);
+    }
+  }, [profile.phone]);
+
+  useEffect(() => { fetchMyLoads(); }, [fetchMyLoads]);
+
+  const cancelLoad = (l: PtlLoad) => {
+    Alert.alert(
+      "Cancel this load?",
+      "It will be removed from the group and other members will see the updated capacity.",
+      [
+        { text: "Keep", style: "cancel" },
+        {
+          text: "Cancel load",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              const r = await fetch(`${API}/ptl/loads/${l.id}?phone=${encodeURIComponent(profile.phone)}`, { method: "DELETE" });
+              if (!r.ok) {
+                const j = await r.json().catch(() => ({}));
+                return Alert.alert("Failed", j?.detail || "Could not cancel.");
+              }
+              fetchMyLoads();
+            } catch (e: any) {
+              Alert.alert("Network error", e?.message || "Try again");
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  if (loading) {
+    return (
+      <View style={[styles.fill, styles.center]}>
+        <ActivityIndicator size="large" color={COLORS.primary} />
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.fill}>
+      <FlatList
+        testID="myptl-list"
+        data={loads}
+        keyExtractor={(l) => l.id}
+        contentContainerStyle={{ padding: 12, paddingBottom: 40 }}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchMyLoads(); }} />}
+        ListHeaderComponent={
+          <Text style={[styles.ptlSectionLabel, { marginTop: 4, marginLeft: 4 }]}>My partial loads</Text>
+        }
+        ListEmptyComponent={
+          <View style={styles.emptyWrap} testID="myptl-empty">
+            <Ionicons name="cube-outline" size={48} color={COLORS.textSubtle} />
+            <Text style={styles.emptyTitle}>No partial loads yet</Text>
+            <Text style={styles.emptySub}>Go to Find Truck → Partial Load to post one.</Text>
+          </View>
+        }
+        renderItem={({ item }) => {
+          const g = item.group_id ? groupCache[item.group_id] : null;
+          const fill = g?.fill_pct ?? 0;
+          const color = ptlFillColor(fill);
+          const pill = (() => {
+            if (item.status === "OPEN") return { bg: "#FEF3C7", fg: "#92400E", text: "Searching for match…", icon: "search-outline" };
+            if (item.status === "MATCHED") return { bg: "#DBEAFE", fg: "#1D4ED8", text: "Matched · View group", icon: "people-outline" };
+            if (item.status === "CONFIRMED") return { bg: "#DCFCE7", fg: "#15803D", text: "Confirmed ✓", icon: "checkmark-circle-outline" };
+            return { bg: "#F3F4F6", fg: "#6B7280", text: "Cancelled", icon: "close-circle-outline" };
+          })();
+          const tappable = item.status === "MATCHED" || item.status === "CONFIRMED";
+          return (
+            <View style={styles.ptlCard} testID={`myptl-card-${item.id}`}>
+              <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 6 }}>
+                <Text style={styles.ptlRouteText} numberOfLines={1}>{item.origin_locality || item.origin_city}</Text>
+                <Ionicons name="arrow-forward" size={14} color={COLORS.textMuted} style={{ marginHorizontal: 8 }} />
+                <Text style={styles.ptlRouteText} numberOfLines={1}>{item.destination_locality || item.destination_city}</Text>
+              </View>
+
+              <TouchableOpacity
+                disabled={!tappable}
+                onPress={() => item.group_id && setSelectedGroupId(item.group_id)}
+                style={[styles.ptlMyStatusPill, { backgroundColor: pill.bg }]}
+                testID={`myptl-status-${item.id}`}
+              >
+                <Ionicons name={pill.icon as any} size={14} color={pill.fg} />
+                <Text style={[styles.ptlMyStatusText, { color: pill.fg }]}>{pill.text}</Text>
+                {tappable && <Ionicons name="chevron-forward" size={14} color={pill.fg} />}
+              </TouchableOpacity>
+
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
+                <View style={styles.ptlChip}><Text style={styles.ptlChipText}>{item.cargo_type}</Text></View>
+                <View style={styles.ptlChip}><Text style={styles.ptlChipText}>{Math.round(item.weight_kg).toLocaleString()} kg</Text></View>
+                {item.cargo_category && item.cargo_category !== "GENERAL" && (
+                  <View style={[styles.ptlChip, { backgroundColor: "#FEE2E2" }]}><Text style={[styles.ptlChipText, { color: "#B91C1C" }]}>{item.cargo_category}</Text></View>
+                )}
+              </View>
+
+              {g && (
+                <>
+                  <View style={[styles.ptlFillBg, { marginTop: 10 }]}>
+                    <View style={[styles.ptlFillInner, { width: `${Math.min(100, fill)}%`, backgroundColor: color }]} />
+                  </View>
+                  <Text style={[styles.ptlMetaText, { marginTop: 4 }]}>
+                    Group: {Math.round(g.total_weight_kg).toLocaleString()} / {g.capacity_kg.toLocaleString()} kg ({fill.toFixed(1)}%)
+                  </Text>
+                </>
+              )}
+
+              {(item.status === "OPEN" || item.status === "MATCHED") && (
+                <TouchableOpacity
+                  testID={`myptl-cancel-${item.id}`}
+                  style={styles.ptlCancelBtn}
+                  onPress={() => cancelLoad(item)}
+                >
+                  <Ionicons name="trash-outline" size={14} color={COLORS.danger} />
+                  <Text style={styles.ptlCancelText}>Cancel load</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          );
+        }}
+      />
+      <PtlGroupDetailModal
+        visible={!!selectedGroupId}
+        groupId={selectedGroupId}
+        profile={profile}
+        onClose={() => setSelectedGroupId(null)}
+        onChanged={() => fetchMyLoads()}
+        onJoinNew={() => setSelectedGroupId(null)}
+      />
+    </View>
+  );
+}
+
+
 // ============== Styles ==============
 const styles = StyleSheet.create({
   fill: { flex: 1, backgroundColor: COLORS.bg },
@@ -4757,6 +5522,60 @@ selectedRouteEditBtn: {
   marginLeft: 12,
   padding: 8,
 },
-	
-	
+
+// ===== PTL Styles =====
+bottomNav: { flexDirection: "row", borderTopWidth: 1, borderTopColor: COLORS.border, backgroundColor: COLORS.surface, paddingBottom: 8, paddingTop: 6 },
+bottomNavBtn: { flex: 1, alignItems: "center", justifyContent: "center", paddingVertical: 4, position: "relative" },
+bottomNavLabel: { fontSize: 10, fontFamily: "Inter_500Medium", color: COLORS.textMuted, marginTop: 2 },
+bottomNavLabelActive: { color: COLORS.primary, fontFamily: "Inter_700Bold", fontWeight: "700" },
+bottomNavDot: { position: "absolute", bottom: 0, width: 4, height: 4, borderRadius: 2, backgroundColor: COLORS.primary },
+modeToggleBar: { flexDirection: "row", margin: 12, backgroundColor: "#F3F4F6", borderRadius: 10, padding: 3 },
+modeToggleBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, paddingVertical: 7, borderRadius: 8 },
+modeToggleBtnActive: { backgroundColor: COLORS.primary, shadowColor: "#000", shadowOpacity: 0.1, shadowRadius: 4, elevation: 2 },
+modeToggleText: { fontSize: 13, fontFamily: "Inter_600SemiBold", fontWeight: "600", color: COLORS.textMuted },
+modeToggleTextActive: { color: COLORS.surface },
+ptlCard: { backgroundColor: COLORS.surface, borderRadius: 14, padding: 14, marginBottom: 12, borderWidth: 1, borderColor: COLORS.border, shadowColor: "#000", shadowOpacity: 0.04, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 1 },
+ptlRouteText: { fontSize: 14, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.text, flexShrink: 1, maxWidth: "40%" },
+ptlStatusPill: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 100, backgroundColor: "#E0E7FF" },
+ptlStatusText: { fontSize: 10, fontFamily: "Inter_700Bold", fontWeight: "700", color: "#3730A3", letterSpacing: 0.5 },
+ptlFillBg: { height: 6, backgroundColor: "#F3F4F6", borderRadius: 100, overflow: "hidden", marginVertical: 6 },
+ptlFillInner: { height: "100%", borderRadius: 100 },
+ptlMetaText: { fontSize: 12, fontFamily: "Inter_600SemiBold", fontWeight: "600", color: COLORS.textMuted },
+ptlChip: { flexDirection: "row", alignItems: "center", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 100, backgroundColor: "#EEF2FA" },
+ptlChipText: { fontSize: 11, fontFamily: "Inter_600SemiBold", fontWeight: "600", color: COLORS.primary },
+ptlJoinBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 12, paddingVertical: 10, borderRadius: 10 },
+ptlJoinBtnText: { color: COLORS.surface, fontFamily: "Inter_700Bold", fontWeight: "700", fontSize: 13 },
+ptlPostCta: { flexDirection: "row", alignItems: "center", backgroundColor: COLORS.primary, borderRadius: 14, marginBottom: 12, padding: 14, gap: 12 },
+ptlPostCtaTitle: { fontSize: 14, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.surface },
+ptlPostCtaSub: { fontSize: 12, fontFamily: "Inter_400Regular", color: "rgba(255,255,255,0.85)", marginTop: 2 },
+ptlPostCtaBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: "rgba(255,255,255,0.2)", alignItems: "center", justifyContent: "center" },
+ptlSectionLabel: { fontSize: 12, fontFamily: "Inter_600SemiBold", fontWeight: "600", color: COLORS.textMuted, marginTop: 18, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 },
+ptlModalBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" },
+ptlModalSheet: { backgroundColor: COLORS.bg, borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: "92%" },
+ptlModalHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", padding: 16, borderBottomWidth: 1, borderBottomColor: COLORS.border },
+ptlModalTitle: { fontSize: 18, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.text },
+ptlCargoChip: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 100, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border },
+ptlCargoChipActive: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
+ptlCargoChipText: { fontSize: 13, fontFamily: "Inter_600SemiBold", fontWeight: "600", color: COLORS.text },
+ptlCargoChipTextActive: { color: COLORS.surface },
+ptlHazmatBanner: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "#FEE2E2", borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, marginTop: 10 },
+ptlHazmatText: { fontSize: 12, fontFamily: "Inter_600SemiBold", fontWeight: "600", color: "#B91C1C", flexShrink: 1 },
+ptlDetailHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingVertical: 14, backgroundColor: COLORS.surface, borderBottomWidth: 1, borderBottomColor: COLORS.border },
+ptlDetailHeaderTitle: { fontSize: 16, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.text },
+ptlDetailRouteCard: { backgroundColor: COLORS.surface, borderRadius: 14, padding: 14, borderWidth: 1, borderColor: COLORS.border },
+ptlDetailCorridor: { fontSize: 11, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.textMuted, letterSpacing: 1, textTransform: "uppercase" },
+ptlDetailRouteText: { fontSize: 16, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.text, flexShrink: 1, maxWidth: "42%" },
+ptlMemberRow: { flexDirection: "row", alignItems: "center", padding: 12, backgroundColor: COLORS.surface, borderRadius: 12, borderWidth: 1, borderColor: COLORS.border, marginBottom: 8 },
+ptlAvatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: COLORS.primary, alignItems: "center", justifyContent: "center" },
+ptlAvatarText: { color: COLORS.surface, fontFamily: "Inter_700Bold", fontWeight: "700", fontSize: 16 },
+ptlMemberName: { fontSize: 14, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.text },
+ptlMemberSub: { fontSize: 12, color: COLORS.textMuted, marginTop: 2 },
+ptlCompatRow: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 4 },
+ptlCompatText: { fontSize: 13, color: COLORS.text, flexShrink: 1 },
+ptlConfirmedBanner: { flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: "#DCFCE7", borderRadius: 12, padding: 14, borderWidth: 1, borderColor: "#86EFAC" },
+ptlConfirmedText: { color: "#15803D", fontFamily: "Inter_700Bold", fontWeight: "700", fontSize: 14 },
+ptlMyStatusPill: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 100, alignSelf: "flex-start" },
+ptlMyStatusText: { fontSize: 12, fontFamily: "Inter_700Bold", fontWeight: "700" },
+ptlCancelBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 12, paddingVertical: 8, borderRadius: 10, borderWidth: 1, borderColor: "#FECACA" },
+ptlCancelText: { color: COLORS.danger, fontFamily: "Inter_600SemiBold", fontWeight: "600", fontSize: 13 },
 });

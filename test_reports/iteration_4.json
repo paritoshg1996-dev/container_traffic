@@ -1,0 +1,47 @@
+{
+  "summary": "Backend-only testing of new PTL (Partial Truck Load) consolidation endpoints. 28/28 pytest cases pass against http://localhost:8001/api. Covers POST/GET/DELETE on /api/ptl/loads, GET /api/ptl/groups (+ detail + filter), POST /api/ptl/groups/{id}/confirm, validation errors, matching rules (corridor/cargo-compat/proximity/capacity), group recomputation on cancel, group deletion when last member cancels, phone-leak rules in list/detail views, and regression on /api/, /api/users/{phone}, /api/loads.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/ptl/loads", "issue": "Returns HTTP 200 on create (idiomatically POST creation should return 201). Behavioural — not a bug."},
+      {"endpoint": "GET /api/ptl/groups", "issue": "Per-group member fetch is N+1 (one find() per group inside the response loop). Fine for small data, will hurt at scale — switch to a single $in find or $lookup."},
+      {"endpoint": "GET /api/ptl/groups/{id}", "issue": "Inside the per-member loop, `viewer_in_group` is recomputed for every member (O(n^2) on the same load list). Move it above the loop."},
+      {"endpoint": "POST /api/ptl/loads", "issue": "expires_at is stored as a datetime but `posted_at` is stored as an ISO string. Mixed types in the same collection is fine here (TTL index works on the date field) but is inconsistent."},
+      {"endpoint": "POST /api/ptl/groups/{id}/confirm", "issue": "Group status transitions only FORMING→FULL on all-confirmed. There is no path back to FORMING if a CONFIRMED member then cancels — the cancel endpoint does set status=FORMING when fill_pct<85%, but a 100% FULL group whose only remaining (confirmed) member is below threshold could still flip back. Verified this works (test_cancel_recomputes_group passes). Worth noting that status is recomputed purely from fill_pct, not from confirmation state."},
+      {"endpoint": "GET /api/ptl/groups", "issue": "When all members of a group are CONFIRMED the group becomes FULL — and the list endpoint returns both FORMING and FULL groups. There is no explicit DISPATCHED state to remove a fully-confirmed truck from the market once the deal is closed."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_ptl_api.py",
+    "/app/test_reports/pytest/pytest_ptl_results.xml"
+  ],
+  "action_items": [
+    "(Optional) Return 201 from POST /api/ptl/loads on creation.",
+    "(Optional) Replace N+1 member fetches in GET /api/ptl/groups with a single batched find() and group-by-load-id mapping.",
+    "(Optional) Hoist viewer_in_group out of the inner loop in GET /api/ptl/groups/{id}.",
+    "(Optional) Consider a DISPATCHED status separate from FULL so closed trucks stop showing up in the market list.",
+    "(Optional) The cancel endpoint should reject cancellation of a load whose group is already FULL/CONFIRMED — currently a single CONFIRMED member can silently unwind a sealed truck.",
+    "(Optional) Add a unique index on ptl_groups.corridor + (date bucket) + status if you ever want to prevent racing concurrent posts from creating two parallel FORMING groups on the same corridor (currently match_ptl_load is not atomic — two simultaneous POSTs can both create a new group instead of one merging into the other)."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now 1672 lines — overdue for a split into routers/{users,loads,ptl,geo,auth}.py. PTL alone is ~450 lines and is naturally a separate router.",
+    "match_ptl_load is not atomic: between candidates = find(...) and update_one(...), another concurrent POST on the same corridor could both pick the same group OR both create new groups. For high-throughput markets, wrap the group create/update in a transaction or use findOneAndUpdate with a capacity guard.",
+    "Cargo compatibility is symmetrically rechecked inside the loop (both directions), good. But CARGO_COMPATIBILITY['GENERAL'] includes 'FMCG','AUTO_PARTS','TEXTILES' which are NOT in the PtlLoadPost validator allow-list (only GENERAL/FRAGILE/HAZMAT/PERISHABLE are accepted). Dead entries — either accept these as inputs or remove from the matrix.",
+    "haversine_km — fine implementation; only invoked when BOTH sides have coords. Good null-safety, but means two coord-less loads will always be considered 'in proximity' regardless of true distance. Acceptable for an MVP but document the gotcha.",
+    "_strip_group_internals only removes origin_lat/lon and dest_lat/lon — `capacity_kg` and `corridor` are intentionally exposed which is fine. ✅",
+    "Phone-exposure logic in GET /api/ptl/groups/{id} is correct: only confirmed members see other confirmed members' phones. Self-phone returns None but is_me=True. ✅",
+    "DELETE /api/ptl/loads recomputes total_weight_kg and cargo_categories correctly, and deletes the group when empty. ✅",
+    "TTL index expireAfterSeconds=0 on expires_at: this auto-purges PTL loads after 7 days but DOES NOT also clean up their parent group_doc — orphan groups will accumulate. Recommend a periodic sweeper or a TTL on ptl_groups too."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_ptl_api.py (new)"
+  ],
+  "success_rate": {"backend": "100% (28/28)", "frontend": "not tested (skipped per request)"},
+  "test_credentials": "none required",
+  "seed_data_creation": "Test seeds 9 user profiles via POST /api/users with phones 9000000001..9000000009 (name 'TEST User N', company 'TEST Co N'), and a handful of PTL loads/groups on the Navi Mumbai → Pune corridor. All test data is purged in the module-scoped fixture teardown (ptl_loads/ptl_groups filtered by test phones, plus the seeded users).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "PTL backend tests live in /app/backend/tests/test_ptl_api.py and run cleanly against http://localhost:8001/api (preview pod). frontend/.env still points to a remote Render deployment (ptl-market.onrender.com) — DO NOT test the preview frontend against that URL, all PTL routes must be tested locally. Constants used: TRUCK_CAPACITY_KG=20000, PROXIMITY_KM=25, DISPATCH_THRESHOLD=0.85. MAPPLS_KEY and Firebase admin remain unconfigured in this pod.",
+  "rca of the issue": "N/A — feature-addition testing pass, not a bug RCA. All PTL flows behave to spec: matching by corridor/cargo/capacity/proximity, group lazy creation, mutual-confirm phone exposure, cancellation with recompute, and validation 400s all work."
+}
