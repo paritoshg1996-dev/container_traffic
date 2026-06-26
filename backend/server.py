@@ -1224,9 +1224,9 @@ CARGO_COMPATIBILITY = {
     "HAZMAT":     ["HAZMAT"],
     "PERISHABLE": ["PERISHABLE"],
 }
-TRUCK_CAPACITY_KG = 20000
-PROXIMITY_KM = 25            # max straight-line distance between pickup points
-DISPATCH_THRESHOLD = 0.85    # group triggers FULL notification at 85% capacity
+TRUCK_CAPACITY_KG = 20000        # one truck's max payload (single-load cap only)
+PROXIMITY_KM = 25                # max straight-line distance between pickup points
+PTL_MAX_MEMBERS = 2              # pair-only consolidation — exactly 2 shippers per group
 
 
 class PtlLoadPost(BaseModel):
@@ -1287,30 +1287,47 @@ def derive_corridor(city: str) -> str:
 
 
 async def match_ptl_load(new_load: dict) -> tuple[str, bool]:
-    """Try to assign new_load to an existing FORMING group on the same corridor.
+    """Try to assign new_load to an existing FORMING (single-member) group.
 
-    Returns a tuple `(group_id, matched_existing)`:
-      • matched_existing=True  → load was added to an existing FORMING group
-      • matched_existing=False → no group fit; a brand-new group was created
+    Pair-only model: a group has at most PTL_MAX_MEMBERS=2 loads.
+      • status=FORMING  — group has 1 load, looking for 1 partner
+      • status=PAIRED   — group has 2 loads (partner found, awaiting confirms)
+      • status=CONFIRMED — both loads confirmed
+
+    Matching steps:
+      1. Corridor check  — same origin AND destination city corridor
+      2. Cargo check     — categories must be mutually compatible
+      3. Proximity check — both origin and destination points within
+                           PROXIMITY_KM of the existing load's coords
+                           (skipped if either side has no coordinates)
+      4. Group must be FORMING (i.e. has exactly 1 load and 1 free spot).
+         No weight cap on combined load (per product decision).
+
+    Returns (group_id, matched_existing).
     """
     origin_corridor = derive_corridor(new_load["origin"]["city"])
     dest_corridor = derive_corridor(new_load["destination"]["city"])
     new_category = new_load["cargo_category"]
     compatible_cats = CARGO_COMPATIBILITY.get(new_category, [new_category])
 
+    # Only FORMING groups can accept a new member. Use $expr so we don't trust
+    # status alone — a group with 2 load_ids should never accept a 3rd even if
+    # its status flag got stale.
     candidates = await db.ptl_groups.find({
         "corridor": f"{origin_corridor}→{dest_corridor}",
         "status": "FORMING",
-        "capacity_remaining_kg": {"$gte": new_load["weight_kg"]},
+        "$expr": {"$lt": [{"$size": "$load_ids"}, PTL_MAX_MEMBERS]},
     }).to_list(length=100)
 
     best_group = None
-    best_score = -1.0
+    # Tie-breaker: pick the group whose existing load is geographically closest
+    # to the new load's origin (so we maximise convenience). If no coords on
+    # either side, fall back to oldest first (most patient member).
+    best_score = float("inf")
 
     for g in candidates:
-        # Cargo compatibility — every existing category must be one the new
-        # category accepts, AND the new category must be one each existing
-        # group member accepts.
+        # Cargo compatibility — every existing category must be compatible
+        # with the new load, and vice versa.
         group_cats = g.get("cargo_categories", [])
         ok = True
         for cat in group_cats:
@@ -1321,12 +1338,12 @@ async def match_ptl_load(new_load: dict) -> tuple[str, bool]:
         if not ok:
             continue
 
-        # Proximity check — only if we have coordinates on both sides
+        # Proximity check — only enforced when we have coords on both sides
         new_olat = new_load["origin"].get("latitude")
         new_olon = new_load["origin"].get("longitude")
         new_dlat = new_load["destination"].get("latitude")
         new_dlon = new_load["destination"].get("longitude")
-
+        proximity_score = 0.0
         if (new_olat is not None and new_olon is not None
                 and g.get("origin_lat") is not None and g.get("origin_lon") is not None
                 and new_dlat is not None and new_dlon is not None
@@ -1335,12 +1352,10 @@ async def match_ptl_load(new_load: dict) -> tuple[str, bool]:
             dist_d = haversine_km(new_dlat, new_dlon, g["dest_lat"], g["dest_lon"])
             if dist_o > PROXIMITY_KM or dist_d > PROXIMITY_KM:
                 continue
+            proximity_score = dist_o + dist_d
 
-        # Score = fill % after adding the new load
-        new_weight = g["total_weight_kg"] + new_load["weight_kg"]
-        score = new_weight / TRUCK_CAPACITY_KG
-        if score > best_score:
-            best_score = score
+        if proximity_score < best_score:
+            best_score = proximity_score
             best_group = g
 
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -1348,18 +1363,16 @@ async def match_ptl_load(new_load: dict) -> tuple[str, bool]:
     if best_group:
         gid = best_group["id"]
         new_total = best_group["total_weight_kg"] + new_load["weight_kg"]
-        new_remaining = TRUCK_CAPACITY_KG - new_total
         new_fill = new_total / TRUCK_CAPACITY_KG * 100
-        new_status = "FULL" if new_fill >= DISPATCH_THRESHOLD * 100 else "FORMING"
         merged_cats = list(set(best_group.get("cargo_categories", [])) | {new_category})
         await db.ptl_groups.update_one(
             {"id": gid},
             {
                 "$set": {
                     "total_weight_kg": new_total,
-                    "capacity_remaining_kg": new_remaining,
-                    "fill_pct": round(new_fill, 1),
-                    "status": new_status,
+                    "capacity_remaining_kg": max(0, TRUCK_CAPACITY_KG - new_total),
+                    "fill_pct": round(min(new_fill, 999.9), 1),
+                    "status": "PAIRED",
                     "cargo_categories": merged_cats,
                 },
                 "$push": {"load_ids": new_load["id"]},
@@ -1385,8 +1398,8 @@ async def match_ptl_load(new_load: dict) -> tuple[str, bool]:
         "load_ids": [new_load["id"]],
         "total_weight_kg": new_load["weight_kg"],
         "capacity_kg": TRUCK_CAPACITY_KG,
-        "capacity_remaining_kg": TRUCK_CAPACITY_KG - new_load["weight_kg"],
-        "fill_pct": round(new_load["weight_kg"] / TRUCK_CAPACITY_KG * 100, 1),
+        "capacity_remaining_kg": max(0, TRUCK_CAPACITY_KG - new_load["weight_kg"]),
+        "fill_pct": round(min(new_load["weight_kg"] / TRUCK_CAPACITY_KG * 100, 999.9), 1),
         "cargo_categories": [new_category],
         "status": "FORMING",
         "created_at": now_iso,
@@ -1513,10 +1526,8 @@ async def cancel_ptl_load(load_id: str, phone: str):
         if g:
             remaining_ids = [lid for lid in g.get("load_ids", []) if lid != load_id]
             new_total = max(0.0, g["total_weight_kg"] - load["weight_kg"])
-            new_rem = TRUCK_CAPACITY_KG - new_total
+            new_rem = max(0, TRUCK_CAPACITY_KG - new_total)
             new_fill = (new_total / TRUCK_CAPACITY_KG * 100) if TRUCK_CAPACITY_KG else 0
-            new_status = "FORMING" if new_fill < DISPATCH_THRESHOLD * 100 else "FULL"
-
             if not remaining_ids:
                 # No members left — delete the group
                 await db.ptl_groups.delete_one({"id": gid})
@@ -1527,6 +1538,8 @@ async def cancel_ptl_load(load_id: str, phone: str):
                     {"_id": 0, "cargo_category": 1},
                 ).to_list(length=50)
                 rem_cats = list({l["cargo_category"] for l in rem_loads})
+                # With pair-only: 1 remaining → back to FORMING (looking for partner)
+                new_status = "FORMING" if len(remaining_ids) < PTL_MAX_MEMBERS else "PAIRED"
                 await db.ptl_groups.update_one(
                     {"id": gid},
                     {
@@ -1534,7 +1547,7 @@ async def cancel_ptl_load(load_id: str, phone: str):
                             "load_ids": remaining_ids,
                             "total_weight_kg": new_total,
                             "capacity_remaining_kg": new_rem,
-                            "fill_pct": round(new_fill, 1),
+                            "fill_pct": round(min(new_fill, 999.9), 1),
                             "status": new_status,
                             "cargo_categories": rem_cats or g.get("cargo_categories", []),
                         }
@@ -1549,7 +1562,9 @@ async def list_ptl_groups(
     origin_city: Optional[str] = None,
     dest_city: Optional[str] = None,
 ):
-    query: dict = {"status": {"$in": ["FORMING", "FULL"]}}
+    # Marketplace only surfaces FORMING groups — those still looking for a
+    # partner. PAIRED and CONFIRMED groups are private to their two members.
+    query: dict = {"status": "FORMING"}
     if origin_city and dest_city:
         query["corridor"] = f"{derive_corridor(origin_city)}→{derive_corridor(dest_city)}"
     elif origin_city:
@@ -1557,7 +1572,7 @@ async def list_ptl_groups(
     elif dest_city:
         query["corridor"] = {"$regex": f"→{re.escape(derive_corridor(dest_city))}$", "$options": "i"}
 
-    groups = await db.ptl_groups.find(query, {"_id": 0}).sort("fill_pct", -1).to_list(length=50)
+    groups = await db.ptl_groups.find(query, {"_id": 0}).sort("created_at", -1).to_list(length=50)
 
     out: List[dict] = []
     for g in groups:
@@ -1596,22 +1611,27 @@ async def get_ptl_group(group_id: str, viewer_phone: Optional[str] = None):
     loads = await db.ptl_loads.find(
         {"id": {"$in": load_ids}, "status": {"$ne": "CANCELLED"}},
         {"_id": 0},
-    ).to_list(length=20) if load_ids else []
+    ).to_list(length=PTL_MAX_MEMBERS) if load_ids else []
+    # Pair-only model: phones are exposed to BOTH members as soon as the
+    # group reaches PAIRED (i.e. the moment a partner joins). No mutual-
+    # confirm gate — both shippers already opted in by posting on this route.
+    viewer_in_group = any(ll["poster_phone"] == viewer for ll in loads) if viewer else False
+    phones_visible = viewer_in_group and g.get("status") in ("PAIRED", "CONFIRMED")
     members: List[dict] = []
     for l in loads:
-        # Only expose phone if the viewer is themselves in this group (mutual confirm)
-        viewer_in_group = any(ll["poster_phone"] == viewer for ll in loads) if viewer else False
-        expose_phone = viewer_in_group and l.get("status") == "CONFIRMED"
         members.append({
             "load_id": l.get("id"),
             "name": l.get("poster_name", ""),
             "company": l.get("poster_company", ""),
             "origin_locality": (l.get("origin") or {}).get("locality", ""),
+            "origin_city": (l.get("origin") or {}).get("city", ""),
+            "destination_locality": (l.get("destination") or {}).get("locality", ""),
+            "destination_city": (l.get("destination") or {}).get("city", ""),
             "weight_kg": l.get("weight_kg", 0),
             "cargo_type": l.get("cargo_type", ""),
             "cargo_category": l.get("cargo_category", ""),
             "confirmed": l.get("status") == "CONFIRMED",
-            "phone": l.get("poster_phone", "") if expose_phone else None,
+            "phone": l.get("poster_phone", "") if phones_visible else None,
             "is_me": (viewer and l.get("poster_phone") == viewer) or False,
         })
     g_out = _strip_group_internals(g)
@@ -1634,9 +1654,12 @@ async def confirm_group_membership(group_id: str, phone: str):
         all_loads = await db.ptl_loads.find(
             {"id": {"$in": group.get("load_ids", [])}, "status": {"$ne": "CANCELLED"}},
             {"_id": 0, "status": 1},
-        ).to_list(length=20)
-        if all_loads and all(l["status"] == "CONFIRMED" for l in all_loads):
-            await db.ptl_groups.update_one({"id": group_id}, {"$set": {"status": "FULL"}})
+        ).to_list(length=PTL_MAX_MEMBERS)
+        if (
+            len(all_loads) == PTL_MAX_MEMBERS
+            and all(l["status"] == "CONFIRMED" for l in all_loads)
+        ):
+            await db.ptl_groups.update_one({"id": group_id}, {"$set": {"status": "CONFIRMED"}})
     return {"confirmed": True}
 
 

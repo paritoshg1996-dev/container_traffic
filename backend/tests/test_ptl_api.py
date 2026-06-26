@@ -202,9 +202,9 @@ class TestPtlGroupsList:
         assert r.status_code == 200
         groups = r.json()
         assert isinstance(groups, list) and len(groups) >= 1
-        # Should be sorted by fill_pct desc
-        fills = [g["fill_pct"] for g in groups]
-        assert fills == sorted(fills, reverse=True)
+        # Marketplace now only shows FORMING groups (looking for a partner)
+        for g in groups:
+            assert g["status"] == "FORMING"
         # No phone leakage on list
         for g in groups:
             for m in g.get("members", []):
@@ -240,8 +240,8 @@ class TestPtlConfirm:
         assert r.status_code == 200
         assert r.json()["confirmed"] is True
         g = mongo_db.ptl_groups.find_one({"id": gid})
-        # Only 1 of 2 confirmed → still FORMING
-        assert g["status"] == "FORMING"
+        # Pair-only: group has 2 members but only 1 confirmed → stays PAIRED
+        assert g["status"] == "PAIRED"
 
     def test_confirm_outsider_404(self):
         gid = pytest.shared["group_id"]
@@ -255,7 +255,8 @@ class TestPtlConfirm:
                           params={"phone": PHONES[1]})
         assert r.status_code == 200
         g = mongo_db.ptl_groups.find_one({"id": gid})
-        assert g["status"] == "FULL"
+        # Both members confirmed → group status CONFIRMED
+        assert g["status"] == "CONFIRMED"
 
     def test_confirmed_viewer_sees_other_phone(self):
         gid = pytest.shared["group_id"]
@@ -357,3 +358,82 @@ class TestPtlCancel:
         assert r.status_code == 200
         ids = [l["id"] for l in r.json()]
         assert pytest.shared["load_id_1"] not in ids
+
+
+# ============================================================================
+# 7. Pair-only architecture — a 3rd load on the same corridor must NOT merge
+#    into an already-paired group (2-member cap).
+# ============================================================================
+class TestPairOnlyCap:
+    """Smoke-test the pair-only invariant end-to-end."""
+
+    def test_third_load_creates_new_group(self, mongo_db):
+        # Use a fresh corridor so previous test data doesn't interfere.
+        mongo_db.ptl_loads.delete_many({"poster_phone": {"$in": PHONES[3:6]}})
+        mongo_db.ptl_groups.delete_many({"corridor": "DELHI→JAIPUR"})
+
+        DELHI = {"lat": 28.6517, "lon": 77.1909, "locality": "Karol Bagh",
+                 "city": "Delhi", "pincode": "110005"}
+        JAIPUR = {"lat": 26.9124, "lon": 75.7873, "locality": "Vaishali Nagar",
+                  "city": "Jaipur", "pincode": "302021"}
+
+        # 1st load → FORMING (solo)
+        r1 = requests.post(f"{BASE_URL}/ptl/loads",
+                           json=_payload(PHONES[3], DELHI, JAIPUR, weight_kg=2000))
+        assert r1.status_code == 200
+        gid1 = r1.json()["group_id"]
+        assert r1.json()["matched"] is False
+
+        # 2nd load → MATCHED into same group → group becomes PAIRED
+        r2 = requests.post(f"{BASE_URL}/ptl/loads",
+                           json=_payload(PHONES[4], DELHI, JAIPUR, weight_kg=3000))
+        assert r2.status_code == 200
+        assert r2.json()["group_id"] == gid1
+        assert r2.json()["matched"] is True
+        g = mongo_db.ptl_groups.find_one({"id": gid1})
+        assert g["status"] == "PAIRED"
+        assert len(g["load_ids"]) == 2
+
+        # 3rd load → MUST get its own new group, even though corridor matches
+        r3 = requests.post(f"{BASE_URL}/ptl/loads",
+                           json=_payload(PHONES[5], DELHI, JAIPUR, weight_kg=1500))
+        assert r3.status_code == 200
+        gid3 = r3.json()["group_id"]
+        assert gid3 != gid1, "3rd load must NOT join an already-paired group"
+        assert r3.json()["matched"] is False
+        g3 = mongo_db.ptl_groups.find_one({"id": gid3})
+        assert g3["status"] == "FORMING"
+        assert len(g3["load_ids"]) == 1
+
+
+# ============================================================================
+# 8. Phones become visible as soon as group is PAIRED (no mutual-confirm gate)
+# ============================================================================
+class TestPairedPhoneVisibility:
+    def test_paired_member_sees_partner_phone_without_confirming(self, mongo_db):
+        # Use a unique corridor so we don't collide with previous tests
+        mongo_db.ptl_loads.delete_many({"poster_phone": {"$in": PHONES[6:8]}})
+        mongo_db.ptl_groups.delete_many({"corridor": "CHENNAI→BANGALORE"})
+        ORIG = {"lat": 13.0827, "lon": 80.2707, "locality": "T Nagar",
+                 "city": "Chennai", "pincode": "600017"}
+        DEST = {"lat": 12.9716, "lon": 77.5946, "locality": "Indiranagar",
+                   "city": "Bangalore", "pincode": "560038"}
+
+        r1 = requests.post(f"{BASE_URL}/ptl/loads",
+                           json=_payload(PHONES[6], ORIG, DEST, weight_kg=2000))
+        assert r1.json()["matched"] is False
+        r2 = requests.post(f"{BASE_URL}/ptl/loads",
+                           json=_payload(PHONES[7], ORIG, DEST, weight_kg=2500))
+        assert r2.json()["matched"] is True
+        gid = r2.json()["group_id"]
+
+        # Viewer = PHONES[6], group is PAIRED but no one has confirmed yet.
+        # Per pair-only rule, partner's phone must be visible.
+        r = requests.get(f"{BASE_URL}/ptl/groups/{gid}",
+                         params={"viewer_phone": PHONES[6]})
+        assert r.status_code == 200
+        partner = next((m for m in r.json()["members"] if not m["is_me"]), None)
+        assert partner is not None
+        assert partner["phone"] == PHONES[7]
+        assert partner["confirmed"] is False
+

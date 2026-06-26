@@ -176,6 +176,9 @@ type PtlMember = {
   name: string;
   company?: string;
   origin_locality: string;
+  origin_city?: string;
+  destination_locality?: string;
+  destination_city?: string;
   weight_kg: number;
   cargo_type: string;
   cargo_category?: string;
@@ -194,7 +197,7 @@ type PtlGroup = {
   capacity_remaining_kg: number;
   fill_pct: number;
   cargo_categories: string[];
-  status: "FORMING" | "FULL" | "DISPATCHED";
+  status: "FORMING" | "PAIRED" | "CONFIRMED" | "FULL" | "DISPATCHED";
   created_at: string;
   members?: PtlMember[];
 };
@@ -4468,8 +4471,8 @@ function SectionTitle({ icon, title }: { icon: any; title: string }) {
 // ==========================================================================
 
 function PtlGroupCard({ group, onPress }: { group: PtlGroup; onPress: () => void }) {
-  const color = ptlFillColor(group.fill_pct);
-  const isNearlyFull = group.fill_pct >= 85;
+  // Pair-only marketplace card — show the existing solo poster + a "1 spot left" badge.
+  const member = (group.members || [])[0];
   return (
     <TouchableOpacity
       testID={`ptl-group-card-${group.id}`}
@@ -4478,46 +4481,28 @@ function PtlGroupCard({ group, onPress }: { group: PtlGroup; onPress: () => void
       style={styles.ptlCard}
     >
       <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 8 }}>
-        <Text style={styles.ptlRouteText} numberOfLines={1}>
-          {group.origin_display}
-        </Text>
+        <Text style={styles.ptlRouteText} numberOfLines={1}>{group.origin_display}</Text>
         <Ionicons name="arrow-forward" size={14} color={COLORS.textMuted} style={{ marginHorizontal: 8 }} />
-        <Text style={styles.ptlRouteText} numberOfLines={1}>
-          {group.destination_display}
-        </Text>
+        <Text style={styles.ptlRouteText} numberOfLines={1}>{group.destination_display}</Text>
         <View style={{ flex: 1 }} />
-        <View style={[styles.ptlStatusPill, group.status === "FULL" && { backgroundColor: "#FFEDD5" }]}>
-          <Text style={[styles.ptlStatusText, group.status === "FULL" && { color: "#C2410C" }]}>{group.status}</Text>
+        <View style={[styles.ptlStatusPill, { backgroundColor: "#FEF3C7" }]}>
+          <Text style={[styles.ptlStatusText, { color: "#92400E" }]}>1 SPOT LEFT</Text>
         </View>
       </View>
 
-      <View style={styles.ptlFillBg}>
-        <View style={[styles.ptlFillInner, { width: `${Math.min(100, group.fill_pct)}%`, backgroundColor: color }]} />
-      </View>
-
-      <View style={{ flexDirection: "row", justifyContent: "space-between", marginTop: 4 }}>
-        <Text style={styles.ptlMetaText}>
-          {Math.round(group.total_weight_kg).toLocaleString()} / {group.capacity_kg.toLocaleString()} kg
+      {member && (
+        <Text style={styles.ptlMetaText} numberOfLines={1}>
+          {member.name || "Shipper"}{member.company ? ` · ${member.company}` : ""}
         </Text>
-        <Text style={[styles.ptlMetaText, { color }]}>
-          {group.fill_pct.toFixed(1)}% filled
-        </Text>
-      </View>
+      )}
 
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
-        {(group.members || []).slice(0, 4).map((m, i) => (
-          <View key={i} style={styles.ptlChip}>
-            <Text style={styles.ptlChipText}>{m.cargo_type}</Text>
-          </View>
-        ))}
-        <View style={styles.ptlChip}>
-          <Ionicons name="people-outline" size={12} color={COLORS.textMuted} />
-          <Text style={styles.ptlChipText}> {(group.members || []).length} co-loader{(group.members || []).length === 1 ? "" : "s"}</Text>
-        </View>
+        {member && <View style={styles.ptlChip}><Text style={styles.ptlChipText}>{member.cargo_type}</Text></View>}
+        {member && <View style={styles.ptlChip}><Text style={styles.ptlChipText}>{(member.weight_kg / 1000).toFixed(1)} t posted</Text></View>}
       </View>
 
-      <View style={[styles.ptlJoinBtn, { backgroundColor: isNearlyFull ? "#F59E0B" : COLORS.success }]}>
-        <Text style={styles.ptlJoinBtnText}>{isNearlyFull ? "Request to Join" : "Join Group"}</Text>
+      <View style={[styles.ptlJoinBtn, { backgroundColor: COLORS.success }]}>
+        <Text style={styles.ptlJoinBtnText}>Join as co-loader</Text>
         <Ionicons name="arrow-forward" size={14} color={COLORS.surface} />
       </View>
     </TouchableOpacity>
@@ -4768,7 +4753,7 @@ function PtlGroupDetailModal({ visible, groupId, profile, onClose, onChanged, on
   }, [visible, groupId, fetchGroup]);
 
   const myMember = (group?.members || []).find((m) => m.is_me);
-  const largest = (group?.members || []).slice().sort((a, b) => b.weight_kg - a.weight_kg)[0];
+  const partner = (group?.members || []).find((m) => !m.is_me);
 
   const confirmMembership = async () => {
     if (!group) return;
@@ -4784,14 +4769,98 @@ function PtlGroupDetailModal({ visible, groupId, profile, onClose, onChanged, on
     }
   };
 
-  const contactCoordinator = async () => {
-    const phone = largest?.phone;
-    if (!phone) {
-      Alert.alert("Not available", "The coordinator's number will be shared after everyone confirms.");
-      return;
-    }
-    const msg = `Hi ${largest?.name || ""}, regarding Truck Traffic group ${group?.id} (${group?.origin_display} → ${group?.destination_display}).`;
-    try { await Linking.openURL(`https://wa.me/91${phone}?text=${encodeURIComponent(msg)}`); } catch {}
+  const cancelMyLoad = async () => {
+    if (!myMember?.load_id) return;
+    Alert.alert(
+      "Cancel your load?",
+      "You'll leave this group and your co-loader will be back to searching.",
+      [
+        { text: "Keep", style: "cancel" },
+        {
+          text: "Cancel load",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              const r = await fetch(`${API}/ptl/loads/${myMember.load_id}?phone=${encodeURIComponent(profile.phone)}`, { method: "DELETE" });
+              if (!r.ok) {
+                const j = await r.json().catch(() => ({}));
+                return Alert.alert("Could not cancel", j?.detail || "Try again");
+              }
+              onChanged();
+              onClose();
+            } catch (e: any) {
+              Alert.alert("Network error", e?.message || "Try again");
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const callPartner = async () => {
+    if (!partner?.phone) return;
+    try { await Linking.openURL(`tel:${partner.phone}`); } catch {}
+  };
+
+  const statusPill = (() => {
+    if (!group) return null;
+    if (group.status === "FORMING") return { label: "Waiting for partner", bg: "#FEF3C7", fg: "#92400E" };
+    if (group.status === "PAIRED")  return { label: "Paired", bg: "#DBEAFE", fg: "#1D4ED8" };
+    if (group.status === "CONFIRMED") return { label: "Confirmed ✓", bg: "#DCFCE7", fg: "#15803D" };
+    return { label: group.status, bg: "#F3F4F6", fg: "#6B7280" };
+  })();
+
+  const renderLoadCard = (m: PtlMember | undefined, opts: { isMe: boolean; phoneVisible: boolean }) => {
+    if (!m) return null;
+    const initial = (m.name || (opts.isMe ? "Y" : "?")).trim().slice(0, 1).toUpperCase();
+    return (
+      <View style={[styles.ptlPairCard, opts.isMe && styles.ptlPairCardMe]} testID={`ptl-pair-${opts.isMe ? "me" : "partner"}`}>
+        <View style={styles.ptlPairHeader}>
+          <View style={[styles.ptlAvatar, opts.isMe && { backgroundColor: COLORS.success }]}>
+            <Text style={styles.ptlAvatarText}>{initial}</Text>
+          </View>
+          <View style={{ flex: 1, marginLeft: 12 }}>
+            <Text style={styles.ptlPairName} numberOfLines={1}>
+              {opts.isMe ? "You" : (m.name || "Co-loader")}
+            </Text>
+            {!opts.isMe && !!m.company && (
+              <Text style={styles.ptlPairSub} numberOfLines={1}>{m.company}</Text>
+            )}
+          </View>
+          {m.confirmed && (
+            <Ionicons name="checkmark-circle" size={22} color={COLORS.success} />
+          )}
+        </View>
+        <View style={styles.ptlPairRoute}>
+          <Ionicons name="navigate-outline" size={14} color={COLORS.textMuted} />
+          <Text style={styles.ptlPairRouteText} numberOfLines={1}>
+            {(m as any).origin_locality || "—"} → {(m as any).destination_locality || "—"}
+          </Text>
+        </View>
+        <View style={styles.ptlPairChips}>
+          <View style={styles.ptlChip}><Text style={styles.ptlChipText}>{m.cargo_type || "—"}</Text></View>
+          <View style={styles.ptlChip}><Text style={styles.ptlChipText}>{(m.weight_kg / 1000).toFixed(1)} t</Text></View>
+          {m.cargo_category && m.cargo_category !== "GENERAL" && (
+            <View style={[styles.ptlChip, { backgroundColor: "#FEE2E2" }]}>
+              <Text style={[styles.ptlChipText, { color: "#B91C1C" }]}>{m.cargo_category}</Text>
+            </View>
+          )}
+        </View>
+        {!opts.isMe && (
+          opts.phoneVisible && m.phone ? (
+            <TouchableOpacity testID="ptl-call-partner-btn" style={styles.ptlCallBtn} onPress={callPartner} activeOpacity={0.85}>
+              <Ionicons name="call" size={18} color={COLORS.surface} />
+              <Text style={styles.ptlCallBtnText}>Call {(m.name || "co-loader").split(" ")[0]}</Text>
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.ptlCallLockedRow}>
+              <Ionicons name="lock-closed-outline" size={14} color={COLORS.textMuted} />
+              <Text style={styles.ptlCallLockedText}>Number visible once paired</Text>
+            </View>
+          )
+        )}
+      </View>
+    );
   };
 
   return (
@@ -4826,20 +4895,17 @@ function PtlGroupDetailModal({ visible, groupId, profile, onClose, onChanged, on
                   color={banner.tone === "success" ? "#15803D" : banner.tone === "info" ? "#1D4ED8" : "#B45309"}
                 />
                 <View style={{ flex: 1, marginLeft: 10 }}>
-                  <Text
-                    style={[
-                      styles.ptlBannerTitle,
-                      banner.tone === "success" && { color: "#15803D" },
-                      banner.tone === "info" && { color: "#1D4ED8" },
-                      banner.tone === "warn" && { color: "#B45309" },
-                    ]}
-                  >
-                    {banner.title}
-                  </Text>
+                  <Text style={[styles.ptlBannerTitle,
+                    banner.tone === "success" && { color: "#15803D" },
+                    banner.tone === "info" && { color: "#1D4ED8" },
+                    banner.tone === "warn" && { color: "#B45309" },
+                  ]}>{banner.title}</Text>
                   <Text style={styles.ptlBannerBody}>{banner.body}</Text>
                 </View>
               </View>
             )}
+
+            {/* Compact header: corridor + status */}
             <View style={styles.ptlDetailRouteCard}>
               <Text style={styles.ptlDetailCorridor}>{group.corridor}</Text>
               <View style={{ flexDirection: "row", alignItems: "center", marginTop: 6 }}>
@@ -4847,84 +4913,64 @@ function PtlGroupDetailModal({ visible, groupId, profile, onClose, onChanged, on
                 <Ionicons name="arrow-forward" size={16} color={COLORS.textMuted} style={{ marginHorizontal: 10 }} />
                 <Text style={styles.ptlDetailRouteText} numberOfLines={1}>{group.destination_display}</Text>
               </View>
-              <View style={[styles.ptlStatusPill, { marginTop: 10, alignSelf: "flex-start" }, group.status === "FULL" && { backgroundColor: "#FFEDD5" }]}>
-                <Text style={[styles.ptlStatusText, group.status === "FULL" && { color: "#C2410C" }]}>{group.status}</Text>
-              </View>
-            </View>
-
-            <View style={{ marginTop: 18 }}>
-              <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
-                <Text style={styles.ptlMetaText}>{Math.round(group.total_weight_kg).toLocaleString()} kg loaded</Text>
-                <Text style={[styles.ptlMetaText, { color: ptlFillColor(group.fill_pct) }]}>{group.fill_pct.toFixed(1)}% full</Text>
-              </View>
-              <View style={[styles.ptlFillBg, { height: 10 }]}>
-                <View style={[styles.ptlFillInner, { width: `${Math.min(100, group.fill_pct)}%`, backgroundColor: ptlFillColor(group.fill_pct) }]} />
-              </View>
-              <Text style={[styles.hintMuted, { marginTop: 4 }]}>
-                {Math.round(group.capacity_remaining_kg).toLocaleString()} kg of {group.capacity_kg.toLocaleString()} kg still available
-              </Text>
-            </View>
-
-            <Text style={styles.ptlSectionLabel}>Members ({(group.members || []).length})</Text>
-            {(group.members || []).map((m, i) => (
-              <View key={i} style={[styles.ptlMemberRow, m.is_me && { backgroundColor: "#EEF2FA" }]}>
-                <View style={styles.ptlAvatar}>
-                  <Text style={styles.ptlAvatarText}>{(m.name || "?").trim().slice(0, 1).toUpperCase()}</Text>
+              {statusPill && (
+                <View style={[styles.ptlStatusPill, { marginTop: 10, alignSelf: "flex-start", backgroundColor: statusPill.bg }]}>
+                  <Text style={[styles.ptlStatusText, { color: statusPill.fg }]}>{statusPill.label}</Text>
                 </View>
-                <View style={{ flex: 1, marginLeft: 12 }}>
-                  <Text style={styles.ptlMemberName} numberOfLines={1}>
-                    {m.name || "—"}{m.is_me ? "  (you)" : ""}
-                  </Text>
-                  {!!m.company && <Text style={styles.ptlMemberSub} numberOfLines={1}>{m.company}</Text>}
-                  <Text style={styles.ptlMemberSub} numberOfLines={1}>
-                    {m.origin_locality} · {m.cargo_type} · {Math.round(m.weight_kg).toLocaleString()} kg
-                  </Text>
-                </View>
-                {m.confirmed ? (
-                  <Ionicons name="checkmark-circle" size={22} color={COLORS.success} />
-                ) : (
-                  <Ionicons name="time-outline" size={22} color={COLORS.textMuted} />
-                )}
-              </View>
-            ))}
-
-            <Text style={styles.ptlSectionLabel}>Compatibility</Text>
-            <View style={styles.ptlCompatRow}>
-              <Ionicons name="checkmark-circle" size={18} color={COLORS.success} />
-              <Text style={styles.ptlCompatText}>All cargo is {group.cargo_categories.join(", ")} — safe to co-load</Text>
-            </View>
-            <View style={styles.ptlCompatRow}>
-              <Ionicons name="checkmark-circle" size={18} color={COLORS.success} />
-              <Text style={styles.ptlCompatText}>Pickup points within 25 km of each other</Text>
-            </View>
-            <View style={styles.ptlCompatRow}>
-              <Ionicons name="checkmark-circle" size={18} color={COLORS.success} />
-              <Text style={styles.ptlCompatText}>Drop points within 25 km of each other</Text>
+              )}
             </View>
 
-            <View style={{ height: 24 }} />
+            {/* Your load card */}
             {myMember ? (
-              myMember.confirmed ? (
-                <View style={[styles.ptlConfirmedBanner]}>
-                  <Ionicons name="checkmark-circle" size={20} color={COLORS.success} />
-                  <Text style={styles.ptlConfirmedText}>You've confirmed your spot</Text>
-                </View>
-              ) : (
-                <TouchableOpacity testID="ptl-confirm-btn" style={styles.primaryBtn} onPress={confirmMembership}>
-                  <Text style={styles.primaryBtnText}>Confirm my spot</Text>
-                  <Ionicons name="checkmark" size={18} color={COLORS.surface} />
-                </TouchableOpacity>
-              )
+              <>
+                <Text style={styles.ptlSectionLabel}>Your load</Text>
+                {renderLoadCard(myMember, { isMe: true, phoneVisible: false })}
+              </>
+            ) : null}
+
+            {/* Co-loader card OR waiting state */}
+            <Text style={styles.ptlSectionLabel}>Co-loader</Text>
+            {partner ? (
+              renderLoadCard(partner, { isMe: false, phoneVisible: group.status === "PAIRED" || group.status === "CONFIRMED" })
             ) : (
+              <View style={styles.ptlWaitingCard} testID="ptl-waiting-state">
+                <Ionicons name="hourglass-outline" size={32} color={COLORS.primary} />
+                <Text style={styles.ptlWaitingTitle}>Waiting for a co-loader…</Text>
+                <Text style={styles.ptlWaitingSub}>
+                  We're matching you with another shipper on this route. You'll get a notification as soon as someone joins.
+                </Text>
+              </View>
+            )}
+
+            <View style={{ height: 18 }} />
+
+            {/* Action buttons */}
+            {myMember && partner && !myMember.confirmed && (
+              <TouchableOpacity testID="ptl-confirm-btn" style={styles.primaryBtn} onPress={confirmMembership}>
+                <Text style={styles.primaryBtnText}>Confirm my spot</Text>
+                <Ionicons name="checkmark" size={18} color={COLORS.surface} />
+              </TouchableOpacity>
+            )}
+            {myMember && partner && myMember.confirmed && (
+              <View style={styles.ptlConfirmedBanner}>
+                <Ionicons name="checkmark-circle" size={20} color={COLORS.success} />
+                <Text style={styles.ptlConfirmedText}>
+                  You've confirmed{partner.confirmed ? " · Both confirmed ✓" : " — waiting for co-loader to confirm"}
+                </Text>
+              </View>
+            )}
+            {!myMember && (
               <TouchableOpacity testID="ptl-join-new-btn" style={styles.primaryBtn} onPress={onJoinNew}>
                 <Text style={styles.primaryBtnText}>Join this group</Text>
                 <Ionicons name="add" size={18} color={COLORS.surface} />
               </TouchableOpacity>
             )}
-            <TouchableOpacity testID="ptl-contact-coordinator-btn" style={[styles.whatsappBtn, { marginTop: 10 }]} onPress={contactCoordinator}>
-              <Ionicons name="logo-whatsapp" size={18} color={COLORS.surface} />
-              <Text style={styles.primaryBtnText}>Contact coordinator</Text>
-            </TouchableOpacity>
+            {myMember && (
+              <TouchableOpacity testID="ptl-cancel-my-load-btn" style={[styles.ptlCancelBtn, { marginTop: 12 }]} onPress={cancelMyLoad}>
+                <Ionicons name="trash-outline" size={14} color={COLORS.danger} />
+                <Text style={styles.ptlCancelText}>Cancel my load</Text>
+              </TouchableOpacity>
+            )}
           </ScrollView>
         )}
       </SafeAreaView>
@@ -5634,11 +5680,9 @@ function MyPtlLoadsList({ profile }: { profile: Profile }) {
     <View testID="myptl-list">
       {loads.map((item) => {
         const g = item.group_id ? groupCache[item.group_id] : null;
-        const fill = g?.fill_pct ?? 0;
-        const color = ptlFillColor(fill);
         const pill = (() => {
-          if (item.status === "OPEN") return { bg: "#FEF3C7", fg: "#92400E", text: "Searching for match…", icon: "search-outline" };
-          if (item.status === "MATCHED") return { bg: "#DBEAFE", fg: "#1D4ED8", text: "Matched · View group", icon: "people-outline" };
+          if (item.status === "OPEN") return { bg: "#FEF3C7", fg: "#92400E", text: "Searching for partner…", icon: "search-outline" };
+          if (item.status === "MATCHED") return { bg: "#DBEAFE", fg: "#1D4ED8", text: "Paired · View & call", icon: "people-outline" };
           if (item.status === "CONFIRMED") return { bg: "#DCFCE7", fg: "#15803D", text: "Confirmed ✓", icon: "checkmark-circle-outline" };
           return { bg: "#F3F4F6", fg: "#6B7280", text: "Cancelled", icon: "close-circle-outline" };
         })();
@@ -5671,14 +5715,13 @@ function MyPtlLoadsList({ profile }: { profile: Profile }) {
             </View>
 
             {g && (
-              <>
-                <View style={[styles.ptlFillBg, { marginTop: 10 }]}>
-                  <View style={[styles.ptlFillInner, { width: `${Math.min(100, fill)}%`, backgroundColor: color }]} />
-                </View>
-                <Text style={[styles.ptlMetaText, { marginTop: 4 }]}>
-                  Group: {Math.round(g.total_weight_kg).toLocaleString()} / {g.capacity_kg.toLocaleString()} kg ({fill.toFixed(1)}%)
-                </Text>
-              </>
+              <Text style={[styles.ptlMetaText, { marginTop: 10 }]} numberOfLines={1}>
+                {(() => {
+                  const partner = (g.members || []).find((m: PtlMember) => !m.is_me);
+                  if (!partner) return "Waiting for a partner…";
+                  return `Paired with ${partner.name || "co-loader"}${partner.company ? ` · ${partner.company}` : ""}`;
+                })()}
+              </Text>
             )}
 
             {(item.status === "OPEN" || item.status === "MATCHED") && (
@@ -6230,6 +6273,21 @@ ptlCancelText: { color: COLORS.danger, fontFamily: "Inter_600SemiBold", fontWeig
 ptlBanner: { flexDirection: "row", alignItems: "flex-start", padding: 14, borderRadius: 12, borderWidth: 1, marginBottom: 14 },
 ptlBannerTitle: { fontSize: 14, fontFamily: "Inter_700Bold", fontWeight: "700" },
 ptlBannerBody: { fontSize: 12, color: COLORS.text, marginTop: 2, lineHeight: 17 },
+ptlPairCard: { backgroundColor: COLORS.surface, borderRadius: 14, padding: 14, borderWidth: 1, borderColor: COLORS.border, marginTop: 4 },
+ptlPairCardMe: { backgroundColor: "#EFF6FF", borderColor: "#BFDBFE" },
+ptlPairHeader: { flexDirection: "row", alignItems: "center" },
+ptlPairName: { fontSize: 15, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.text },
+ptlPairSub: { fontSize: 12, color: COLORS.textMuted, marginTop: 1 },
+ptlPairRoute: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 10 },
+ptlPairRouteText: { flex: 1, fontSize: 13, color: COLORS.text, fontFamily: "Inter_500Medium" },
+ptlPairChips: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 8 },
+ptlCallBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 14, paddingVertical: 12, borderRadius: 12, backgroundColor: COLORS.success },
+ptlCallBtnText: { color: COLORS.surface, fontFamily: "Inter_700Bold", fontWeight: "700", fontSize: 15 },
+ptlCallLockedRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 14, paddingVertical: 10, borderRadius: 10, backgroundColor: "#F3F4F6" },
+ptlCallLockedText: { fontSize: 12, color: COLORS.textMuted, fontFamily: "Inter_500Medium" },
+ptlWaitingCard: { alignItems: "center", justifyContent: "center", paddingVertical: 28, paddingHorizontal: 18, backgroundColor: COLORS.surface, borderRadius: 14, borderWidth: 1, borderStyle: "dashed", borderColor: COLORS.border },
+ptlWaitingTitle: { fontSize: 15, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.text, marginTop: 10 },
+ptlWaitingSub: { fontSize: 12, color: COLORS.textMuted, marginTop: 6, textAlign: "center", lineHeight: 17 },
 ptlDateBtn: { flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border, borderRadius: 14, paddingVertical: 14, paddingHorizontal: 14 },
 ptlDateBtnText: { flex: 1, fontSize: 15, fontFamily: "Inter_600SemiBold", fontWeight: "600", color: COLORS.text },
 ptlWeightRow: { flexDirection: "row", alignItems: "center", gap: 10 },
