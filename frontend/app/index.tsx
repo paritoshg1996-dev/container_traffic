@@ -3359,11 +3359,19 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
   const [ptlRefreshing, setPtlRefreshing] = useState(false);
   const [showPostPtl, setShowPostPtl] = useState(false);
   const [selectedGroup, setSelectedGroup] = useState<PtlGroup | null>(null);
+  const [showPtlFilter, setShowPtlFilter] = useState(false);
+  const [ptlFilter, setPtlFilter] = useState<{ originCity: string; destCity: string; weightKg: number } | null>(null);
 
-  const fetchPtlGroups = useCallback(async () => {
+  const fetchPtlGroups = useCallback(async (filter?: { originCity: string; destCity: string; weightKg: number } | null) => {
     setPtlLoading(true);
     try {
-      const r = await fetch(`${API}/ptl/groups`);
+      const params = new URLSearchParams();
+      const f = filter !== undefined ? filter : ptlFilter;
+      if (f?.originCity) params.set("origin_city", f.originCity);
+      if (f?.destCity) params.set("dest_city", f.destCity);
+      if (f?.weightKg) params.set("weight_kg", String(f.weightKg));
+      const qs = params.toString();
+      const r = await fetch(`${API}/ptl/groups${qs ? "?" + qs : ""}`);
       const j = await r.json();
       setPtlGroups(Array.isArray(j) ? j : []);
     } catch {
@@ -3372,7 +3380,7 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
       setPtlLoading(false);
       setPtlRefreshing(false);
     }
-  }, []);
+  }, [ptlFilter]);
 
   const fetchLoads = useCallback(async () => {
     try { const r = await fetch(`${API}/loads`); const j = await r.json(); setAllLoads(j); }
@@ -3500,31 +3508,62 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
         />
       )}
       <FindSpaceModal visible={showFilter} initial={activeFilter} onClose={() => setShowFilter(false)} onApply={onApplyFilter} />
+      <FindPtlModal
+        visible={showPtlFilter}
+        initial={ptlFilter}
+        onClose={() => setShowPtlFilter(false)}
+        onApply={(f) => { setPtlFilter(f); setShowPtlFilter(false); fetchPtlGroups(f); }}
+      />
         </>
       ) : (
-        <FlatList
-          testID="ptl-groups-list"
-          data={ptlGroups}
-          keyExtractor={(g) => g.id}
-          contentContainerStyle={{ padding: 12, paddingBottom: 40 }}
-          refreshControl={<RefreshControl refreshing={ptlRefreshing} onRefresh={() => { setPtlRefreshing(true); fetchPtlGroups(); }} />}
-          ListEmptyComponent={
-            ptlLoading ? (
-              <View style={[styles.center, { paddingVertical: 48 }]}>
-                <ActivityIndicator size="large" color={COLORS.primary} />
-              </View>
-            ) : (
-              <View style={styles.emptyWrap} testID="ptl-empty-state">
-                <Ionicons name="cube-outline" size={48} color={COLORS.textSubtle} />
-                <Text style={styles.emptyTitle}>No groups forming yet</Text>
-                <Text style={styles.emptySub}>Tap "Post Load" below to post a partial load — it will start a new group if no match is found.</Text>
-              </View>
-            )
-          }
-          renderItem={({ item }) => (
-            <PtlGroupCard group={item} onPress={() => setSelectedGroup(item)} />
-          )}
-        />
+        <>
+          {/* ── PTL count bar + filter button — mirrors Full Truck bar exactly ── */}
+          <View style={styles.marketTop}>
+            <Text style={styles.marketCount} testID="ptl-count">
+              {ptlGroups.length} {ptlGroups.length === 1 ? "group" : "groups"} {ptlFilter ? "matched" : "forming"}
+            </Text>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              {ptlFilter && (
+                <TouchableOpacity testID="ptl-clear-filter-btn" onPress={() => { setPtlFilter(null); fetchPtlGroups(null); }} style={styles.clearChip}>
+                  <Ionicons name="close" size={14} color={COLORS.textMuted} />
+                  <Text style={styles.clearChipText}>Clear</Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity
+                testID="ptl-filter-btn"
+                style={[styles.filterBtn, ptlFilter && styles.filterBtnActive]}
+                onPress={() => setShowPtlFilter(true)}
+              >
+                <Ionicons name="options-outline" size={16} color={ptlFilter ? COLORS.surface : COLORS.primary} />
+                <Text style={[styles.filterBtnText, ptlFilter && { color: COLORS.surface }]}>Filter</Text>
+                {ptlFilter && <View style={styles.filterDot} />}
+              </TouchableOpacity>
+            </View>
+          </View>
+          <FlatList
+            testID="ptl-groups-list"
+            data={ptlGroups}
+            keyExtractor={(g) => g.id}
+            contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
+            refreshControl={<RefreshControl refreshing={ptlRefreshing} onRefresh={() => { setPtlRefreshing(true); fetchPtlGroups(); }} />}
+            ListEmptyComponent={
+              ptlLoading ? (
+                <View style={[styles.center, { paddingVertical: 48 }]}>
+                  <ActivityIndicator size="large" color={COLORS.primary} />
+                </View>
+              ) : (
+                <View style={styles.emptyWrap} testID="ptl-empty-state">
+                  <Ionicons name="cube-outline" size={48} color={COLORS.textSubtle} />
+                  <Text style={styles.emptyTitle}>{ptlFilter ? "No matching groups found" : "No groups forming yet"}</Text>
+                  <Text style={styles.emptySub}>{ptlFilter ? "Try adjusting your filter or clear it to see all groups." : "Tap \"Post Load\" below to post a partial load — it will start a new group if no match is found."}</Text>
+                </View>
+              )
+            }
+            renderItem={({ item }) => (
+              <PtlGroupCard group={item} profile={profile} onPress={() => setSelectedGroup(item)} />
+            )}
+          />
+        </>
       )}
 
       <PostPtlModal
@@ -4447,6 +4486,109 @@ if (!dc.found) {
   );
 }
 
+function FindPtlModal({ visible, initial, onClose, onApply }: {
+  visible: boolean;
+  initial: { originCity: string; destCity: string; weightKg: number } | null;
+  onClose: () => void;
+  onApply: (f: { originCity: string; destCity: string; weightKg: number }) => void;
+}) {
+  const [originText, setOriginText] = useState("");
+  const [originPin, setOriginPin] = useState("");
+  const [originInfo, setOriginInfo] = useState<RouteInfo>(null);
+  const [destText, setDestText] = useState("");
+  const [destPin, setDestPin] = useState("");
+  const [destInfo, setDestInfo] = useState<RouteInfo>(null);
+  const [weightKg, setWeightKg] = useState("");
+  const [originErr, setOriginErr] = useState("");
+  const [destErr, setDestErr] = useState("");
+
+  useEffect(() => {
+    if (visible) {
+      setOriginText(initial?.originCity || ""); setOriginPin(""); setOriginInfo(null);
+      setDestText(initial?.destCity || ""); setDestPin(""); setDestInfo(null);
+      setWeightKg(initial?.weightKg ? String(initial.weightKg) : "");
+      setOriginErr(""); setDestErr("");
+    }
+  }, [visible, initial]);
+
+  const submit = () => {
+    setOriginErr(""); setDestErr("");
+    const oCity = originInfo?.city || originText.trim();
+    const dCity = destInfo?.city || destText.trim();
+    if (!oCity) { setOriginErr("Enter an origin city"); return; }
+    if (!dCity) { setDestErr("Enter a destination city"); return; }
+    const w = parseFloat(weightKg);
+    if (!w || w <= 0) { Alert.alert("Required", "Enter your cargo weight in kg"); return; }
+    onApply({ originCity: oCity, destCity: dCity, weightKg: w });
+  };
+
+  return (
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose} presentationStyle="fullScreen">
+      <SafeAreaView style={[styles.fill, { backgroundColor: COLORS.bg }]} edges={["top"]}>
+        <View style={styles.fsHeader}>
+          <TouchableOpacity onPress={onClose} testID="ptl-filter-back-btn" style={styles.iconBtn}>
+            <Ionicons name="arrow-back" size={24} color={COLORS.text} />
+          </TouchableOpacity>
+          <Text style={styles.fsHeaderTitle}>Filter Partial Loads</Text>
+          <View style={{ width: 32 }} />
+        </View>
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.fill}>
+          <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
+            <Text style={styles.modalSubtitle}>Find partial load groups that match your route and have enough space for your cargo.</Text>
+
+            <SectionTitle icon="navigate-outline" title="Route" />
+            <View style={styles.routeInputsRow}>
+              <SmartRouteInput
+                label="Origin"
+                testIDPrefix="ptl-filter-origin"
+                text={originText}
+                pin={originPin}
+                info={originInfo}
+                onChange={(t, p, i) => { setOriginText(t); setOriginPin(p); setOriginInfo(i); setOriginErr(""); }}
+              />
+              <View style={styles.routeArrowMid}>
+                <Ionicons name="arrow-forward" size={20} color={COLORS.secondary} />
+              </View>
+              <SmartRouteInput
+                label="Destination"
+                testIDPrefix="ptl-filter-dest"
+                text={destText}
+                pin={destPin}
+                info={destInfo}
+                onChange={(t, p, i) => { setDestText(t); setDestPin(p); setDestInfo(i); setDestErr(""); }}
+              />
+            </View>
+            {originErr ? <Text style={[styles.errorText, { marginTop: -8, marginBottom: 8 }]}>{originErr}</Text> : null}
+            {destErr ? <Text style={[styles.errorText, { marginTop: -8, marginBottom: 8 }]}>{destErr}</Text> : null}
+
+            <Field label="My Cargo Weight (kg)">
+              <TextInput
+                testID="ptl-filter-weight-input"
+                style={[styles.input, weightKg && styles.filledBorder]}
+                placeholder="e.g., 3500"
+                placeholderTextColor={COLORS.textSubtle}
+                value={weightKg}
+                onChangeText={(t) => setWeightKg(t.replace(/[^0-9.]/g, ""))}
+                keyboardType="decimal-pad"
+              />
+            </Field>
+
+            <View style={styles.row}>
+              <TouchableOpacity testID="ptl-filter-cancel-btn" style={[styles.outlineBtn, styles.flex1]} onPress={onClose}>
+                <Text style={styles.outlineBtnText}>Cancel</Text>
+              </TouchableOpacity>
+              <View style={{ width: 12 }} />
+              <TouchableOpacity testID="ptl-filter-apply-btn" style={[styles.primaryBtn, styles.flex1, { marginTop: 0 }]} onPress={submit}>
+                <Text style={styles.primaryBtnText}>Show Matching Groups</Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
+    </Modal>
+  );
+}
+
 // ============== Helpers ==============
 function Field({ label, children }: any) {
   return (
@@ -4470,41 +4612,144 @@ function SectionTitle({ icon, title }: { icon: any; title: string }) {
 // ============== PTL (Partial Truck Load) Components ==============
 // ==========================================================================
 
-function PtlGroupCard({ group, onPress }: { group: PtlGroup; onPress: () => void }) {
-  // Pair-only marketplace card — show the existing solo poster + a "1 spot left" badge.
+function PtlGroupCard({ group, profile, onPress }: { group: PtlGroup; profile: Profile; onPress: () => void }) {
   const member = (group.members || [])[0];
+  const isMine = member?.phone === profile.phone || (group.members || []).some(m => m.phone === profile.phone);
+
+  const shareOnWhatsApp = async () => {
+    const origin = group.origin_display || "";
+    const dest = group.destination_display || "";
+    const totalT = (group.total_weight_kg / 1000).toFixed(1);
+    const remaining = group.capacity_remaining_kg;
+    const remainingT = (remaining / 1000).toFixed(1);
+    const cargoList = (group.cargo_categories || []).join(", ") || "General";
+    const text =
+      `📦 *Partial Load Space Available - Truck Traffic*\n\n` +
+      `📍 From: ${origin}\n📍 To: ${dest}\n\n` +
+      `⚖️ *Space left:* ${remainingT} Tons\n` +
+      `📦 *Cargo:* ${cargoList}\n` +
+      `📊 *Group fill:* ${group.fill_pct?.toFixed(0) ?? 0}% of 20T truck\n\n` +
+      `👥 *Co-loaders:* ${(group.load_ids || []).length} shipper(s) already joined\n\n` +
+      `📲 Find partial loads on Truck Traffic\nhttps://www.trucktraffic.in`;
+    try { await Linking.openURL(`https://wa.me/?text=${encodeURIComponent(text)}`); }
+    catch { Alert.alert("Error", "WhatsApp could not be opened."); }
+  };
+
+  const callMember = () => {
+    if (member?.phone) Linking.openURL(`tel:${member.phone}`).catch(() => Alert.alert("Error", "Cannot open dialer"));
+  };
+
+  // Render endpoint exactly as LoadCard does
+  const renderEndpoint = (iconName: any, iconColor: string, locality: string, city: string, pincode: string) => {
+    const locClean = (locality || "").trim();
+    const ctyClean = (city || "").trim();
+    const sameLocCity = !!locClean && !!ctyClean && locClean.toLowerCase() === ctyClean.toLowerCase();
+    const line1 = (locClean && !sameLocCity) ? locClean : (locClean || ctyClean);
+    const line2 = ctyClean && !sameLocCity ? ctyClean : "";
+    const line3 = pincode || "";
+    return (
+      <View style={cardStyles.routeEndpoint}>
+        <Ionicons name={iconName} size={13} color={iconColor} style={{ marginTop: 3 }} />
+        <View style={{ flex: 1 }}>
+          {line1 ? <Text style={cardStyles.routeL1} numberOfLines={1} ellipsizeMode="tail" adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>{line1}</Text> : null}
+          {line2 ? <Text style={cardStyles.routeL2} numberOfLines={1} ellipsizeMode="tail" adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>{line2}</Text> : null}
+          {line3 ? <Text style={cardStyles.routeL3} numberOfLines={1} ellipsizeMode="tail" adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>{line3}</Text> : null}
+        </View>
+      </View>
+    );
+  };
+
+  const fillColor = ptlFillColor(group.fill_pct || 0);
+
   return (
     <TouchableOpacity
       testID={`ptl-group-card-${group.id}`}
       onPress={onPress}
       activeOpacity={0.85}
-      style={styles.ptlCard}
+      style={styles.card}
     >
-      <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 8 }}>
-        <Text style={styles.ptlRouteText} numberOfLines={1}>{group.origin_display}</Text>
-        <Ionicons name="arrow-forward" size={14} color={COLORS.textMuted} style={{ marginHorizontal: 8 }} />
-        <Text style={styles.ptlRouteText} numberOfLines={1}>{group.destination_display}</Text>
-        <View style={{ flex: 1 }} />
-        <View style={[styles.ptlStatusPill, { backgroundColor: "#FEF3C7" }]}>
-          <Text style={[styles.ptlStatusText, { color: "#92400E" }]}>1 SPOT LEFT</Text>
+      {/* Share pill — top right, identical position to LoadCard */}
+      <TouchableOpacity
+        testID={`ptl-share-wa-${group.id}`}
+        style={cardStyles.shareTopPill}
+        onPress={shareOnWhatsApp}
+        activeOpacity={0.85}
+        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+      >
+        <Ionicons name="share-social" size={13} color="#25D366" />
+        <Text style={cardStyles.shareTopPillText}>Share to</Text>
+        <Ionicons name="logo-whatsapp" size={14} color="#25D366" />
+      </TouchableOpacity>
+
+      {/* LINE 1: Route — identical structure to LoadCard */}
+      <View style={styles.cardRouteRow}>
+        <View style={[styles.flex1, { paddingRight: 110 }]}>
+          {renderEndpoint("location", COLORS.secondary, group.origin_display, "", "")}
+          <View style={{ height: 8 }} />
+          {renderEndpoint("flag", COLORS.primary, group.destination_display, "", "")}
         </View>
       </View>
 
+      <View style={styles.divider} />
+
+      {/* LINE 2: Meta chips — date, weight posted, space left, cargo, fill bar */}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={cardStyles.metaScrollContent}>
+        {member && (
+          <View style={cardStyles.metaChip}>
+            <Ionicons name="barbell-outline" size={12} color={COLORS.textMuted} />
+            <Text style={cardStyles.metaText}>{(group.total_weight_kg / 1000).toFixed(1)}T posted</Text>
+          </View>
+        )}
+        <View style={[cardStyles.metaChip, { backgroundColor: "#ECFDF5" }]}>
+          <Ionicons name="cube-outline" size={12} color={COLORS.success} />
+          <Text style={[cardStyles.metaText, { color: COLORS.success }]}>{(group.capacity_remaining_kg / 1000).toFixed(1)}T left</Text>
+        </View>
+        <View style={[cardStyles.metaChip, { backgroundColor: "#FEF9EC" }]}>
+          <Ionicons name="people-outline" size={12} color="#92400E" />
+          <Text style={[cardStyles.metaText, { color: "#92400E" }]}>{(group.load_ids || []).length} shipper{(group.load_ids || []).length !== 1 ? "s" : ""}</Text>
+        </View>
+        {(group.cargo_categories || []).map((cat, i) => (
+          <View key={i} style={[cardStyles.metaChip, { backgroundColor: "#F0F4FF" }]}>
+            <Text style={[cardStyles.metaText, { color: COLORS.primary }]}>{cat}</Text>
+          </View>
+        ))}
+        {/* Inline fill bar chip */}
+        <View style={[cardStyles.metaChip, { paddingVertical: 0, paddingHorizontal: 10, gap: 6, minWidth: 90 }]}>
+          <View style={{ width: 60, height: 5, backgroundColor: "#F3F4F6", borderRadius: 100, overflow: "hidden" }}>
+            <View style={{ width: `${Math.min(group.fill_pct || 0, 100)}%`, height: "100%", backgroundColor: fillColor, borderRadius: 100 }} />
+          </View>
+          <Text style={[cardStyles.metaText, { color: fillColor }]}>{(group.fill_pct || 0).toFixed(0)}%</Text>
+        </View>
+      </ScrollView>
+
+      <View style={styles.divider} />
+
+      {/* LINE 3: Poster info + call — identical layout to LoadCard */}
       {member && (
-        <Text style={styles.ptlMetaText} numberOfLines={1}>
-          {member.name || "Shipper"}{member.company ? ` · ${member.company}` : ""}
-        </Text>
+        <View style={cardStyles.line3Row}>
+          <View style={cardStyles.contactSection}>
+            <View style={cardStyles.posterNameRow}>
+              <Text style={[styles.posterName, !isMine && { color: COLORS.primary }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>
+                {member.name || "Shipper"}{isMine && <Text style={styles.youTag}> · You</Text>}
+              </Text>
+            </View>
+            {member.company ? <Text style={styles.posterCompany} numberOfLines={1}>{member.company}</Text> : null}
+            {member.origin_locality ? <Text style={styles.posterPhone}>{member.origin_locality}</Text> : null}
+          </View>
+          {!isMine && member.phone && (
+            <TouchableOpacity testID={`ptl-call-btn-${group.id}`} style={[styles.callBtn, { alignSelf: "center" }]} onPress={callMember}>
+              <Ionicons name="call" size={16} color={COLORS.surface} />
+              <Text style={styles.callBtnText}>Call</Text>
+            </TouchableOpacity>
+          )}
+          {isMine && (
+            <View style={[styles.callBtn, { alignSelf: "center", backgroundColor: COLORS.success }]}>
+              <Ionicons name="checkmark-circle" size={16} color={COLORS.surface} />
+              <Text style={styles.callBtnText}>My Group</Text>
+            </View>
+          )}
+        </View>
       )}
-
-      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
-        {member && <View style={styles.ptlChip}><Text style={styles.ptlChipText}>{member.cargo_type}</Text></View>}
-        {member && <View style={styles.ptlChip}><Text style={styles.ptlChipText}>{(member.weight_kg / 1000).toFixed(1)} t posted</Text></View>}
-      </View>
-
-      <View style={[styles.ptlJoinBtn, { backgroundColor: COLORS.success }]}>
-        <Text style={styles.ptlJoinBtnText}>Join as co-loader</Text>
-        <Ionicons name="arrow-forward" size={14} color={COLORS.surface} />
-      </View>
     </TouchableOpacity>
   );
 }
