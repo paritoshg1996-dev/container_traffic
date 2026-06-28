@@ -1561,7 +1561,37 @@ async def cancel_ptl_load(load_id: str, phone: str):
 async def list_ptl_groups(
     origin_city: Optional[str] = None,
     dest_city: Optional[str] = None,
+    weight_kg: Optional[float] = None,
 ):
+    # Auto-delete PTL loads whose loading_date has passed — same pattern as
+    # the space loads endpoint. Runs on every listing request (free tier friendly).
+    today_str = datetime.now(timezone.utc).date().isoformat()
+    expired_loads = await db.ptl_loads.find(
+        {"loading_date": {"$lt": today_str}, "status": {"$ne": "CANCELLED"}},
+        {"_id": 0, "id": 1, "group_id": 1, "weight_kg": 1},
+    ).to_list(length=500)
+    for el in expired_loads:
+        await db.ptl_loads.update_one({"id": el["id"]}, {"$set": {"status": "CANCELLED"}})
+        gid = el.get("group_id")
+        if gid:
+            g = await db.ptl_groups.find_one({"id": gid})
+            if g:
+                remaining_ids = [lid for lid in g.get("load_ids", []) if lid != el["id"]]
+                if not remaining_ids:
+                    await db.ptl_groups.delete_one({"id": gid})
+                else:
+                    new_total = max(0.0, g["total_weight_kg"] - el.get("weight_kg", 0))
+                    new_rem = max(0, TRUCK_CAPACITY_KG - new_total)
+                    await db.ptl_groups.update_one(
+                        {"id": gid},
+                        {"$set": {
+                            "load_ids": remaining_ids,
+                            "total_weight_kg": new_total,
+                            "capacity_remaining_kg": new_rem,
+                            "fill_pct": round(new_total / TRUCK_CAPACITY_KG * 100, 1),
+                            "status": "FORMING" if len(remaining_ids) < PTL_MAX_MEMBERS else g.get("status", "FORMING"),
+                        }}
+                    )
     # Marketplace only surfaces FORMING groups — those still looking for a
     # partner. PAIRED and CONFIRMED groups are private to their two members.
     query: dict = {"status": "FORMING"}
@@ -1571,6 +1601,8 @@ async def list_ptl_groups(
         query["corridor"] = {"$regex": f"^{re.escape(derive_corridor(origin_city))}→", "$options": "i"}
     elif dest_city:
         query["corridor"] = {"$regex": f"→{re.escape(derive_corridor(dest_city))}$", "$options": "i"}
+    if weight_kg and weight_kg > 0:
+        query["capacity_remaining_kg"] = {"$gte": weight_kg}
 
     groups = await db.ptl_groups.find(query, {"_id": 0}).sort("created_at", -1).to_list(length=50)
 
