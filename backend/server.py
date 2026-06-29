@@ -1362,40 +1362,26 @@ async def match_ptl_load(new_load: dict) -> tuple[str, bool]:
 
     if best_group:
         gid = best_group["id"]
-        # Do NOT move to PAIRED yet — the existing member must accept first.
-        # Store the incoming load as pending and notify the existing member.
-        # The group stays FORMING so it remains visible in the marketplace
-        # until the existing member accepts or declines.
+        new_total = best_group["total_weight_kg"] + new_load["weight_kg"]
+        new_fill = new_total / TRUCK_CAPACITY_KG * 100
+        merged_cats = list(set(best_group.get("cargo_categories", [])) | {new_category})
         await db.ptl_groups.update_one(
             {"id": gid},
-            {"$set": {"pending_load_id": new_load["id"]}},
+            {
+                "$set": {
+                    "total_weight_kg": new_total,
+                    "capacity_remaining_kg": max(0, TRUCK_CAPACITY_KG - new_total),
+                    "fill_pct": round(min(new_fill, 999.9), 1),
+                    "status": "PAIRED",
+                    "cargo_categories": merged_cats,
+                },
+                "$push": {"load_ids": new_load["id"]},
+            },
         )
         await db.ptl_loads.update_one(
             {"id": new_load["id"]},
-            {"$set": {"group_id": gid, "status": "PENDING_ACCEPT"}},
+            {"$set": {"group_id": gid, "status": "MATCHED"}},
         )
-        # Notify the existing group member
-        existing_load = await db.ptl_loads.find_one(
-            {"id": {"$in": best_group.get("load_ids", [])}, "status": {"$ne": "CANCELLED"}},
-            {"poster_phone": 1, "poster_name": 1},
-        )
-        if existing_load:
-            notif = {
-                "id": f"NOTIF-{_gen_short_id(8)}",
-                "recipient_phone": existing_load["poster_phone"],
-                "type": "PTL_PAIR_REQUEST",
-                "group_id": gid,
-                "requester_phone": new_load["poster_phone"],
-                "requester_name": new_load.get("poster_name", ""),
-                "requester_company": new_load.get("poster_company", ""),
-                "requester_weight_kg": new_load.get("weight_kg", 0),
-                "requester_cargo_type": new_load.get("cargo_type", ""),
-                "requester_origin": (new_load.get("origin") or {}).get("locality", ""),
-                "pending_load_id": new_load["id"],
-                "read": False,
-                "created_at": now_iso,
-            }
-            await db.notifications.insert_one(notif)
         return gid, True
 
     # No suitable group — create a new one
@@ -1653,133 +1639,6 @@ async def get_ptl_group(group_id: str, viewer_phone: Optional[str] = None):
     return g_out
 
 
-# ── ACCEPT a pair request (existing member agrees to partner up) ───────────
-@api_router.post("/ptl/groups/{group_id}/accept")
-async def accept_pair_request(group_id: str, phone: str):
-    """The existing group member accepts the incoming pending load."""
-    phone = _norm_phone(phone)
-    group = await db.ptl_groups.find_one({"id": group_id})
-    if not group:
-        raise HTTPException(status_code=404, detail="Group not found")
-    # Verify caller is in the group (existing member)
-    existing_loads = await db.ptl_loads.find(
-        {"id": {"$in": group.get("load_ids", [])}, "status": {"$ne": "CANCELLED"}},
-        {"_id": 0, "poster_phone": 1},
-    ).to_list(length=PTL_MAX_MEMBERS)
-    if not any(l["poster_phone"] == phone for l in existing_loads):
-        raise HTTPException(status_code=403, detail="You are not a member of this group")
-    pending_id = group.get("pending_load_id")
-    if not pending_id:
-        raise HTTPException(status_code=400, detail="No pending pair request for this group")
-    pending_load = await db.ptl_loads.find_one({"id": pending_id})
-    if not pending_load:
-        raise HTTPException(status_code=404, detail="Pending load not found")
-
-    # Move the pending load into the group properly
-    new_total = group["total_weight_kg"] + pending_load["weight_kg"]
-    new_fill = new_total / TRUCK_CAPACITY_KG * 100
-    merged_cats = list(set(group.get("cargo_categories", [])) | {pending_load.get("cargo_category", "GENERAL")})
-    await db.ptl_groups.update_one(
-        {"id": group_id},
-        {
-            "$set": {
-                "total_weight_kg": new_total,
-                "capacity_remaining_kg": max(0, TRUCK_CAPACITY_KG - new_total),
-                "fill_pct": round(min(new_fill, 999.9), 1),
-                "status": "PAIRED",
-                "cargo_categories": merged_cats,
-                "pending_load_id": None,
-            },
-            "$push": {"load_ids": pending_id},
-        },
-    )
-    await db.ptl_loads.update_one(
-        {"id": pending_id},
-        {"$set": {"status": "MATCHED"}},
-    )
-    # Notify the requester that they were accepted
-    now_iso = datetime.now(timezone.utc).isoformat()
-    await db.notifications.insert_one({
-        "id": f"NOTIF-{_gen_short_id(8)}",
-        "recipient_phone": pending_load["poster_phone"],
-        "type": "PTL_PAIR_ACCEPTED",
-        "group_id": group_id,
-        "accepted_by_name": (existing_loads[0] or {}).get("poster_name", ""),
-        "read": False,
-        "created_at": now_iso,
-    })
-    # Mark original notification as read
-    await db.notifications.update_many(
-        {"group_id": group_id, "type": "PTL_PAIR_REQUEST", "pending_load_id": pending_id},
-        {"$set": {"read": True}},
-    )
-    return {"accepted": True, "group_id": group_id}
-
-
-# ── DECLINE a pair request ─────────────────────────────────────────────────
-@api_router.post("/ptl/groups/{group_id}/decline")
-async def decline_pair_request(group_id: str, phone: str):
-    """The existing group member declines the incoming pending load."""
-    phone = _norm_phone(phone)
-    group = await db.ptl_groups.find_one({"id": group_id})
-    if not group:
-        raise HTTPException(status_code=404, detail="Group not found")
-    existing_loads = await db.ptl_loads.find(
-        {"id": {"$in": group.get("load_ids", [])}, "status": {"$ne": "CANCELLED"}},
-        {"_id": 0, "poster_phone": 1},
-    ).to_list(length=PTL_MAX_MEMBERS)
-    if not any(l["poster_phone"] == phone for l in existing_loads):
-        raise HTTPException(status_code=403, detail="You are not a member of this group")
-    pending_id = group.get("pending_load_id")
-    if not pending_id:
-        raise HTTPException(status_code=400, detail="No pending pair request")
-    # Put the pending load back to OPEN and try to find it another group
-    await db.ptl_loads.update_one(
-        {"id": pending_id},
-        {"$set": {"status": "OPEN", "group_id": None}},
-    )
-    await db.ptl_groups.update_one(
-        {"id": group_id},
-        {"$set": {"pending_load_id": None}},
-    )
-    # Notify requester of decline
-    now_iso = datetime.now(timezone.utc).isoformat()
-    pending_load = await db.ptl_loads.find_one({"id": pending_id}, {"poster_phone": 1})
-    if pending_load:
-        await db.notifications.insert_one({
-            "id": f"NOTIF-{_gen_short_id(8)}",
-            "recipient_phone": pending_load["poster_phone"],
-            "type": "PTL_PAIR_DECLINED",
-            "group_id": group_id,
-            "read": False,
-            "created_at": now_iso,
-        })
-    await db.notifications.update_many(
-        {"group_id": group_id, "type": "PTL_PAIR_REQUEST", "pending_load_id": pending_id},
-        {"$set": {"read": True}},
-    )
-    return {"declined": True}
-
-
-# ── GET notifications for a user ───────────────────────────────────────────
-@api_router.get("/notifications/{phone}")
-async def get_notifications(phone: str):
-    phone = _norm_phone(phone)
-    notifs = await db.notifications.find(
-        {"recipient_phone": phone},
-        {"_id": 0},
-    ).sort("created_at", -1).limit(50).to_list(length=50)
-    return notifs
-
-
-# ── MARK notifications read ────────────────────────────────────────────────
-@api_router.post("/notifications/{phone}/read")
-async def mark_notifications_read(phone: str):
-    phone = _norm_phone(phone)
-    await db.notifications.update_many({"recipient_phone": phone, "read": False}, {"$set": {"read": True}})
-    return {"ok": True}
-
-
 # ── CONFIRM joining a group ────────────────────────────────────────────────
 @api_router.post("/ptl/groups/{group_id}/confirm")
 async def confirm_group_membership(group_id: str, phone: str):
@@ -1806,108 +1665,6 @@ async def confirm_group_membership(group_id: str, phone: str):
 
 app.include_router(api_router)
 
-# ── EXPRESS INTEREST in a load or PTL group ────────────────────────────────
-@api_router.post("/interests")
-async def express_interest(payload: dict):
-    """
-    Records that viewer_phone is interested in a listing.
-    Works for both full truck loads (listing_type='load') and PTL groups (listing_type='ptl_group').
-    Notifies the poster/group owner.
-    """
-    viewer_phone = _norm_phone(payload.get("viewer_phone", ""))
-    listing_id = payload.get("listing_id", "")
-    listing_type = payload.get("listing_type", "load")   # 'load' | 'ptl_group'
-    if not viewer_phone or not listing_id:
-        raise HTTPException(status_code=400, detail="viewer_phone and listing_id are required")
-
-    # Prevent duplicate interests from same viewer on same listing
-    existing = await db.interests.find_one({"viewer_phone": viewer_phone, "listing_id": listing_id})
-    if existing:
-        return {"already_expressed": True, "interest_id": existing.get("id")}
-
-    viewer = await db.users.find_one({"phone": viewer_phone}, {"_id": 0, "name": 1, "company": 1, "profile_verified": 1})
-    now = datetime.now(timezone.utc)
-    interest_id = f"INT-{_gen_short_id(8)}"
-
-    # Determine poster phone for notification
-    poster_phone = ""
-    listing_summary = {}
-    if listing_type == "load":
-        load_doc = await db.loads.find_one({"id": listing_id}, {"_id": 0, "poster_phone": 1, "poster_name": 1, "origin_locality": 1, "origin_city": 1, "destination_locality": 1, "destination_city": 1, "weight_tons": 1})
-        if load_doc:
-            poster_phone = load_doc.get("poster_phone", "")
-            listing_summary = {
-                "origin": load_doc.get("origin_locality") or load_doc.get("origin_city", ""),
-                "destination": load_doc.get("destination_locality") or load_doc.get("destination_city", ""),
-                "weight": f"{load_doc.get('weight_tons', '')} T",
-            }
-    elif listing_type == "ptl_group":
-        grp = await db.ptl_groups.find_one({"id": listing_id}, {"_id": 0, "load_ids": 1, "origin_display": 1, "destination_display": 1})
-        if grp:
-            first_load = await db.ptl_loads.find_one({"id": {"$in": grp.get("load_ids", [])}, "status": {"$ne": "CANCELLED"}}, {"poster_phone": 1})
-            if first_load:
-                poster_phone = first_load.get("poster_phone", "")
-            listing_summary = {
-                "origin": grp.get("origin_display", ""),
-                "destination": grp.get("destination_display", ""),
-            }
-
-    if poster_phone == viewer_phone:
-        raise HTTPException(status_code=400, detail="Cannot express interest in your own listing")
-
-    doc = {
-        "id": interest_id,
-        "viewer_phone": viewer_phone,
-        "viewer_name": (viewer or {}).get("name", ""),
-        "viewer_company": (viewer or {}).get("company", ""),
-        "viewer_verified": (viewer or {}).get("profile_verified", False),
-        "listing_id": listing_id,
-        "listing_type": listing_type,
-        "listing_summary": listing_summary,
-        "poster_phone": poster_phone,
-        "created_at": now.isoformat(),
-    }
-    await db.interests.insert_one(doc)
-
-    # Notify the poster
-    if poster_phone:
-        await db.notifications.insert_one({
-            "id": f"NOTIF-{_gen_short_id(8)}",
-            "recipient_phone": poster_phone,
-            "type": "INTEREST_RECEIVED",
-            "interest_id": interest_id,
-            "listing_id": listing_id,
-            "listing_type": listing_type,
-            "listing_summary": listing_summary,
-            "viewer_name": (viewer or {}).get("name", ""),
-            "viewer_company": (viewer or {}).get("company", ""),
-            "viewer_phone": viewer_phone,
-            "viewer_verified": (viewer or {}).get("profile_verified", False),
-            "read": False,
-            "created_at": now.isoformat(),
-        })
-
-    return {"interest_id": interest_id, "ok": True}
-
-
-# ── GET received interests for a poster ────────────────────────────────────
-@api_router.get("/interests/received/{phone}")
-async def get_received_interests(phone: str):
-    phone = _norm_phone(phone)
-    interests = await db.interests.find(
-        {"poster_phone": phone},
-        {"_id": 0},
-    ).sort("created_at", -1).limit(100).to_list(length=100)
-    return interests
-
-
-# ── CHECK if viewer already expressed interest ─────────────────────────────
-@api_router.get("/interests/check")
-async def check_interest(viewer_phone: str, listing_id: str):
-    viewer_phone = _norm_phone(viewer_phone)
-    existing = await db.interests.find_one({"viewer_phone": viewer_phone, "listing_id": listing_id}, {"_id": 0, "id": 1})
-    return {"expressed": existing is not None}
-
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
@@ -1933,12 +1690,6 @@ async def startup():
         await db.ptl_groups.create_index("id", unique=True, background=True)
         # TTL — auto-delete expired PTL loads (expires_at is a BSON Date)
         await db.ptl_loads.create_index([("expires_at", 1)], expireAfterSeconds=0, background=True)
-        # Notifications
-        await db.notifications.create_index([("recipient_phone", 1), ("read", 1)], background=True)
-        await db.notifications.create_index([("created_at", -1)], background=True)
-        # Interests
-        await db.interests.create_index([("poster_phone", 1), ("created_at", -1)], background=True)
-        await db.interests.create_index([("viewer_phone", 1), ("listing_id", 1)], unique=True, background=True)
         logger.info("MongoDB indexes ensured on startup.")
     except Exception as e:
         logger.warning(f"Index creation on startup failed (non-fatal): {e}")
