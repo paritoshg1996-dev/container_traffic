@@ -186,6 +186,41 @@ type PtlMember = {
   is_me?: boolean;
 };
 
+type AppNotification = {
+  id: string;
+  recipient_phone: string;
+  type: "PTL_PAIR_REQUEST" | "PTL_PAIR_ACCEPTED" | "PTL_PAIR_DECLINED" | "INTEREST_RECEIVED";
+  group_id?: string;
+  requester_phone?: string;
+  requester_name?: string;
+  requester_company?: string;
+  requester_weight_kg?: number;
+  requester_cargo_type?: string;
+  requester_origin?: string;
+  pending_load_id?: string;
+  viewer_name?: string;
+  viewer_company?: string;
+  viewer_phone?: string;
+  viewer_verified?: boolean;
+  listing_id?: string;
+  listing_type?: string;
+  listing_summary?: { origin?: string; destination?: string; weight?: string };
+  read: boolean;
+  created_at: string;
+};
+
+type Interest = {
+  id: string;
+  viewer_phone: string;
+  viewer_name: string;
+  viewer_company?: string;
+  viewer_verified?: boolean;
+  listing_id: string;
+  listing_type: string;
+  listing_summary?: { origin?: string; destination?: string; weight?: string };
+  created_at: string;
+};
+
 type PtlGroup = {
   id: string;
   corridor: string;
@@ -288,6 +323,17 @@ export default function Index() {
   const [tab, setTab] = useState<"post" | "market" | "myPtl">("post");
   const [showProfile, setShowProfile] = useState(false);
   const [showEditProfile, setShowEditProfile] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  const fetchUnread = useCallback(async (phone: string) => {
+    try {
+      const r = await fetch(`${API}/notifications/${encodeURIComponent(phone)}`);
+      if (r.ok) {
+        const notifs: AppNotification[] = await r.json();
+        setUnreadCount(notifs.filter(n => !n.read).length);
+      }
+    } catch {}
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -455,27 +501,34 @@ useEffect(() => {
       <View style={{ flex: 1 }}>
         {tab === "post"   && <PostLoadScreen profile={profile} onPosted={() => setTab("market")} />}
         {tab === "market" && <LoadMarketScreen profile={profile} />}
-        {tab === "myPtl"  && <PostPtlLoadScreen profile={profile} />}
+        {tab === "myPtl"  && <PostPtlLoadScreen profile={profile} onNotificationsRead={() => setUnreadCount(0)} />}
       </View>
 
       <View style={styles.bottomNav} testID="bottom-nav">
-        <BottomNavBtn icon="add-circle-outline" label="Post Space" active={tab === "post"}   onPress={() => setTab("post")}   testID="bottom-nav-post" />
+        <BottomNavBtn icon="add-circle-outline" label="Post Space"  active={tab === "post"}   onPress={() => setTab("post")}   testID="bottom-nav-post" />
         <BottomNavBtn icon="search-outline"     label="Marketplace" active={tab === "market"} onPress={() => setTab("market")} testID="bottom-nav-market" />
-        <BottomNavBtn icon="cube-outline"       label="Post Load"  active={tab === "myPtl"}  onPress={() => setTab("myPtl")}  testID="bottom-nav-postload" />
+        <BottomNavBtn icon="cube-outline"       label="My PTL"      active={tab === "myPtl"}  onPress={() => { setTab("myPtl"); fetchUnread(profile.phone); }} badge={unreadCount} testID="bottom-nav-postload" />
       </View>
     </SafeAreaView>
   );
 }
 
 // ============== Bottom Nav Button ==============
-function BottomNavBtn({ icon, label, active, onPress, testID }: {
-  icon: any; label: string; active: boolean; onPress: () => void; testID?: string;
+function BottomNavBtn({ icon, label, active, onPress, testID, badge }: {
+  icon: any; label: string; active: boolean; onPress: () => void; testID?: string; badge?: number;
 }) {
   return (
     <TouchableOpacity testID={testID} onPress={onPress} style={styles.bottomNavBtn} activeOpacity={0.7}>
-      <Ionicons name={icon} size={24} color={active ? COLORS.primary : COLORS.textMuted} />
+      <View style={{ position: "relative" }}>
+        <Ionicons name={icon} size={24} color={active ? COLORS.primary : COLORS.textMuted} />
+        {badge && badge > 0 ? (
+          <View style={styles.navBadge}>
+            <Text style={styles.navBadgeText}>{badge > 9 ? "9+" : badge}</Text>
+          </View>
+        ) : null}
+      </View>
       <Text style={[styles.bottomNavLabel, active && styles.bottomNavLabelActive]}>{label}</Text>
-      {active ? <View style={styles.bottomNavDot} /> : null}
+      {active && <View style={styles.bottomNavDot} />}
     </TouchableOpacity>
   );
 }
@@ -3359,19 +3412,12 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
   const [ptlRefreshing, setPtlRefreshing] = useState(false);
   const [showPostPtl, setShowPostPtl] = useState(false);
   const [selectedGroup, setSelectedGroup] = useState<PtlGroup | null>(null);
-  const [showPtlFilter, setShowPtlFilter] = useState(false);
-  const [ptlFilter, setPtlFilter] = useState<{ originCity: string; destCity: string; weightKg: number } | null>(null);
+  const [showPtlDetail, setShowPtlDetail] = useState(false);
 
-  const fetchPtlGroups = useCallback(async (filter?: { originCity: string; destCity: string; weightKg: number } | null) => {
+  const fetchPtlGroups = useCallback(async () => {
     setPtlLoading(true);
     try {
-      const params = new URLSearchParams();
-      const f = filter !== undefined ? filter : ptlFilter;
-      if (f?.originCity) params.set("origin_city", f.originCity);
-      if (f?.destCity) params.set("dest_city", f.destCity);
-      if (f?.weightKg) params.set("weight_kg", String(f.weightKg));
-      const qs = params.toString();
-      const r = await fetch(`${API}/ptl/groups${qs ? "?" + qs : ""}`);
+      const r = await fetch(`${API}/ptl/groups`);
       const j = await r.json();
       setPtlGroups(Array.isArray(j) ? j : []);
     } catch {
@@ -3380,7 +3426,7 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
       setPtlLoading(false);
       setPtlRefreshing(false);
     }
-  }, [ptlFilter]);
+  }, []);
 
   const fetchLoads = useCallback(async () => {
     try { const r = await fetch(`${API}/loads`); const j = await r.json(); setAllLoads(j); }
@@ -3508,62 +3554,31 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
         />
       )}
       <FindSpaceModal visible={showFilter} initial={activeFilter} onClose={() => setShowFilter(false)} onApply={onApplyFilter} />
-      <FindPtlModal
-        visible={showPtlFilter}
-        initial={ptlFilter}
-        onClose={() => setShowPtlFilter(false)}
-        onApply={(f) => { setPtlFilter(f); setShowPtlFilter(false); fetchPtlGroups(f); }}
-      />
         </>
       ) : (
-        <>
-          {/* ── PTL count bar + filter button — mirrors Full Truck bar exactly ── */}
-          <View style={styles.marketTop}>
-            <Text style={styles.marketCount} testID="ptl-count">
-              {ptlGroups.length} {ptlGroups.length === 1 ? "group" : "groups"} {ptlFilter ? "matched" : "forming"}
-            </Text>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-              {ptlFilter && (
-                <TouchableOpacity testID="ptl-clear-filter-btn" onPress={() => { setPtlFilter(null); fetchPtlGroups(null); }} style={styles.clearChip}>
-                  <Ionicons name="close" size={14} color={COLORS.textMuted} />
-                  <Text style={styles.clearChipText}>Clear</Text>
-                </TouchableOpacity>
-              )}
-              <TouchableOpacity
-                testID="ptl-filter-btn"
-                style={[styles.filterBtn, ptlFilter && styles.filterBtnActive]}
-                onPress={() => setShowPtlFilter(true)}
-              >
-                <Ionicons name="options-outline" size={16} color={ptlFilter ? COLORS.surface : COLORS.primary} />
-                <Text style={[styles.filterBtnText, ptlFilter && { color: COLORS.surface }]}>Filter</Text>
-                {ptlFilter && <View style={styles.filterDot} />}
-              </TouchableOpacity>
-            </View>
-          </View>
-          <FlatList
-            testID="ptl-groups-list"
-            data={ptlGroups}
-            keyExtractor={(g) => g.id}
-            contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
-            refreshControl={<RefreshControl refreshing={ptlRefreshing} onRefresh={() => { setPtlRefreshing(true); fetchPtlGroups(); }} />}
-            ListEmptyComponent={
-              ptlLoading ? (
-                <View style={[styles.center, { paddingVertical: 48 }]}>
-                  <ActivityIndicator size="large" color={COLORS.primary} />
-                </View>
-              ) : (
-                <View style={styles.emptyWrap} testID="ptl-empty-state">
-                  <Ionicons name="cube-outline" size={48} color={COLORS.textSubtle} />
-                  <Text style={styles.emptyTitle}>{ptlFilter ? "No matching groups found" : "No groups forming yet"}</Text>
-                  <Text style={styles.emptySub}>{ptlFilter ? "Try adjusting your filter or clear it to see all groups." : "Tap \"Post Load\" below to post a partial load — it will start a new group if no match is found."}</Text>
-                </View>
-              )
-            }
-            renderItem={({ item }) => (
-              <PtlGroupCard group={item} profile={profile} onPress={() => setSelectedGroup(item)} />
-            )}
-          />
-        </>
+        <FlatList
+          testID="ptl-groups-list"
+          data={ptlGroups}
+          keyExtractor={(g) => g.id}
+          contentContainerStyle={{ padding: 12, paddingBottom: 40 }}
+          refreshControl={<RefreshControl refreshing={ptlRefreshing} onRefresh={() => { setPtlRefreshing(true); fetchPtlGroups(); }} />}
+          ListEmptyComponent={
+            ptlLoading ? (
+              <View style={[styles.center, { paddingVertical: 48 }]}>
+                <ActivityIndicator size="large" color={COLORS.primary} />
+              </View>
+            ) : (
+              <View style={styles.emptyWrap} testID="ptl-empty-state">
+                <Ionicons name="cube-outline" size={48} color={COLORS.textSubtle} />
+                <Text style={styles.emptyTitle}>No groups forming yet</Text>
+                <Text style={styles.emptySub}>Tap "Post Load" below to post a partial load — it will start a new group if no match is found.</Text>
+              </View>
+            )
+          }
+          renderItem={({ item }) => (
+            <PtlGroupCard group={item} profile={profile} onPress={() => { setSelectedGroup(item); setShowPtlDetail(true); }} />
+          )}
+        />
       )}
 
       <PostPtlModal
@@ -3572,14 +3587,22 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
         onClose={() => setShowPostPtl(false)}
         onPosted={() => { setShowPostPtl(false); fetchPtlGroups(); }}
       />
-      <PtlGroupDetailModal
-        visible={!!selectedGroup}
-        groupId={selectedGroup?.id || null}
-        profile={profile}
-        onClose={() => setSelectedGroup(null)}
-        onChanged={() => fetchPtlGroups()}
-        onJoinNew={() => { setSelectedGroup(null); setShowPostPtl(true); }}
+      <FindSpaceModal visible={showFilter} initial={activeFilter} onClose={() => setShowFilter(false)} onApply={onApplyFilter} />
+      <FindPtlModal
+        visible={showPtlFilter}
+        initial={ptlFilter}
+        onClose={() => setShowPtlFilter(false)}
+        onApply={(f) => { setPtlFilter(f); setShowPtlFilter(false); fetchPtlGroups(f); }}
       />
+      {selectedGroup && (
+        <ListingDetailModal
+          visible={showPtlDetail}
+          ptlGroup={selectedGroup}
+          viewerPhone={profile.phone}
+          viewerName={profile.name}
+          onClose={() => { setShowPtlDetail(false); setSelectedGroup(null); }}
+        />
+      )}
     </View>
   );
 }
@@ -3654,6 +3677,7 @@ function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhon
   const [viewerStart, setViewerStart] = useState<number | null>(null);
   const [showImages, setShowImages] = useState(false);
   const [showPosterProfile, setShowPosterProfile] = useState(false);
+  const [showDetail, setShowDetail] = useState(false);
   const callPoster = () => Linking.openURL(`tel:${load.poster_phone}`).catch(() => Alert.alert("Error", "Cannot open dialer"));
   const shareOnWhatsApp = async () => {
     // Same message format as the "Post & Share" button on the post-truck-space screen.
@@ -3765,7 +3789,8 @@ function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhon
   const dimStr = hasDim ? `${load.dimension_length || "-"}×${load.dimension_breadth || "-"}×${load.dimension_height || "-"}ft` : null;
 
   return (
-    <View style={styles.card} testID={`load-card-${load.id}`}>
+    <TouchableOpacity activeOpacity={0.92} onPress={() => setShowDetail(true)} testID={`load-card-${load.id}`}>
+    <View style={styles.card}>
       {/* Share-to-WhatsApp button pinned to top-right of the card. The
           combined "share-social" icon + "Share to" label + WhatsApp logo makes
           it unambiguous that this *forwards* the load details to a WhatsApp
@@ -3942,9 +3967,371 @@ function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhon
         />
       )}
     </View>
+    <ListingDetailModal
+      visible={showDetail}
+      load={load}
+      viewerPhone={viewerPhone || ""}
+      viewerName=""
+      contactName={contactName}
+      contactsMap={contactsMap}
+      onClose={() => setShowDetail(false)}
+    />
+    </TouchableOpacity>
   );
 }
 
+
+// ============== ListingDetailModal ==============
+// Single unified full-screen detail view for both Load (Find Truck) and
+// PtlGroup (Find Partial Load). Shows ALL fields including optional ones.
+// Bottom CTA: "I'm Interested" — records interest to backend, notifies poster.
+function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, contactName, contactsMap, onClose }: {
+  visible: boolean;
+  load?: Load | null;
+  ptlGroup?: PtlGroup | null;
+  viewerPhone: string;
+  viewerName: string;
+  contactName?: string;
+  contactsMap?: Map<string, string>;
+  onClose: () => void;
+}) {
+  const [interestSent, setInterestSent] = useState(false);
+  const [interestLoading, setInterestLoading] = useState(false);
+  const [alreadyExpressed, setAlreadyExpressed] = useState(false);
+  const [showImages, setShowImages] = useState(false);
+  const [viewerStart, setViewerStart] = useState<number | null>(null);
+
+  const listingId = load?.id || ptlGroup?.id || "";
+  const listingType = load ? "load" : "ptl_group";
+  const isMine = load ? load.poster_phone === viewerPhone : (ptlGroup?.members || []).some(m => m.phone === viewerPhone);
+
+  useEffect(() => {
+    if (!visible || !listingId || !viewerPhone || isMine) return;
+    setInterestSent(false);
+    setAlreadyExpressed(false);
+    fetch(`${API}/interests/check?viewer_phone=${encodeURIComponent(viewerPhone)}&listing_id=${encodeURIComponent(listingId)}`)
+      .then(r => r.json())
+      .then(d => { if (d.expressed) setAlreadyExpressed(true); })
+      .catch(() => {});
+  }, [visible, listingId, viewerPhone]);
+
+  const sendInterest = async () => {
+    if (interestSent || alreadyExpressed || isMine) return;
+    setInterestLoading(true);
+    try {
+      const r = await fetch(`${API}/interests`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ viewer_phone: viewerPhone, listing_id: listingId, listing_type: listingType }),
+      });
+      if (r.ok) {
+        setInterestSent(true);
+        Alert.alert("Interest Sent ✓", "The poster has been notified of your interest. They will reach out to you.");
+      } else {
+        const e = await r.json();
+        Alert.alert("Error", e.detail || "Could not send interest");
+      }
+    } catch {
+      Alert.alert("Error", "Network error — please try again");
+    } finally {
+      setInterestLoading(false);
+    }
+  };
+
+  const callPoster = () => {
+    const phone = load?.poster_phone || (ptlGroup?.members?.[0]?.phone ?? "");
+    if (phone) Linking.openURL(`tel:${phone}`).catch(() => Alert.alert("Error", "Cannot open dialer"));
+  };
+
+  // ── Load detail rows ──
+  const renderLoadDetail = (l: Load) => {
+    const dateStr = (() => { try { return new Date(l.loading_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }); } catch { return l.loading_date; } })();
+    const stO = sanitizeStateForDisplay(l.origin_state || "", l.origin_pincode || "");
+    const cO = sanitizeCityForDisplay(l.origin_city || "", l.origin_pincode || "", stO);
+    const stD = sanitizeStateForDisplay(l.destination_state || "", l.destination_pincode || "");
+    const cD = sanitizeCityForDisplay(l.destination_city || "", l.destination_pincode || "", stD);
+    const hasDim = l.dimension_length || l.dimension_breadth || l.dimension_height;
+    const dimStr = hasDim ? `${l.dimension_length || "-"} × ${l.dimension_breadth || "-"} × ${l.dimension_height || "-"} ft` : null;
+    const truckImg = TRUCK_TYPES.find(t => t.name === l.truck_type)?.image;
+    const imageCount = l.image_count || 0;
+    const hasInlineImages = l.images && l.images.length > 0;
+    const hasRemoteImages = !hasInlineImages && imageCount > 0;
+    const viewerImages: string[] = hasInlineImages
+      ? (l.images as string[])
+      : hasRemoteImages
+        ? Array.from({ length: imageCount }).map((_, i) => `${API}/loads/${l.id}/image/${i}`)
+        : [];
+
+    return (
+      <>
+        {/* Route */}
+        <View style={detailStyles.section}>
+          <Text style={detailStyles.sectionTitle}>Route</Text>
+          <View style={detailStyles.routeBlock}>
+            <View style={detailStyles.routeRow}>
+              <Ionicons name="location" size={16} color={COLORS.secondary} />
+              <View style={{ flex: 1 }}>
+                <Text style={detailStyles.routeLocality}>{l.origin_locality || cO}</Text>
+                {cO && cO !== l.origin_locality ? <Text style={detailStyles.routeCity}>{cO}{stO ? `, ${stateAbbr(stO)}` : ""}</Text> : null}
+                <Text style={detailStyles.routePin}>{l.origin_pincode}</Text>
+              </View>
+            </View>
+            <View style={detailStyles.routeDividerLine} />
+            <View style={detailStyles.routeRow}>
+              <Ionicons name="flag" size={16} color={COLORS.primary} />
+              <View style={{ flex: 1 }}>
+                <Text style={detailStyles.routeLocality}>{l.destination_locality || cD}</Text>
+                {cD && cD !== l.destination_locality ? <Text style={detailStyles.routeCity}>{cD}{stD ? `, ${stateAbbr(stD)}` : ""}</Text> : null}
+                <Text style={detailStyles.routePin}>{l.destination_pincode}</Text>
+              </View>
+            </View>
+          </View>
+        </View>
+
+        {/* Load details */}
+        <View style={detailStyles.section}>
+          <Text style={detailStyles.sectionTitle}>Load Details</Text>
+          <DetailRow icon="calendar-outline" label="Loading Date" value={dateStr} />
+          <DetailRow icon="barbell-outline" label="Weight" value={`${l.weight_tons} Tons`} />
+          {l.truck_type ? <DetailRow icon="car-outline" label="Truck Type" value={l.truck_type} truckImg={truckImg} /> : null}
+          {dimStr ? <DetailRow icon="resize-outline" label="Dimensions (L×B×H)" value={dimStr} /> : null}
+          {l.cargo_placement ? <DetailRow icon="layers-outline" label="Cargo Placement" value={l.cargo_placement} /> : null}
+          {(l.cargo_types || []).filter(Boolean).length > 0 ? <DetailRow icon="cube-outline" label="Cargo Types" value={(l.cargo_types || []).map((c: string) => c.startsWith("Others:") ? c.slice(8).trim() : c).join(", ")} /> : null}
+          {l.price_per_ton ? <DetailRow icon="pricetag-outline" label="Rate" value={`₹${l.price_per_ton} per Ton`} highlight /> : null}
+        </View>
+
+        {/* Photos */}
+        {viewerImages.length > 0 && (
+          <View style={detailStyles.section}>
+            <Text style={detailStyles.sectionTitle}>Photos</Text>
+            {showImages ? (
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                {viewerImages.slice(0, 6).map((src, i) => (
+                  <TouchableOpacity key={i} onPress={() => setViewerStart(i)} activeOpacity={0.8}>
+                    <Image source={{ uri: src }} style={{ width: 100, height: 100, borderRadius: 8 }} resizeMode="cover" />
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ) : (
+              <TouchableOpacity style={styles.showImagesBtn} onPress={() => setShowImages(true)}>
+                <Ionicons name="images-outline" size={16} color={COLORS.primary} />
+                <Text style={styles.showImagesBtnText}>Show Photos ({viewerImages.length})</Text>
+              </TouchableOpacity>
+            )}
+            <ImageViewerModal visible={viewerStart !== null} images={viewerImages} initialIndex={viewerStart || 0} onClose={() => setViewerStart(null)} />
+          </View>
+        )}
+
+        {/* Poster */}
+        <View style={detailStyles.section}>
+          <Text style={detailStyles.sectionTitle}>Posted By</Text>
+          <View style={detailStyles.posterBlock}>
+            <View style={detailStyles.avatarCircle}>
+              <Text style={detailStyles.avatarText}>{(l.poster_name || "?").split(" ").map((p: string) => p[0]).filter(Boolean).slice(0, 2).join("").toUpperCase()}</Text>
+            </View>
+            <View style={{ flex: 1 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                <Text style={detailStyles.posterName}>{l.poster_name}</Text>
+                {l.verified && <Ionicons name="checkmark-circle" size={14} color="#1A9E5A" />}
+              </View>
+              {l.poster_company ? <Text style={detailStyles.posterCompany}>{l.poster_company}</Text> : null}
+              {contactName ? (
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 3 }}>
+                  <Ionicons name="person" size={11} color={COLORS.primary} />
+                  <Text style={{ fontSize: 11, color: COLORS.primary, fontFamily: "Inter_500Medium" }}>Saved as "{contactName}"</Text>
+                </View>
+              ) : null}
+            </View>
+            {!isMine && (
+              <TouchableOpacity style={styles.callBtn} onPress={callPoster}>
+                <Ionicons name="call" size={16} color={COLORS.surface} />
+                <Text style={styles.callBtnText}>Call</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+      </>
+    );
+  };
+
+  // ── PTL Group detail rows ──
+  const renderPtlDetail = (g: PtlGroup) => {
+    const fillColor = ptlFillColor(g.fill_pct || 0);
+    const coordinator = (g.members || [])[0];
+    return (
+      <>
+        {/* Route */}
+        <View style={detailStyles.section}>
+          <Text style={detailStyles.sectionTitle}>Route</Text>
+          <View style={detailStyles.routeBlock}>
+            <View style={detailStyles.routeRow}>
+              <Ionicons name="location" size={16} color={COLORS.secondary} />
+              <Text style={detailStyles.routeLocality}>{g.origin_display}</Text>
+            </View>
+            <View style={detailStyles.routeDividerLine} />
+            <View style={detailStyles.routeRow}>
+              <Ionicons name="flag" size={16} color={COLORS.primary} />
+              <Text style={detailStyles.routeLocality}>{g.destination_display}</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* Truck fill */}
+        <View style={detailStyles.section}>
+          <Text style={detailStyles.sectionTitle}>Group Status</Text>
+          <View style={{ marginBottom: 6 }}>
+            <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
+              <Text style={detailStyles.fillLabel}>{(g.total_weight_kg / 1000).toFixed(1)} T posted</Text>
+              <Text style={[detailStyles.fillLabel, { color: fillColor, fontFamily: "Inter_700Bold" }]}>{(g.fill_pct || 0).toFixed(0)}% full</Text>
+            </View>
+            <View style={{ height: 10, backgroundColor: "#F3F4F6", borderRadius: 100, overflow: "hidden" }}>
+              <View style={{ width: `${Math.min(g.fill_pct || 0, 100)}%`, height: "100%", backgroundColor: fillColor, borderRadius: 100 }} />
+            </View>
+            <Text style={[detailStyles.fillLabel, { marginTop: 4, color: COLORS.success }]}>{(g.capacity_remaining_kg / 1000).toFixed(1)} T space remaining</Text>
+          </View>
+          <DetailRow icon="people-outline" label="Co-loaders" value={`${(g.load_ids || []).length} shipper(s) joined`} />
+          {(g.cargo_categories || []).length > 0 ? <DetailRow icon="cube-outline" label="Cargo Category" value={(g.cargo_categories || []).join(", ")} /> : null}
+          <DetailRow icon="checkmark-circle-outline" label="Group Status" value={g.status} />
+        </View>
+
+        {/* Members */}
+        {(g.members || []).length > 0 && (
+          <View style={detailStyles.section}>
+            <Text style={detailStyles.sectionTitle}>Co-loaders</Text>
+            {(g.members || []).map((m, i) => (
+              <View key={i} style={detailStyles.memberRow}>
+                <View style={detailStyles.avatarCircle}>
+                  <Text style={detailStyles.avatarText}>{(m.name || "?").split(" ").map((p: string) => p[0]).filter(Boolean).slice(0, 2).join("").toUpperCase()}</Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={detailStyles.posterName}>{m.name}{m.is_me ? " (You)" : ""}</Text>
+                  {m.company ? <Text style={detailStyles.posterCompany}>{m.company}</Text> : null}
+                  <Text style={{ fontSize: 12, color: COLORS.textMuted, fontFamily: "Inter_400Regular" }}>{m.origin_locality} · {m.cargo_type} · {(m.weight_kg / 1000).toFixed(1)} T</Text>
+                </View>
+              </View>
+            ))}
+          </View>
+        )}
+
+        {/* Coordinator */}
+        {coordinator && (
+          <View style={detailStyles.section}>
+            <Text style={detailStyles.sectionTitle}>Group Coordinator</Text>
+            <View style={detailStyles.posterBlock}>
+              <View style={detailStyles.avatarCircle}>
+                <Text style={detailStyles.avatarText}>{(coordinator.name || "?").split(" ").map((p: string) => p[0]).filter(Boolean).slice(0, 2).join("").toUpperCase()}</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={detailStyles.posterName}>{coordinator.name}</Text>
+                {coordinator.company ? <Text style={detailStyles.posterCompany}>{coordinator.company}</Text> : null}
+              </View>
+              {!isMine && coordinator.phone && (
+                <TouchableOpacity style={styles.callBtn} onPress={callPoster}>
+                  <Ionicons name="call" size={16} color={COLORS.surface} />
+                  <Text style={styles.callBtnText}>Call</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+        )}
+      </>
+    );
+  };
+
+  const interested = interestSent || alreadyExpressed;
+
+  return (
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose} presentationStyle="fullScreen">
+      <SafeAreaView style={[styles.fill, { backgroundColor: COLORS.bg }]} edges={["top"]}>
+        <View style={styles.fsHeader}>
+          <TouchableOpacity onPress={onClose} style={styles.iconBtn}>
+            <Ionicons name="arrow-back" size={24} color={COLORS.text} />
+          </TouchableOpacity>
+          <Text style={styles.fsHeaderTitle}>{load ? "Truck Space Detail" : "Partial Load Group"}</Text>
+          <View style={{ width: 32 }} />
+        </View>
+
+        <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 120 }} showsVerticalScrollIndicator={false}>
+          {load ? renderLoadDetail(load) : ptlGroup ? renderPtlDetail(ptlGroup) : null}
+        </ScrollView>
+
+        {/* Interest CTA — fixed at bottom, not shown for own listings */}
+        {!isMine && (
+          <View style={detailStyles.ctaBar}>
+            <TouchableOpacity
+              style={[detailStyles.interestedBtn, interested && detailStyles.interestedBtnDone]}
+              onPress={sendInterest}
+              disabled={interested || interestLoading}
+              activeOpacity={0.85}
+            >
+              {interestLoading ? (
+                <ActivityIndicator size="small" color={COLORS.surface} />
+              ) : (
+                <>
+                  <Ionicons name={interested ? "checkmark-circle" : "hand-right-outline"} size={20} color={COLORS.surface} />
+                  <Text style={detailStyles.interestedBtnText}>
+                    {interested ? "Interest Sent ✓" : "I'm Interested"}
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
+            <TouchableOpacity style={detailStyles.callBarBtn} onPress={callPoster}>
+              <Ionicons name="call" size={20} color={COLORS.primary} />
+            </TouchableOpacity>
+          </View>
+        )}
+      </SafeAreaView>
+    </Modal>
+  );
+}
+
+function DetailRow({ icon, label, value, highlight, truckImg }: { icon: any; label: string; value: string; highlight?: boolean; truckImg?: any }) {
+  return (
+    <View style={detailStyles.detailRow}>
+      <Ionicons name={icon} size={15} color={COLORS.textMuted} style={{ marginTop: 1 }} />
+      <Text style={detailStyles.detailLabel}>{label}</Text>
+      <View style={{ flex: 1, alignItems: "flex-end", flexDirection: "row", justifyContent: "flex-end", gap: 6 }}>
+        {truckImg ? <Image source={truckImg} style={{ width: 28, height: 18 }} resizeMode="contain" /> : null}
+        <Text style={[detailStyles.detailValue, highlight && { color: COLORS.success, fontFamily: "Inter_700Bold" }]}>{value}</Text>
+      </View>
+    </View>
+  );
+}
+
+const detailStyles = StyleSheet.create({
+  section: { marginBottom: 20 },
+  sectionTitle: { fontSize: 11, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.textMuted, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 10 },
+  routeBlock: { backgroundColor: COLORS.surface, borderRadius: 12, borderWidth: 1, borderColor: COLORS.border, padding: 14 },
+  routeRow: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
+  routeDividerLine: { width: 1, height: 16, backgroundColor: COLORS.border, marginLeft: 7, marginVertical: 4 },
+  routeLocality: { fontSize: 16, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.text },
+  routeCity: { fontSize: 13, fontFamily: "Inter_500Medium", color: COLORS.textMuted, marginTop: 1 },
+  routePin: { fontSize: 11, fontFamily: "Inter_400Regular", color: COLORS.textSubtle, marginTop: 1 },
+  detailRow: { flexDirection: "row", alignItems: "flex-start", gap: 10, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: COLORS.bgMuted },
+  detailLabel: { fontSize: 13, fontFamily: "Inter_500Medium", color: COLORS.textMuted, flex: 1 },
+  detailValue: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: COLORS.text, textAlign: "right", flexShrink: 1 },
+  posterBlock: { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: COLORS.surface, borderRadius: 12, borderWidth: 1, borderColor: COLORS.border, padding: 14 },
+  avatarCircle: { width: 40, height: 40, borderRadius: 20, backgroundColor: COLORS.bgMuted, alignItems: "center", justifyContent: "center" },
+  avatarText: { fontSize: 15, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.primary },
+  posterName: { fontSize: 14, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.text },
+  posterCompany: { fontSize: 12, fontFamily: "Inter_400Regular", color: COLORS.textMuted, marginTop: 1 },
+  memberRow: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: COLORS.bgMuted },
+  fillLabel: { fontSize: 12, fontFamily: "Inter_500Medium", color: COLORS.textMuted },
+  ctaBar: { position: "absolute", bottom: 0, left: 0, right: 0, backgroundColor: COLORS.surface, borderTopWidth: 1, borderTopColor: COLORS.border, padding: 16, paddingBottom: 28, flexDirection: "row", gap: 10 },
+  interestedBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: COLORS.primary, borderRadius: 12, paddingVertical: 14 },
+  interestedBtnDone: { backgroundColor: COLORS.success },
+  interestedBtnText: { fontSize: 15, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.surface },
+  callBarBtn: { width: 52, height: 52, borderRadius: 12, backgroundColor: COLORS.bgMuted, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: COLORS.border },
+});
+
+const notifStyles = StyleSheet.create({
+  card: { flexDirection: "row", gap: 12, backgroundColor: COLORS.surface, borderRadius: 12, borderWidth: 1, borderColor: COLORS.border, padding: 14, marginBottom: 10 },
+  iconWrap: { width: 36, height: 36, borderRadius: 18, backgroundColor: COLORS.bgMuted, alignItems: "center", justifyContent: "center", flexShrink: 0 },
+  title: { fontSize: 13, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.text, marginBottom: 3 },
+  body: { fontSize: 12, fontFamily: "Inter_400Regular", color: COLORS.textMuted, lineHeight: 17 },
+  actionBtn: { flexDirection: "row", alignItems: "center", gap: 5, paddingVertical: 6, paddingHorizontal: 12, borderRadius: 8 },
+  actionBtnText: { fontSize: 12, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.surface },
+});
 
 // ============== PosterProfileModal ==============
 function PosterProfileModal({ visible, load, contactName, contactsMap, viewerPhone, onClose }: {
@@ -4486,109 +4873,6 @@ if (!dc.found) {
   );
 }
 
-function FindPtlModal({ visible, initial, onClose, onApply }: {
-  visible: boolean;
-  initial: { originCity: string; destCity: string; weightKg: number } | null;
-  onClose: () => void;
-  onApply: (f: { originCity: string; destCity: string; weightKg: number }) => void;
-}) {
-  const [originText, setOriginText] = useState("");
-  const [originPin, setOriginPin] = useState("");
-  const [originInfo, setOriginInfo] = useState<RouteInfo>(null);
-  const [destText, setDestText] = useState("");
-  const [destPin, setDestPin] = useState("");
-  const [destInfo, setDestInfo] = useState<RouteInfo>(null);
-  const [weightKg, setWeightKg] = useState("");
-  const [originErr, setOriginErr] = useState("");
-  const [destErr, setDestErr] = useState("");
-
-  useEffect(() => {
-    if (visible) {
-      setOriginText(initial?.originCity || ""); setOriginPin(""); setOriginInfo(null);
-      setDestText(initial?.destCity || ""); setDestPin(""); setDestInfo(null);
-      setWeightKg(initial?.weightKg ? String(initial.weightKg) : "");
-      setOriginErr(""); setDestErr("");
-    }
-  }, [visible, initial]);
-
-  const submit = () => {
-    setOriginErr(""); setDestErr("");
-    const oCity = originInfo?.city || originText.trim();
-    const dCity = destInfo?.city || destText.trim();
-    if (!oCity) { setOriginErr("Enter an origin city"); return; }
-    if (!dCity) { setDestErr("Enter a destination city"); return; }
-    const w = parseFloat(weightKg);
-    if (!w || w <= 0) { Alert.alert("Required", "Enter your cargo weight in kg"); return; }
-    onApply({ originCity: oCity, destCity: dCity, weightKg: w });
-  };
-
-  return (
-    <Modal visible={visible} animationType="slide" onRequestClose={onClose} presentationStyle="fullScreen">
-      <SafeAreaView style={[styles.fill, { backgroundColor: COLORS.bg }]} edges={["top"]}>
-        <View style={styles.fsHeader}>
-          <TouchableOpacity onPress={onClose} testID="ptl-filter-back-btn" style={styles.iconBtn}>
-            <Ionicons name="arrow-back" size={24} color={COLORS.text} />
-          </TouchableOpacity>
-          <Text style={styles.fsHeaderTitle}>Filter Partial Loads</Text>
-          <View style={{ width: 32 }} />
-        </View>
-        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.fill}>
-          <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
-            <Text style={styles.modalSubtitle}>Find partial load groups that match your route and have enough space for your cargo.</Text>
-
-            <SectionTitle icon="navigate-outline" title="Route" />
-            <View style={styles.routeInputsRow}>
-              <SmartRouteInput
-                label="Origin"
-                testIDPrefix="ptl-filter-origin"
-                text={originText}
-                pin={originPin}
-                info={originInfo}
-                onChange={(t, p, i) => { setOriginText(t); setOriginPin(p); setOriginInfo(i); setOriginErr(""); }}
-              />
-              <View style={styles.routeArrowMid}>
-                <Ionicons name="arrow-forward" size={20} color={COLORS.secondary} />
-              </View>
-              <SmartRouteInput
-                label="Destination"
-                testIDPrefix="ptl-filter-dest"
-                text={destText}
-                pin={destPin}
-                info={destInfo}
-                onChange={(t, p, i) => { setDestText(t); setDestPin(p); setDestInfo(i); setDestErr(""); }}
-              />
-            </View>
-            {originErr ? <Text style={[styles.errorText, { marginTop: -8, marginBottom: 8 }]}>{originErr}</Text> : null}
-            {destErr ? <Text style={[styles.errorText, { marginTop: -8, marginBottom: 8 }]}>{destErr}</Text> : null}
-
-            <Field label="My Cargo Weight (kg)">
-              <TextInput
-                testID="ptl-filter-weight-input"
-                style={[styles.input, weightKg && styles.filledBorder]}
-                placeholder="e.g., 3500"
-                placeholderTextColor={COLORS.textSubtle}
-                value={weightKg}
-                onChangeText={(t) => setWeightKg(t.replace(/[^0-9.]/g, ""))}
-                keyboardType="decimal-pad"
-              />
-            </Field>
-
-            <View style={styles.row}>
-              <TouchableOpacity testID="ptl-filter-cancel-btn" style={[styles.outlineBtn, styles.flex1]} onPress={onClose}>
-                <Text style={styles.outlineBtnText}>Cancel</Text>
-              </TouchableOpacity>
-              <View style={{ width: 12 }} />
-              <TouchableOpacity testID="ptl-filter-apply-btn" style={[styles.primaryBtn, styles.flex1, { marginTop: 0 }]} onPress={submit}>
-                <Text style={styles.primaryBtnText}>Show Matching Groups</Text>
-              </TouchableOpacity>
-            </View>
-          </ScrollView>
-        </KeyboardAvoidingView>
-      </SafeAreaView>
-    </Modal>
-  );
-}
-
 // ============== Helpers ==============
 function Field({ label, children }: any) {
   return (
@@ -4612,144 +4896,41 @@ function SectionTitle({ icon, title }: { icon: any; title: string }) {
 // ============== PTL (Partial Truck Load) Components ==============
 // ==========================================================================
 
-function PtlGroupCard({ group, profile, onPress }: { group: PtlGroup; profile: Profile; onPress: () => void }) {
+function PtlGroupCard({ group, onPress }: { group: PtlGroup; onPress: () => void }) {
+  // Pair-only marketplace card — show the existing solo poster + a "1 spot left" badge.
   const member = (group.members || [])[0];
-  const isMine = member?.phone === profile.phone || (group.members || []).some(m => m.phone === profile.phone);
-
-  const shareOnWhatsApp = async () => {
-    const origin = group.origin_display || "";
-    const dest = group.destination_display || "";
-    const totalT = (group.total_weight_kg / 1000).toFixed(1);
-    const remaining = group.capacity_remaining_kg;
-    const remainingT = (remaining / 1000).toFixed(1);
-    const cargoList = (group.cargo_categories || []).join(", ") || "General";
-    const text =
-      `📦 *Partial Load Space Available - Truck Traffic*\n\n` +
-      `📍 From: ${origin}\n📍 To: ${dest}\n\n` +
-      `⚖️ *Space left:* ${remainingT} Tons\n` +
-      `📦 *Cargo:* ${cargoList}\n` +
-      `📊 *Group fill:* ${group.fill_pct?.toFixed(0) ?? 0}% of 20T truck\n\n` +
-      `👥 *Co-loaders:* ${(group.load_ids || []).length} shipper(s) already joined\n\n` +
-      `📲 Find partial loads on Truck Traffic\nhttps://www.trucktraffic.in`;
-    try { await Linking.openURL(`https://wa.me/?text=${encodeURIComponent(text)}`); }
-    catch { Alert.alert("Error", "WhatsApp could not be opened."); }
-  };
-
-  const callMember = () => {
-    if (member?.phone) Linking.openURL(`tel:${member.phone}`).catch(() => Alert.alert("Error", "Cannot open dialer"));
-  };
-
-  // Render endpoint exactly as LoadCard does
-  const renderEndpoint = (iconName: any, iconColor: string, locality: string, city: string, pincode: string) => {
-    const locClean = (locality || "").trim();
-    const ctyClean = (city || "").trim();
-    const sameLocCity = !!locClean && !!ctyClean && locClean.toLowerCase() === ctyClean.toLowerCase();
-    const line1 = (locClean && !sameLocCity) ? locClean : (locClean || ctyClean);
-    const line2 = ctyClean && !sameLocCity ? ctyClean : "";
-    const line3 = pincode || "";
-    return (
-      <View style={cardStyles.routeEndpoint}>
-        <Ionicons name={iconName} size={13} color={iconColor} style={{ marginTop: 3 }} />
-        <View style={{ flex: 1 }}>
-          {line1 ? <Text style={cardStyles.routeL1} numberOfLines={1} ellipsizeMode="tail" adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>{line1}</Text> : null}
-          {line2 ? <Text style={cardStyles.routeL2} numberOfLines={1} ellipsizeMode="tail" adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>{line2}</Text> : null}
-          {line3 ? <Text style={cardStyles.routeL3} numberOfLines={1} ellipsizeMode="tail" adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>{line3}</Text> : null}
-        </View>
-      </View>
-    );
-  };
-
-  const fillColor = ptlFillColor(group.fill_pct || 0);
-
   return (
     <TouchableOpacity
       testID={`ptl-group-card-${group.id}`}
       onPress={onPress}
       activeOpacity={0.85}
-      style={styles.card}
+      style={styles.ptlCard}
     >
-      {/* Share pill — top right, identical position to LoadCard */}
-      <TouchableOpacity
-        testID={`ptl-share-wa-${group.id}`}
-        style={cardStyles.shareTopPill}
-        onPress={shareOnWhatsApp}
-        activeOpacity={0.85}
-        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-      >
-        <Ionicons name="share-social" size={13} color="#25D366" />
-        <Text style={cardStyles.shareTopPillText}>Share to</Text>
-        <Ionicons name="logo-whatsapp" size={14} color="#25D366" />
-      </TouchableOpacity>
-
-      {/* LINE 1: Route — identical structure to LoadCard */}
-      <View style={styles.cardRouteRow}>
-        <View style={[styles.flex1, { paddingRight: 110 }]}>
-          {renderEndpoint("location", COLORS.secondary, group.origin_display, "", "")}
-          <View style={{ height: 8 }} />
-          {renderEndpoint("flag", COLORS.primary, group.destination_display, "", "")}
+      <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 8 }}>
+        <Text style={styles.ptlRouteText} numberOfLines={1}>{group.origin_display}</Text>
+        <Ionicons name="arrow-forward" size={14} color={COLORS.textMuted} style={{ marginHorizontal: 8 }} />
+        <Text style={styles.ptlRouteText} numberOfLines={1}>{group.destination_display}</Text>
+        <View style={{ flex: 1 }} />
+        <View style={[styles.ptlStatusPill, { backgroundColor: "#FEF3C7" }]}>
+          <Text style={[styles.ptlStatusText, { color: "#92400E" }]}>1 SPOT LEFT</Text>
         </View>
       </View>
 
-      <View style={styles.divider} />
-
-      {/* LINE 2: Meta chips — date, weight posted, space left, cargo, fill bar */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={cardStyles.metaScrollContent}>
-        {member && (
-          <View style={cardStyles.metaChip}>
-            <Ionicons name="barbell-outline" size={12} color={COLORS.textMuted} />
-            <Text style={cardStyles.metaText}>{(group.total_weight_kg / 1000).toFixed(1)}T posted</Text>
-          </View>
-        )}
-        <View style={[cardStyles.metaChip, { backgroundColor: "#ECFDF5" }]}>
-          <Ionicons name="cube-outline" size={12} color={COLORS.success} />
-          <Text style={[cardStyles.metaText, { color: COLORS.success }]}>{(group.capacity_remaining_kg / 1000).toFixed(1)}T left</Text>
-        </View>
-        <View style={[cardStyles.metaChip, { backgroundColor: "#FEF9EC" }]}>
-          <Ionicons name="people-outline" size={12} color="#92400E" />
-          <Text style={[cardStyles.metaText, { color: "#92400E" }]}>{(group.load_ids || []).length} shipper{(group.load_ids || []).length !== 1 ? "s" : ""}</Text>
-        </View>
-        {(group.cargo_categories || []).map((cat, i) => (
-          <View key={i} style={[cardStyles.metaChip, { backgroundColor: "#F0F4FF" }]}>
-            <Text style={[cardStyles.metaText, { color: COLORS.primary }]}>{cat}</Text>
-          </View>
-        ))}
-        {/* Inline fill bar chip */}
-        <View style={[cardStyles.metaChip, { paddingVertical: 0, paddingHorizontal: 10, gap: 6, minWidth: 90 }]}>
-          <View style={{ width: 60, height: 5, backgroundColor: "#F3F4F6", borderRadius: 100, overflow: "hidden" }}>
-            <View style={{ width: `${Math.min(group.fill_pct || 0, 100)}%`, height: "100%", backgroundColor: fillColor, borderRadius: 100 }} />
-          </View>
-          <Text style={[cardStyles.metaText, { color: fillColor }]}>{(group.fill_pct || 0).toFixed(0)}%</Text>
-        </View>
-      </ScrollView>
-
-      <View style={styles.divider} />
-
-      {/* LINE 3: Poster info + call — identical layout to LoadCard */}
       {member && (
-        <View style={cardStyles.line3Row}>
-          <View style={cardStyles.contactSection}>
-            <View style={cardStyles.posterNameRow}>
-              <Text style={[styles.posterName, !isMine && { color: COLORS.primary }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>
-                {member.name || "Shipper"}{isMine && <Text style={styles.youTag}> · You</Text>}
-              </Text>
-            </View>
-            {member.company ? <Text style={styles.posterCompany} numberOfLines={1}>{member.company}</Text> : null}
-            {member.origin_locality ? <Text style={styles.posterPhone}>{member.origin_locality}</Text> : null}
-          </View>
-          {!isMine && member.phone && (
-            <TouchableOpacity testID={`ptl-call-btn-${group.id}`} style={[styles.callBtn, { alignSelf: "center" }]} onPress={callMember}>
-              <Ionicons name="call" size={16} color={COLORS.surface} />
-              <Text style={styles.callBtnText}>Call</Text>
-            </TouchableOpacity>
-          )}
-          {isMine && (
-            <View style={[styles.callBtn, { alignSelf: "center", backgroundColor: COLORS.success }]}>
-              <Ionicons name="checkmark-circle" size={16} color={COLORS.surface} />
-              <Text style={styles.callBtnText}>My Group</Text>
-            </View>
-          )}
-        </View>
+        <Text style={styles.ptlMetaText} numberOfLines={1}>
+          {member.name || "Shipper"}{member.company ? ` · ${member.company}` : ""}
+        </Text>
       )}
+
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
+        {member && <View style={styles.ptlChip}><Text style={styles.ptlChipText}>{member.cargo_type}</Text></View>}
+        {member && <View style={styles.ptlChip}><Text style={styles.ptlChipText}>{(member.weight_kg / 1000).toFixed(1)} t posted</Text></View>}
+      </View>
+
+      <View style={[styles.ptlJoinBtn, { backgroundColor: COLORS.success }]}>
+        <Text style={styles.ptlJoinBtnText}>Join as co-loader</Text>
+        <Ionicons name="arrow-forward" size={14} color={COLORS.surface} />
+      </View>
     </TouchableOpacity>
   );
 }
@@ -5227,7 +5408,56 @@ function PtlGroupDetailModal({ visible, groupId, profile, onClose, onChanged, on
 // Mirrors PostLoadScreen layout 1:1 — same stepper UI for date & weight, same
 // CollapsibleSection blocks for optional fields. On submit, opens the matched
 // or newly-created group inside PtlGroupDetailModal.
-function PostPtlLoadScreen({ profile }: { profile: Profile }) {
+function PostPtlLoadScreen({ profile, onNotificationsRead }: { profile: Profile; onNotificationsRead?: () => void }) {
+  // Notifications
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [notifLoading, setNotifLoading] = useState(false);
+  const [receivedInterests, setReceivedInterests] = useState<Interest[]>([]);
+
+  useEffect(() => {
+    fetchNotifications();
+  }, []);
+
+  const fetchNotifications = async () => {
+    setNotifLoading(true);
+    try {
+      const [nr, ir] = await Promise.all([
+        fetch(`${API}/notifications/${encodeURIComponent(profile.phone)}`),
+        fetch(`${API}/interests/received/${encodeURIComponent(profile.phone)}`),
+      ]);
+      if (nr.ok) setNotifications(await nr.json());
+      if (ir.ok) setReceivedInterests(await ir.json());
+      // Mark all read
+      fetch(`${API}/notifications/${encodeURIComponent(profile.phone)}/read`, { method: "POST" }).catch(() => {});
+      onNotificationsRead?.();
+    } catch {} finally {
+      setNotifLoading(false);
+    }
+  };
+
+  const handleAccept = async (notif: AppNotification) => {
+    if (!notif.group_id) return;
+    try {
+      const r = await fetch(`${API}/ptl/groups/${encodeURIComponent(notif.group_id)}/accept?phone=${encodeURIComponent(profile.phone)}`, { method: "POST" });
+      if (r.ok) { Alert.alert("Accepted!", "You've accepted the co-loader. They'll be notified."); fetchNotifications(); }
+      else { const e = await r.json(); Alert.alert("Error", e.detail || "Could not accept"); }
+    } catch { Alert.alert("Error", "Network error"); }
+  };
+
+  const handleDecline = async (notif: AppNotification) => {
+    if (!notif.group_id) return;
+    Alert.alert("Decline request?", "The co-loader will be notified and their load returned to search.", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Decline", style: "destructive", onPress: async () => {
+        try {
+          const r = await fetch(`${API}/ptl/groups/${encodeURIComponent(notif.group_id!)}/decline?phone=${encodeURIComponent(profile.phone)}`, { method: "POST" });
+          if (r.ok) { Alert.alert("Declined", "The request has been declined."); fetchNotifications(); }
+          else { const e = await r.json(); Alert.alert("Error", e.detail || "Could not decline"); }
+        } catch { Alert.alert("Error", "Network error"); }
+      }},
+    ]);
+  };
+
   // Route
   const [originText, setOriginText] = useState("");
   const [originPin, setOriginPin] = useState("");
@@ -5436,6 +5666,81 @@ function PostPtlLoadScreen({ profile }: { profile: Profile }) {
   return (
     <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.fill}>
       <ScrollView contentContainerStyle={styles.formWrap} keyboardShouldPersistTaps="handled" testID="post-ptl-screen">
+
+        {/* ── Notifications ── */}
+        {notifications.filter(n => n.type === "PTL_PAIR_REQUEST" && !n.read === false ? false : n.type === "PTL_PAIR_REQUEST").length > 0 || notifications.filter(n => n.type !== "PTL_PAIR_REQUEST" && n.type !== "INTEREST_RECEIVED").length > 0 ? (
+          <View style={{ marginBottom: 20 }}>
+            <Text style={styles.sectionHeading}>Notifications</Text>
+            {notifications.filter(n => n.type === "PTL_PAIR_REQUEST").map(notif => (
+              <View key={notif.id} style={notifStyles.card}>
+                <View style={notifStyles.iconWrap}><Ionicons name="people" size={20} color={COLORS.primary} /></View>
+                <View style={{ flex: 1 }}>
+                  <Text style={notifStyles.title}>Co-loader Request</Text>
+                  <Text style={notifStyles.body}><Text style={{ fontFamily: "Inter_700Bold" }}>{notif.requester_name}</Text>{notif.requester_company ? ` (${notif.requester_company})` : ""} wants to join your group from {notif.requester_origin}. They have {((notif.requester_weight_kg || 0) / 1000).toFixed(1)} T of {notif.requester_cargo_type}.</Text>
+                  <View style={{ flexDirection: "row", gap: 8, marginTop: 10 }}>
+                    <TouchableOpacity style={[notifStyles.actionBtn, { backgroundColor: COLORS.success }]} onPress={() => handleAccept(notif)}>
+                      <Ionicons name="checkmark" size={14} color={COLORS.surface} />
+                      <Text style={notifStyles.actionBtnText}>Accept</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[notifStyles.actionBtn, { backgroundColor: "#FEE2E2", }]} onPress={() => handleDecline(notif)}>
+                      <Ionicons name="close" size={14} color="#DC2626" />
+                      <Text style={[notifStyles.actionBtnText, { color: "#DC2626" }]}>Decline</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </View>
+            ))}
+            {notifications.filter(n => n.type === "PTL_PAIR_ACCEPTED").map(notif => (
+              <View key={notif.id} style={[notifStyles.card, { borderColor: COLORS.success }]}>
+                <View style={[notifStyles.iconWrap, { backgroundColor: "#ECFDF5" }]}><Ionicons name="checkmark-circle" size={20} color={COLORS.success} /></View>
+                <View style={{ flex: 1 }}>
+                  <Text style={notifStyles.title}>Request Accepted ✓</Text>
+                  <Text style={notifStyles.body}>Your co-loader request was accepted. Contact them to coordinate.</Text>
+                </View>
+              </View>
+            ))}
+            {notifications.filter(n => n.type === "PTL_PAIR_DECLINED").map(notif => (
+              <View key={notif.id} style={[notifStyles.card, { borderColor: "#FCA5A5" }]}>
+                <View style={[notifStyles.iconWrap, { backgroundColor: "#FEE2E2" }]}><Ionicons name="close-circle" size={20} color="#DC2626" /></View>
+                <View style={{ flex: 1 }}>
+                  <Text style={notifStyles.title}>Request Declined</Text>
+                  <Text style={notifStyles.body}>Your co-loader request was declined. Your load is back in search — we'll find you another match.</Text>
+                </View>
+              </View>
+            ))}
+          </View>
+        ) : null}
+
+        {/* ── Received Interests ── */}
+        {receivedInterests.length > 0 && (
+          <View style={{ marginBottom: 20 }}>
+            <Text style={styles.sectionHeading}>Interests in Your Listings</Text>
+            {receivedInterests.map(interest => (
+              <View key={interest.id} style={[notifStyles.card, { borderColor: COLORS.primary }]}>
+                <View style={[notifStyles.iconWrap, { backgroundColor: "#EEF2FA" }]}><Ionicons name="hand-right-outline" size={20} color={COLORS.primary} /></View>
+                <View style={{ flex: 1 }}>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                    <Text style={notifStyles.title}>{interest.viewer_name}</Text>
+                    {interest.viewer_verified && <Ionicons name="checkmark-circle" size={13} color="#1A9E5A" />}
+                  </View>
+                  {interest.viewer_company ? <Text style={notifStyles.body}>{interest.viewer_company}</Text> : null}
+                  <Text style={notifStyles.body}>
+                    Interested in your {interest.listing_type === "ptl_group" ? "partial load group" : "truck space"}
+                    {interest.listing_summary?.origin ? ` (${interest.listing_summary.origin} → ${interest.listing_summary.destination})` : ""}
+                  </Text>
+                  <TouchableOpacity
+                    style={[notifStyles.actionBtn, { backgroundColor: "#E8F8EE", marginTop: 8, alignSelf: "flex-start" }]}
+                    onPress={() => Linking.openURL(`tel:${interest.viewer_phone}`).catch(() => {})}
+                  >
+                    <Ionicons name="call-outline" size={13} color={COLORS.success} />
+                    <Text style={[notifStyles.actionBtnText, { color: COLORS.success }]}>Call {interest.viewer_name.split(" ")[0]}</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ))}
+          </View>
+        )}
+
         {/* 1. Route */}
         <SectionTitle icon="navigate-outline" title="Route" />
         <View style={styles.routeInputsRow}>
@@ -6466,6 +6771,8 @@ bottomNavBtn: { flex: 1, alignItems: "center", justifyContent: "center", padding
 bottomNavLabel: { fontSize: 10, fontFamily: "Inter_500Medium", color: COLORS.textMuted, marginTop: 2 },
 bottomNavLabelActive: { color: COLORS.primary, fontFamily: "Inter_700Bold", fontWeight: "700" },
 bottomNavDot: { position: "absolute", bottom: 0, width: 4, height: 4, borderRadius: 2, backgroundColor: COLORS.primary },
+navBadge: { position: "absolute", top: -4, right: -8, backgroundColor: COLORS.secondary, borderRadius: 10, minWidth: 16, height: 16, alignItems: "center", justifyContent: "center", paddingHorizontal: 3 },
+navBadgeText: { fontSize: 9, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.surface },
 modeToggleBar: { flexDirection: "row", margin: 12, backgroundColor: "#F3F4F6", borderRadius: 10, padding: 3 },
 modeToggleBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, paddingVertical: 7, borderRadius: 8 },
 modeToggleBtnActive: { backgroundColor: COLORS.primary, shadowColor: "#000", shadowOpacity: 0.1, shadowRadius: 4, elevation: 2 },
