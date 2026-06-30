@@ -1025,6 +1025,46 @@ function sanitizeCityForDisplay(city: string, pincode: string, state: string): s
   return c;
 }
 
+// Shared origin/destination row used by both the Truck Space card (LoadCard)
+// and the Partial Load card (MyPtlLoadsList), so both listing types render
+// route info identically: icon + 3-line stack (locality / city,ST / pincode).
+function RouteEndpointBlock({ iconName, iconColor, locality, city, state, pincode }: {
+  iconName: any; iconColor: string; locality: string; city: string; state: string; pincode: string;
+}) {
+  const stClean = sanitizeStateForDisplay(state, pincode);
+  const ctyClean = sanitizeCityForDisplay(city, pincode, stClean);
+  const locClean = (locality || "").trim();
+  const abbr = stateAbbr(stClean);
+
+  const sameLocCity = !!locClean && !!ctyClean && locClean.toLowerCase() === ctyClean.toLowerCase();
+  const line1 = (locClean && !sameLocCity) ? locClean : (locClean || ctyClean);
+  const line2 = ctyClean && abbr ? `${ctyClean}, ${abbr}` : (ctyClean || abbr || "");
+  const line3 = pincode || "";
+
+  return (
+    <View style={cardStyles.routeEndpoint}>
+      <Ionicons name={iconName} size={13} color={iconColor} style={{ marginTop: 3 }} />
+      <View style={{ flex: 1 }}>
+        {line1 ? (
+          <Text style={cardStyles.routeL1} numberOfLines={1} ellipsizeMode="tail" adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>
+            {line1}
+          </Text>
+        ) : null}
+        {line2 ? (
+          <Text style={cardStyles.routeL2} numberOfLines={1} ellipsizeMode="tail" adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>
+            {line2}
+          </Text>
+        ) : null}
+        {line3 ? (
+          <Text style={cardStyles.routeL3} numberOfLines={1} ellipsizeMode="tail" adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>
+            {line3}
+          </Text>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
 // ============== EditLoadModal ==============
 function EditLoadModal({ load, visible, onClose, onSaved }: { load: Load; visible: boolean; onClose: () => void; onSaved: () => void }) {
   const [originText, setOriginText] = useState(load.origin_locality || load.origin_city || load.origin_pincode);
@@ -3767,47 +3807,6 @@ function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhon
   };
    const dateStr = useMemo(() => { try { return new Date(load.loading_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }); } catch { return load.loading_date; } }, [load.loading_date]);
 
-  // Standardized 3-line route display (locality / "city, ST" / pincode).
-  // Sanitization protects against legacy DB records that accidentally stored
-  // the pincode in `state`/`city` (the Vashi/400703/400703 class of bugs).
-  const renderEndpoint = (
-    iconName: any, iconColor: string,
-    locality: string, city: string, state: string, pincode: string,
-  ) => {
-    const stClean = sanitizeStateForDisplay(state, pincode);
-    const ctyClean = sanitizeCityForDisplay(city, pincode, stClean);
-    const locClean = (locality || "").trim();
-    const abbr = stateAbbr(stClean);
-
-    const sameLocCity = !!locClean && !!ctyClean && locClean.toLowerCase() === ctyClean.toLowerCase();
-    const line1 = (locClean && !sameLocCity) ? locClean : (locClean || ctyClean);
-    const line2 = ctyClean && abbr ? `${ctyClean}, ${abbr}` : (ctyClean || abbr || "");
-    const line3 = pincode || "";
-
-    return (
-      <View style={cardStyles.routeEndpoint}>
-        <Ionicons name={iconName} size={13} color={iconColor} style={{ marginTop: 3 }} />
-        <View style={{ flex: 1 }}>
-          {line1 ? (
-            <Text style={cardStyles.routeL1} numberOfLines={1} ellipsizeMode="tail" adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>
-              {line1}
-            </Text>
-          ) : null}
-          {line2 ? (
-            <Text style={cardStyles.routeL2} numberOfLines={1} ellipsizeMode="tail" adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>
-              {line2}
-            </Text>
-          ) : null}
-          {line3 ? (
-            <Text style={cardStyles.routeL3} numberOfLines={1} ellipsizeMode="tail" adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>
-              {line3}
-            </Text>
-          ) : null}
-        </View>
-      </View>
-    );
-  };
-
   // Fix: use API constant (not process.env) for image URLs
   const getImageUri = (i: number) => `${API}/loads/${load.id}/image/${i}`;
 
@@ -3848,15 +3847,15 @@ function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhon
       {/* LINE 1: Route */}
       <View style={styles.cardRouteRow}>
         <View style={[styles.flex1, { paddingRight: 110 }]}>
-          {renderEndpoint(
-            "location", COLORS.secondary,
-            load.origin_locality || "", load.origin_city || "", load.origin_state || "", load.origin_pincode || "",
-          )}
+          <RouteEndpointBlock
+            iconName="location" iconColor={COLORS.secondary}
+            locality={load.origin_locality || ""} city={load.origin_city || ""} state={load.origin_state || ""} pincode={load.origin_pincode || ""}
+          />
           <View style={{ height: 8 }} />
-          {renderEndpoint(
-            "flag", COLORS.primary,
-            load.destination_locality || "", load.destination_city || "", load.destination_state || "", load.destination_pincode || "",
-          )}
+          <RouteEndpointBlock
+            iconName="flag" iconColor={COLORS.primary}
+            locality={load.destination_locality || ""} city={load.destination_city || ""} state={load.destination_state || ""} pincode={load.destination_pincode || ""}
+          />
         </View>
       </View>
 
@@ -4150,9 +4149,12 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
   };
 
   const renderPtlDetail = (g: PtlGroup) => {
-    const fillPct = g.fill_pct || 0;
-    const fillColor = fillPct >= 85 ? "#FF6B00" : fillPct >= 60 ? "#F59E0B" : "#22C55E";
-    const coordinator = (g.members || [])[0];
+    // Represent the group as a single listing: use the primary member's
+    // (the poster who owns this card) own load details rather than
+    // group-level aggregates like fill % or co-loader counts.
+    const primary = (g.members || []).find(m => m.is_me) || (g.members || [])[0];
+    const weightKg = primary?.weight_kg ?? g.total_weight_kg ?? 0;
+    const cargoLabel = primary?.cargo_type || (g.cargo_categories || []).join(", ");
     return (
       <>
         <View style={detailStyles.section}>
@@ -4164,45 +4166,20 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
           </View>
         </View>
         <View style={detailStyles.section}>
-          <Text style={detailStyles.sectionTitle}>Group Status</Text>
-          <View style={{ marginBottom: 10 }}>
-            <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
-              <Text style={detailStyles.fillLabel}>{((g.total_weight_kg || 0) / 1000).toFixed(1)} T posted</Text>
-              <Text style={[detailStyles.fillLabel, { color: fillColor, fontFamily: "Inter_700Bold" }]}>{fillPct.toFixed(0)}% full</Text>
-            </View>
-            <View style={{ height: 10, backgroundColor: "#F3F4F6", borderRadius: 100, overflow: "hidden" }}>
-              <View style={{ width: `${Math.min(fillPct, 100)}%`, height: "100%", backgroundColor: fillColor, borderRadius: 100 }} />
-            </View>
-            <Text style={[detailStyles.fillLabel, { marginTop: 4, color: COLORS.success }]}>{((g.capacity_remaining_kg || 0) / 1000).toFixed(1)} T space remaining</Text>
-          </View>
-          <DetailRow icon="people-outline" label="Co-loaders" value={`${(g.load_ids || []).length} shipper(s)`} />
-          {(g.cargo_categories || []).length > 0 ? <DetailRow icon="cube-outline" label="Cargo Category" value={(g.cargo_categories || []).join(", ")} /> : null}
+          <Text style={detailStyles.sectionTitle}>Load Details</Text>
+          <DetailRow icon="barbell-outline" label="Weight" value={`${(weightKg / 1000).toFixed(1)} Tons`} />
+          {cargoLabel ? <DetailRow icon="cube-outline" label="Cargo Type" value={cargoLabel} /> : null}
         </View>
-        {(g.members || []).length > 0 && (
+        {primary && (
           <View style={detailStyles.section}>
-            <Text style={detailStyles.sectionTitle}>Co-loaders</Text>
-            {(g.members || []).map((m, i) => (
-              <View key={i} style={detailStyles.memberRow}>
-                <View style={detailStyles.avatarCircle}><Text style={detailStyles.avatarText}>{(m.name || "?").split(" ").map((p: string) => p[0]).filter(Boolean).slice(0, 2).join("").toUpperCase()}</Text></View>
-                <View style={{ flex: 1 }}>
-                  <Text style={detailStyles.posterName}>{m.name}{m.is_me ? " (You)" : ""}</Text>
-                  {m.company ? <Text style={detailStyles.posterCompany}>{m.company}</Text> : null}
-                  <Text style={{ fontSize: 12, color: COLORS.textMuted }}>{m.origin_locality} · {m.cargo_type} · {(m.weight_kg / 1000).toFixed(1)} T</Text>
-                </View>
-              </View>
-            ))}
-          </View>
-        )}
-        {coordinator && (
-          <View style={detailStyles.section}>
-            <Text style={detailStyles.sectionTitle}>Coordinator</Text>
+            <Text style={detailStyles.sectionTitle}>Posted By</Text>
             <View style={detailStyles.posterBlock}>
-              <View style={detailStyles.avatarCircle}><Text style={detailStyles.avatarText}>{(coordinator.name || "?").split(" ").map((p: string) => p[0]).filter(Boolean).slice(0, 2).join("").toUpperCase()}</Text></View>
+              <View style={detailStyles.avatarCircle}><Text style={detailStyles.avatarText}>{(primary.name || "?").split(" ").map((p: string) => p[0]).filter(Boolean).slice(0, 2).join("").toUpperCase()}</Text></View>
               <View style={{ flex: 1 }}>
-                <Text style={detailStyles.posterName}>{coordinator.name}</Text>
-                {coordinator.company ? <Text style={detailStyles.posterCompany}>{coordinator.company}</Text> : null}
+                <Text style={detailStyles.posterName}>{primary.name}{primary.is_me ? " (You)" : ""}</Text>
+                {primary.company ? <Text style={detailStyles.posterCompany}>{primary.company}</Text> : null}
               </View>
-              {!isMine && coordinator.phone && <TouchableOpacity style={styles.callBtn} onPress={callPoster}><Ionicons name="call" size={16} color={COLORS.surface} /><Text style={styles.callBtnText}>Call</Text></TouchableOpacity>}
+              {!isMine && primary.phone && <TouchableOpacity style={styles.callBtn} onPress={callPoster}><Ionicons name="call" size={16} color={COLORS.surface} /><Text style={styles.callBtnText}>Call</Text></TouchableOpacity>}
             </View>
           </View>
         )}
@@ -4217,7 +4194,7 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
       <SafeAreaView style={[styles.fill, { backgroundColor: COLORS.bg }]} edges={["top"]}>
         <View style={styles.fsHeader}>
           <TouchableOpacity onPress={onClose} style={styles.iconBtn}><Ionicons name="arrow-back" size={24} color={COLORS.text} /></TouchableOpacity>
-          <Text style={styles.fsHeaderTitle}>{load ? "Truck Space Detail" : "Partial Load Group"}</Text>
+          <Text style={styles.fsHeaderTitle}>{load ? "Truck Space Detail" : "Partial Load Detail"}</Text>
           <View style={{ width: 32 }} />
         </View>
         <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 120 }} showsVerticalScrollIndicator={false}>
@@ -6307,11 +6284,16 @@ function MyPtlLoadsList({ profile }: { profile: Profile }) {
         const tappable = item.status === "MATCHED" || item.status === "CONFIRMED";
         return (
           <View key={item.id} style={styles.ptlCard} testID={`myptl-card-${item.id}`}>
-            <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 6 }}>
-              <Text style={styles.ptlRouteText} numberOfLines={1}>{item.origin_locality || item.origin_city}</Text>
-              <Ionicons name="arrow-forward" size={14} color={COLORS.textMuted} style={{ marginHorizontal: 8 }} />
-              <Text style={styles.ptlRouteText} numberOfLines={1}>{item.destination_locality || item.destination_city}</Text>
-            </View>
+            <RouteEndpointBlock
+              iconName="location" iconColor={COLORS.secondary}
+              locality={item.origin_locality || ""} city={item.origin_city || ""} state={""} pincode={item.origin_pincode || ""}
+            />
+            <View style={{ height: 8 }} />
+            <RouteEndpointBlock
+              iconName="flag" iconColor={COLORS.primary}
+              locality={item.destination_locality || ""} city={item.destination_city || ""} state={""} pincode={item.destination_pincode || ""}
+            />
+            <View style={{ height: 10 }} />
 
             <TouchableOpacity
               disabled={!tappable}
