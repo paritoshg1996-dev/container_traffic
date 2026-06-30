@@ -1583,16 +1583,34 @@ async def list_ptl_groups(
             loads = await db.ptl_loads.find(
                 {"id": {"$in": load_ids}, "status": {"$ne": "CANCELLED"}},
                 {"_id": 0, "poster_name": 1, "poster_company": 1,
-                 "origin": 1, "weight_kg": 1, "cargo_type": 1, "status": 1},
+                 "origin": 1, "destination": 1, "weight_kg": 1, "cargo_type": 1,
+                 "cargo_category": 1, "status": 1, "truck_type": 1, "loading_date": 1,
+                 "dimension_length": 1, "dimension_breadth": 1, "dimension_height": 1,
+                 "cargo_placement": 1, "images": 1},
             ).to_list(length=20)
             for l in loads:
+                o = l.get("origin") or {}
+                d = l.get("destination") or {}
                 members.append({
                     "name": l.get("poster_name", ""),
                     "company": l.get("poster_company", ""),
-                    "origin_locality": (l.get("origin") or {}).get("locality", ""),
+                    "origin_locality": o.get("locality", ""),
+                    "origin_city": o.get("city", ""),
+                    "origin_pincode": o.get("pincode", ""),
+                    "destination_locality": d.get("locality", ""),
+                    "destination_city": d.get("city", ""),
+                    "destination_pincode": d.get("pincode", ""),
                     "weight_kg": l.get("weight_kg", 0),
                     "cargo_type": l.get("cargo_type", ""),
+                    "cargo_category": l.get("cargo_category", ""),
                     "confirmed": l.get("status") == "CONFIRMED",
+                    "truck_type": l.get("truck_type", ""),
+                    "loading_date": l.get("loading_date"),
+                    "dimension_length": l.get("dimension_length"),
+                    "dimension_breadth": l.get("dimension_breadth"),
+                    "dimension_height": l.get("dimension_height"),
+                    "cargo_placement": l.get("cargo_placement", ""),
+                    "images": l.get("images") or [],
                 })
         g_out = _strip_group_internals(g)
         g_out["members"] = members
@@ -1625,14 +1643,23 @@ async def get_ptl_group(group_id: str, viewer_phone: Optional[str] = None):
             "company": l.get("poster_company", ""),
             "origin_locality": (l.get("origin") or {}).get("locality", ""),
             "origin_city": (l.get("origin") or {}).get("city", ""),
+            "origin_pincode": (l.get("origin") or {}).get("pincode", ""),
             "destination_locality": (l.get("destination") or {}).get("locality", ""),
             "destination_city": (l.get("destination") or {}).get("city", ""),
+            "destination_pincode": (l.get("destination") or {}).get("pincode", ""),
             "weight_kg": l.get("weight_kg", 0),
             "cargo_type": l.get("cargo_type", ""),
             "cargo_category": l.get("cargo_category", ""),
             "confirmed": l.get("status") == "CONFIRMED",
             "phone": l.get("poster_phone", "") if phones_visible else None,
             "is_me": (viewer and l.get("poster_phone") == viewer) or False,
+            "truck_type": l.get("truck_type", ""),
+            "loading_date": l.get("loading_date"),
+            "dimension_length": l.get("dimension_length"),
+            "dimension_breadth": l.get("dimension_breadth"),
+            "dimension_height": l.get("dimension_height"),
+            "cargo_placement": l.get("cargo_placement", ""),
+            "images": l.get("images") or [],
         })
     g_out = _strip_group_internals(g)
     g_out["members"] = members
