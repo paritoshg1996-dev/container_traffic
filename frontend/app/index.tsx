@@ -3768,8 +3768,6 @@ function loadSharePath(load: any): string {
 }
 
 function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhone }: { load: Load; isMine: boolean; distance?: { origin: number; dest: number; offRoute: boolean }; contactName?: string; contactsMap?: Map<string, string>; viewerPhone?: string }) {
-  const [viewerStart, setViewerStart] = useState<number | null>(null);
-  const [showImages, setShowImages] = useState(false);
   const [showPosterProfile, setShowPosterProfile] = useState(false);
   const [showDetail, setShowDetail] = useState(false);
   const callPoster = () => Linking.openURL(`tel:${load.poster_phone}`).catch(() => Alert.alert("Error", "Cannot open dialer"));
@@ -3823,23 +3821,7 @@ function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhon
   };
    const dateStr = useMemo(() => { try { return new Date(load.loading_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }); } catch { return load.loading_date; } }, [load.loading_date]);
 
-  // Fix: use API constant (not process.env) for image URLs
-  const getImageUri = (i: number) => `${API}/loads/${load.id}/image/${i}`;
-
-  const imageCount = load.image_count || 0;
-  const hasInlineImages = load.images && load.images.length > 0;
-  const hasRemoteImages = !hasInlineImages && imageCount > 0;
-
-  // Build array of image URIs for the viewer modal
-  const viewerImages: string[] = hasInlineImages
-    ? (load.images as string[])
-    : hasRemoteImages
-      ? Array.from({ length: imageCount }).map((_, i) => getImageUri(i))
-      : [];
-
   const truckImg = TRUCK_TYPES.find(t => t.name === load.truck_type)?.image;
-  const hasDim = load.dimension_length || load.dimension_breadth || load.dimension_height;
-  const dimStr = hasDim ? `${load.dimension_length || "-"}×${load.dimension_breadth || "-"}×${load.dimension_height || "-"}ft` : null;
 
   return (
     <TouchableOpacity activeOpacity={0.92} onPress={() => setShowDetail(true)} testID={`load-card-${load.id}`}>
@@ -3884,7 +3866,7 @@ function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhon
 
       <View style={styles.divider} />
 
-      {/* LINE 2: Date · Weight · Truck · Space · Price · Placement — single horizontal row */}
+      {/* LINE 2: Date · Weight · Truck — single horizontal row (other optional details live in the detail page) */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={cardStyles.metaScrollContent}>
         <View style={cardStyles.metaChip}>
           <Ionicons name="calendar-outline" size={12} color={COLORS.textMuted} />
@@ -3899,31 +3881,6 @@ function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhon
             <Image source={truckImg} style={cardStyles.truckMiniImg} resizeMode="contain" />
           </View>
         ) : null}
-        {dimStr ? (
-          <View style={cardStyles.metaChip}>
-            <Ionicons name="resize-outline" size={12} color={COLORS.textMuted} />
-            <Text style={cardStyles.metaText}>{dimStr}</Text>
-          </View>
-        ) : null}
-        {load.price_per_ton ? (
-          <View style={cardStyles.metaChip}>
-            <Ionicons name="pricetag-outline" size={12} color={COLORS.textMuted} />
-            <Text style={cardStyles.metaText}>₹{load.price_per_ton}/T</Text>
-          </View>
-        ) : null}
-        {load.cargo_placement ? (
-          <View style={[cardStyles.metaChip, cardStyles.placementMeta]}>
-            <Text style={[cardStyles.metaText, { color: COLORS.secondary }]}>{load.cargo_placement}</Text>
-          </View>
-        ) : null}
-        {(load.cargo_types || []).filter((c: string) => !!c).map((c: string, i: number) => {
-          const label = c.startsWith("Others:") ? c.slice(8).trim() : c;
-          return (
-            <View key={i} style={[cardStyles.metaChip, { backgroundColor: "#F0F4FF" }]}>
-              <Text style={[cardStyles.metaText, { color: COLORS.primary }]}>{label}</Text>
-            </View>
-          );
-        })}
       </ScrollView>
 
       <View style={styles.divider} />
@@ -3958,7 +3915,6 @@ function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhon
 
           </View>
           {load.poster_company ? <Text style={styles.posterCompany} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>{load.poster_company}</Text> : null}
-          <Text style={styles.posterPhone}>+91 {load.poster_phone}</Text>
         </View>
 
         {!isMine && (
@@ -3969,46 +3925,6 @@ function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhon
         )}
       </View>
 
-      {/* Photos: lazy-load with Show Images button */}
-      {viewerImages.length > 0 ? (
-        showImages ? (
-          <View style={cardStyles.photosSectionFull}>
-            {viewerImages.slice(0, 3).map((src, i) => (
-              <TouchableOpacity
-                key={i}
-                testID={`thumb-${load.id}-${i}`}
-                activeOpacity={0.8}
-                onPress={() => setViewerStart(i)}
-                style={cardStyles.thumbWrap}
-              >
-                <Image source={{ uri: src }} style={cardStyles.thumbBig} resizeMode="cover" />
-                {i === 2 && viewerImages.length > 3 ? (
-                  <View style={cardStyles.thumbMoreOverlay}>
-                    <Text style={cardStyles.thumbMoreText}>+{viewerImages.length - 3}</Text>
-                  </View>
-                ) : null}
-              </TouchableOpacity>
-            ))}
-          </View>
-        ) : (
-          <TouchableOpacity
-            testID={`show-images-btn-${load.id}`}
-            style={styles.showImagesBtn}
-            onPress={() => setShowImages(true)}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="images-outline" size={16} color={COLORS.primary} />
-            <Text style={styles.showImagesBtnText}>Show Images ({viewerImages.length})</Text>
-          </TouchableOpacity>
-        )
-      ) : null}
-
-      <ImageViewerModal
-        visible={viewerStart !== null}
-        images={viewerImages}
-        initialIndex={viewerStart || 0}
-        onClose={() => setViewerStart(null)}
-      />
       {showPosterProfile && !isMine && (
         <PosterProfileModal
           visible={showPosterProfile}
