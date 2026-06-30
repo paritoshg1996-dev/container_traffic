@@ -168,6 +168,13 @@ type PtlLoad = {
   status: "OPEN" | "MATCHED" | "CONFIRMED" | "CANCELLED";
   group_id?: string | null;
   posted_at: string;
+  truck_type?: string;
+  loading_date?: string;
+  dimension_length?: number | null;
+  dimension_breadth?: number | null;
+  dimension_height?: number | null;
+  cargo_placement?: string;
+  images?: string[];
 };
 
 type PtlMember = {
@@ -177,13 +184,22 @@ type PtlMember = {
   company?: string;
   origin_locality: string;
   origin_city?: string;
+  origin_pincode?: string;
   destination_locality?: string;
   destination_city?: string;
+  destination_pincode?: string;
   weight_kg: number;
   cargo_type: string;
   cargo_category?: string;
   confirmed?: boolean;
   is_me?: boolean;
+  truck_type?: string;
+  loading_date?: string;
+  dimension_length?: number | null;
+  dimension_breadth?: number | null;
+  dimension_height?: number | null;
+  cargo_placement?: string;
+  images?: string[];
 };
 
 type AppNotification = {
@@ -4154,7 +4170,12 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
     // group-level aggregates like fill % or co-loader counts.
     const primary = (g.members || []).find(m => m.is_me) || (g.members || [])[0];
     const weightKg = primary?.weight_kg ?? g.total_weight_kg ?? 0;
-    const cargoLabel = primary?.cargo_type || (g.cargo_categories || []).join(", ");
+    const cargoLabel = (primary?.cargo_type || (g.cargo_categories || []).join(", ") || "").replace(/^Others:\s*/, "");
+    const dateStr = primary?.loading_date ? (() => { try { return new Date(primary.loading_date as string).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }); } catch { return primary.loading_date; } })() : null;
+    const hasDim = primary?.dimension_length || primary?.dimension_breadth || primary?.dimension_height;
+    const dimStr = hasDim ? `${primary?.dimension_length || "-"} × ${primary?.dimension_breadth || "-"} × ${primary?.dimension_height || "-"} ft` : null;
+    const truckImg = TRUCK_TYPES.find(t => t.name === primary?.truck_type)?.image;
+    const viewerImages: string[] = primary?.images && primary.images.length > 0 ? primary.images : [];
     return (
       <>
         <View style={detailStyles.section}>
@@ -4167,9 +4188,33 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
         </View>
         <View style={detailStyles.section}>
           <Text style={detailStyles.sectionTitle}>Load Details</Text>
+          {dateStr ? <DetailRow icon="calendar-outline" label="Loading Date" value={dateStr} /> : null}
           <DetailRow icon="barbell-outline" label="Weight" value={`${(weightKg / 1000).toFixed(1)} Tons`} />
           {cargoLabel ? <DetailRow icon="cube-outline" label="Cargo Type" value={cargoLabel} /> : null}
+          {primary?.truck_type ? <DetailRow icon="car-outline" label="Truck Type" value={primary.truck_type} truckImg={truckImg} /> : null}
+          {dimStr ? <DetailRow icon="resize-outline" label="Dimensions (L×B×H)" value={dimStr} /> : null}
+          {primary?.cargo_placement ? <DetailRow icon="layers-outline" label="Cargo Placement" value={primary.cargo_placement} /> : null}
         </View>
+        {viewerImages.length > 0 && (
+          <View style={detailStyles.section}>
+            <Text style={detailStyles.sectionTitle}>Photos</Text>
+            {showImagesLocal ? (
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                {viewerImages.slice(0, 6).map((src, i) => (
+                  <TouchableOpacity key={i} onPress={() => setViewerStart(i)} activeOpacity={0.8}>
+                    <Image source={{ uri: src }} style={{ width: 100, height: 100, borderRadius: 8 }} resizeMode="cover" />
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ) : (
+              <TouchableOpacity style={styles.showImagesBtn} onPress={() => setShowImagesLocal(true)}>
+                <Ionicons name="images-outline" size={16} color={COLORS.primary} />
+                <Text style={styles.showImagesBtnText}>Show Photos ({viewerImages.length})</Text>
+              </TouchableOpacity>
+            )}
+            <ImageViewerModal visible={viewerStart !== null} images={viewerImages} initialIndex={viewerStart || 0} onClose={() => setViewerStart(null)} />
+          </View>
+        )}
         {primary && (
           <View style={detailStyles.section}>
             <Text style={detailStyles.sectionTitle}>Posted By</Text>
@@ -4178,6 +4223,7 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
               <View style={{ flex: 1 }}>
                 <Text style={detailStyles.posterName}>{primary.name}{primary.is_me ? " (You)" : ""}</Text>
                 {primary.company ? <Text style={detailStyles.posterCompany}>{primary.company}</Text> : null}
+                {contactName ? <Text style={{ fontSize: 11, color: COLORS.primary, fontFamily: "Inter_500Medium", marginTop: 2 }}>Saved as "{contactName}"</Text> : null}
               </View>
               {!isMine && primary.phone && <TouchableOpacity style={styles.callBtn} onPress={callPoster}><Ionicons name="call" size={16} color={COLORS.surface} /><Text style={styles.callBtnText}>Call</Text></TouchableOpacity>}
             </View>
@@ -4942,9 +4988,21 @@ function PtlGroupCard({ group, profile, onPress, contactsMap }: { group: PtlGrou
       {/* LINE 1: Route — origin / destination stacked, same layout as Find Truck card */}
       <View style={[styles.cardRouteRow, { paddingRight: 110 }]}>
         <View style={styles.flex1}>
-          <RouteEndpointBlock iconName="location" iconColor={COLORS.secondary} locality={group.origin_display || ""} city="" state="" pincode="" />
+          <RouteEndpointBlock
+            iconName="location" iconColor={COLORS.secondary}
+            locality={member?.origin_locality || group.origin_display || ""}
+            city={member?.origin_city || ""}
+            state=""
+            pincode={member?.origin_pincode || ""}
+          />
           <View style={{ height: 8 }} />
-          <RouteEndpointBlock iconName="flag" iconColor={COLORS.primary} locality={group.destination_display || ""} city="" state="" pincode="" />
+          <RouteEndpointBlock
+            iconName="flag" iconColor={COLORS.primary}
+            locality={member?.destination_locality || group.destination_display || ""}
+            city={member?.destination_city || ""}
+            state=""
+            pincode={member?.destination_pincode || ""}
+          />
         </View>
       </View>
 
@@ -6311,12 +6369,21 @@ function MyPtlLoadsList({ profile }: { profile: Profile }) {
         company: item.poster_company,
         origin_locality: item.origin_locality,
         origin_city: item.origin_city,
+        origin_pincode: item.origin_pincode,
         destination_locality: item.destination_locality,
         destination_city: item.destination_city,
+        destination_pincode: item.destination_pincode,
         weight_kg: item.weight_kg,
         cargo_type: item.cargo_type,
         cargo_category: item.cargo_category,
         is_me: true,
+        truck_type: item.truck_type,
+        loading_date: item.loading_date,
+        dimension_length: item.dimension_length,
+        dimension_breadth: item.dimension_breadth,
+        dimension_height: item.dimension_height,
+        cargo_placement: item.cargo_placement,
+        images: item.images,
       }],
     };
   };
