@@ -465,6 +465,7 @@ useEffect(() => {
     return (
       <ProfileSetup
         onSave={async (p) => { await saveProfile({ ...p, phone: profile.phone }); setShowEditProfile(false); }}
+        onBack={() => setShowEditProfile(false)}
         lockedPhone={profile.phone}
         initialName={profile.name}
         initialCompany={profile.company}
@@ -562,8 +563,8 @@ useEffect(() => {
           <Text style={[styles.bottomNavLabel, !!postFlow && styles.bottomNavLabelActive]}>Post</Text>
         </View>
         <BottomNavBtn
-          icon="storefront-outline"
-          label="Marketplace"
+          icon="search-outline"
+          label="Find"
           active={!postFlow && tab === "market"}
           onPress={() => { setPostFlow(null); setTab("market"); }}
           testID="bottom-nav-market"
@@ -632,12 +633,13 @@ function TabButton({ label, icon, active, onPress, testID }: any) {
 }
 
 // ============== Profile Setup ==============
-function ProfileSetup({ onSave, lockedPhone, initialName, initialCompany, isEditing }: {
+function ProfileSetup({ onSave, lockedPhone, initialName, initialCompany, isEditing, onBack }: {
   onSave: (p: Profile) => void;
   lockedPhone?: string;
   initialName?: string;
   initialCompany?: string;
   isEditing?: boolean;
+  onBack?: () => void;
 }) {
   const [name, setName] = useState(initialName || "");
   const [phone, setPhone] = useState(lockedPhone || "");
@@ -654,6 +656,11 @@ function ProfileSetup({ onSave, lockedPhone, initialName, initialCompany, isEdit
     <SafeAreaView style={[styles.fill, { backgroundColor: COLORS.bg }]}>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.fill}>
         <ScrollView contentContainerStyle={styles.profileWrap} keyboardShouldPersistTaps="handled">
+          {isEditing && onBack ? (
+            <TouchableOpacity testID="edit-profile-back-btn" onPress={onBack} style={{ alignSelf: "flex-start", marginBottom: 8 }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Ionicons name="arrow-back" size={24} color={COLORS.text} />
+            </TouchableOpacity>
+          ) : null}
           <Text style={styles.profileTitle}>{isEditing ? "Edit Profile" : "Welcome to Truck Traffic"}</Text>
           <Text style={styles.profileSubtitle}>{isEditing ? "Update your name or company details" : "Set up your profile to start posting and finding loads"}</Text>
           <View style={{ height: 24 }} />
@@ -1777,6 +1784,7 @@ function VerificationDocsScreen({ phone, alreadySubmitted, onClose }: {
 // ============== Profile Screen ==============
 function ProfileScreen({ profile, onClose, onEdit }: { profile: Profile; onClose: () => void; onEdit: () => void }) {
   const [myLoads, setMyLoads] = useState<Load[]>([]);
+  const [myPtlLoads, setMyPtlLoads] = useState<PtlLoad[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [editLoad, setEditLoad] = useState<Load | null>(null);
@@ -1796,9 +1804,13 @@ const handleInvite = async () => {
       const r = await fetch(`${API}/loads`);
       const j: Load[] = await r.json();
       setMyLoads(j.filter((l) => l.poster_phone === profile.phone));
-    } catch {} finally {
-      setLoading(false); setRefreshing(false);
-    }
+    } catch {}
+    try {
+      const pr = await fetch(`${API}/ptl/loads/my/${encodeURIComponent(profile.phone)}`);
+      const pj = await pr.json();
+      setMyPtlLoads(Array.isArray(pj) ? pj.filter((l: PtlLoad) => l.status !== "CANCELLED") : []);
+    } catch {}
+    setLoading(false); setRefreshing(false);
   }, [profile.phone]);
 
   useEffect(() => { fetchMy(); }, [fetchMy]);
@@ -1867,8 +1879,14 @@ const handleInvite = async () => {
           )}
         </View>
         <View style={styles.statsRow}>
-          <View style={styles.statBox}><Text style={styles.statValue} testID="my-loads-count">{myLoads.length}</Text><Text style={styles.statLabel}>Loads Posted</Text></View>
-          <View style={styles.statBox}><Text style={styles.statValue}>{myLoads.reduce((s, l) => s + (l.weight_tons || 0), 0).toFixed(1)} T</Text><Text style={styles.statLabel}>Total Weight</Text></View>
+          <View style={[styles.statBox, profileStyles.statBoxOutline, { borderColor: COLORS.primary }]}>
+            <Text style={[styles.statValue, { color: COLORS.primary }]} testID="my-loads-count">{myLoads.length}</Text>
+            <Text style={styles.statLabel}>Truck Space Posted</Text>
+          </View>
+          <View style={[styles.statBox, profileStyles.statBoxOutline, { borderColor: COLORS.secondary }]}>
+            <Text style={[styles.statValue, { color: COLORS.secondary }]} testID="my-ptl-count">{myPtlLoads.length}</Text>
+            <Text style={styles.statLabel}>Adjustment Loads Posted</Text>
+          </View>
         </View>
         {loading ? <ActivityIndicator color={COLORS.primary} style={{ marginTop: 24 }} /> : null}
       </ScrollView>
@@ -1892,6 +1910,7 @@ const handleInvite = async () => {
 }
 
 const profileStyles = StyleSheet.create({
+  statBoxOutline: { marginHorizontal: 6, borderWidth: 1.5, borderRadius: 12, paddingVertical: 10 },
   actionRow: { flexDirection: "row", gap: 10, marginTop: -6, marginBottom: 14, paddingHorizontal: 2 },
   editBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 10, borderRadius: 12, borderWidth: 1.5, borderColor: COLORS.primary, backgroundColor: "#EEF2FA" },
   editBtnText: { color: COLORS.primary, fontFamily: "Inter_700Bold", fontWeight: "700", fontSize: 13 },
@@ -4306,6 +4325,7 @@ function PosterProfileModal({ visible, load, contactName, contactsMap, viewerPho
   onClose: () => void;
 }) {
   const [posterLoads, setPosterLoads] = useState<Load[]>([]);
+  const [posterPtlLoads, setPosterPtlLoads] = useState<PtlLoad[]>([]);
   const [loading, setLoading] = useState(true);
   const [mutualContacts, setMutualContacts] = useState<string[]>([]);
   const [showMutuals, setShowMutuals] = useState(false);
@@ -4319,6 +4339,7 @@ function PosterProfileModal({ visible, load, contactName, contactsMap, viewerPho
     if (!visible) return;
     setLoading(true);
     setPosterLoads([]);
+    setPosterPtlLoads([]);
     setMutualContacts([]);
     setShowMutuals(false);
     (async () => {
@@ -4328,6 +4349,12 @@ function PosterProfileModal({ visible, load, contactName, contactsMap, viewerPho
         const all: Load[] = await loadsRes.json();
         const posterPosts = all.filter(l => l.poster_phone === load.poster_phone);
         setPosterLoads(posterPosts);
+
+        try {
+          const ptlRes = await fetch(`${API}/ptl/loads/my/${encodeURIComponent(load.poster_phone)}`);
+          const ptlAll = await ptlRes.json();
+          setPosterPtlLoads(Array.isArray(ptlAll) ? ptlAll.filter((l: PtlLoad) => l.status !== "CANCELLED") : []);
+        } catch {}
 
         // Mutual contacts: fetch on demand when profile is opened
         let mutualPhones: string[] = [];
@@ -4452,20 +4479,20 @@ function PosterProfileModal({ visible, load, contactName, contactsMap, viewerPho
 
           {/* Stats */}
           <View style={styles.statsRow}>
-            <View style={styles.statBox}>
-              <Text style={styles.statValue}>{posterLoads.length}</Text>
-              <Text style={styles.statLabel}>Loads Posted</Text>
+            <View style={[styles.statBox, profileStyles.statBoxOutline, { borderColor: COLORS.primary }]}>
+              <Text style={[styles.statValue, { color: COLORS.primary }]}>{posterLoads.length}</Text>
+              <Text style={styles.statLabel}>Truck Space Posted</Text>
             </View>
-            <View style={styles.statBox}>
-              <Text style={styles.statValue}>{posterLoads.reduce((s, l) => s + (l.weight_tons || 0), 0).toFixed(1)} T</Text>
-              <Text style={styles.statLabel}>Total Weight</Text>
+            <View style={[styles.statBox, profileStyles.statBoxOutline, { borderColor: COLORS.secondary }]}>
+              <Text style={[styles.statValue, { color: COLORS.secondary }]}>{posterPtlLoads.length}</Text>
+              <Text style={styles.statLabel}>Adjustment Loads Posted</Text>
             </View>
           </View>
 
           {/* Action buttons removed per UX feedback */}
 
-          {/* Recent loads */}
-          <Text style={styles.sectionHeading}>Posted Loads</Text>
+          {/* Truck space postings */}
+          <Text style={styles.sectionHeading}>Truck Space Postings</Text>
           {loading ? (
             <ActivityIndicator color={COLORS.primary} style={{ marginTop: 24 }} />
           ) : posterLoads.length === 0 ? (
@@ -4475,6 +4502,22 @@ function PosterProfileModal({ visible, load, contactName, contactsMap, viewerPho
             </View>
           ) : (
             posterLoads.map(l => <LoadCard key={l.id} load={l} isMine={false} contactName={contactName} />)
+          )}
+
+          {/* Adjustment (partial load) postings */}
+          {!loading && posterPtlLoads.length > 0 && (
+            <>
+              <Text style={[styles.sectionHeading, { marginTop: 8 }]}>Adjustment Postings</Text>
+              {posterPtlLoads.map(item => (
+                <PtlGroupCard
+                  key={item.id}
+                  group={ptlLoadToGroup(item, load.poster_name)}
+                  profile={{ name: "", phone: viewerPhone || "", company: "" }}
+                  contactsMap={contactsMap}
+                  onPress={() => {}}
+                />
+              ))}
+            </>
           )}
         </ScrollView>
       </SafeAreaView>
@@ -4879,6 +4922,8 @@ function PtlGroupCard({ group, profile, onPress, contactsMap }: { group: PtlGrou
     catch { return group.created_at; }
   }, [group.created_at]);
 
+  const cargoLabel = (member?.cargo_type || (group.cargo_categories || []).join(", ") || "").replace(/^Others:\s*/, "");
+
   // Adapter: PosterProfileModal expects a `Load`-shaped object. PTL members
   // aren't truck-space loads, so we build a minimal stand-in carrying only
   // the fields the modal actually reads (poster name/phone/company); the
@@ -4925,7 +4970,7 @@ function PtlGroupCard({ group, profile, onPress, contactsMap }: { group: PtlGrou
 
       <View style={styles.divider} />
 
-      {/* LINE 2: Loading date · Weight posted — only these two, matching Find Truck card's meta line */}
+      {/* LINE 2: Loading date · Weight posted · Cargo type — matching Find Truck card's meta line */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={cardStyles.metaScrollContent}>
         <View style={cardStyles.metaChip}>
           <Ionicons name="calendar-outline" size={12} color={COLORS.textMuted} />
@@ -4935,6 +4980,12 @@ function PtlGroupCard({ group, profile, onPress, contactsMap }: { group: PtlGrou
           <Ionicons name="barbell-outline" size={12} color={COLORS.textMuted} />
           <Text style={cardStyles.metaText}>{((group.total_weight_kg || 0) / 1000).toFixed(1)}T posted</Text>
         </View>
+        {cargoLabel ? (
+          <View style={cardStyles.metaChip}>
+            <Ionicons name="cube-outline" size={12} color={COLORS.textMuted} />
+            <Text style={cardStyles.metaText}>{cargoLabel}</Text>
+          </View>
+        ) : null}
       </ScrollView>
 
       <View style={styles.divider} />
@@ -4957,18 +5008,12 @@ function PtlGroupCard({ group, profile, onPress, contactsMap }: { group: PtlGrou
               ) : null}
             </View>
             {member.company ? <Text style={styles.posterCompany} numberOfLines={1}>{member.company}</Text> : null}
-            {member.phone ? <Text style={styles.posterPhone}>+91 {member.phone}</Text> : null}
           </View>
           {!isMine && member.phone ? (
             <TouchableOpacity testID={`ptl-call-btn-${group.id}`} style={[styles.callBtn, { alignSelf: "center" }]} onPress={() => Linking.openURL(`tel:${member.phone}`).catch(() => {})}>
               <Ionicons name="call" size={16} color={COLORS.surface} />
               <Text style={styles.callBtnText}>Call</Text>
             </TouchableOpacity>
-          ) : isMine ? (
-            <View style={[styles.callBtn, { alignSelf: "center", backgroundColor: COLORS.success }]}>
-              <Ionicons name="checkmark-circle" size={16} color={COLORS.surface} />
-              <Text style={styles.callBtnText}>Your Post</Text>
-            </View>
           ) : null}
         </View>
       )}
@@ -6222,6 +6267,48 @@ function PostPtlLoadScreen({ profile, onNotificationsRead }: { profile: Profile;
 
 
 // ============== My Partial Loads list (used inside ProfileScreen) ==============
+// Build a PtlGroup-shaped object from a single raw PtlLoad so it can be
+// rendered with the same PtlGroupCard used everywhere else in the app
+// (Marketplace, My Posts, and poster profile screens).
+function ptlLoadToGroup(item: PtlLoad, posterName: string): PtlGroup {
+  return {
+    id: item.id,
+    corridor: "",
+    origin_display: item.origin_locality || item.origin_city || "",
+    destination_display: item.destination_locality || item.destination_city || "",
+    load_ids: [item.id],
+    total_weight_kg: item.weight_kg,
+    capacity_kg: TRUCK_CAPACITY_KG,
+    capacity_remaining_kg: TRUCK_CAPACITY_KG - item.weight_kg,
+    fill_pct: 0,
+    cargo_categories: item.cargo_category ? [item.cargo_category] : [],
+    status: "FORMING",
+    created_at: item.posted_at,
+    members: [{
+      load_id: item.id,
+      phone: item.poster_phone,
+      name: posterName,
+      company: item.poster_company,
+      origin_locality: item.origin_locality,
+      origin_city: item.origin_city,
+      origin_pincode: item.origin_pincode,
+      destination_locality: item.destination_locality,
+      destination_city: item.destination_city,
+      destination_pincode: item.destination_pincode,
+      weight_kg: item.weight_kg,
+      cargo_type: item.cargo_type,
+      cargo_category: item.cargo_category,
+      truck_type: item.truck_type,
+      loading_date: item.loading_date,
+      dimension_length: item.dimension_length,
+      dimension_breadth: item.dimension_breadth,
+      dimension_height: item.dimension_height,
+      cargo_placement: item.cargo_placement,
+      images: item.images,
+    }],
+  };
+}
+
 function MyPtlLoadsList({ profile }: { profile: Profile }) {
   const [loads, setLoads] = useState<PtlLoad[]>([]);
   const [loading, setLoading] = useState(true);
