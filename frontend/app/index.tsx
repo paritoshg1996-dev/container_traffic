@@ -319,7 +319,8 @@ export default function Index() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [phoneVerified, setPhoneVerified] = useState<PhoneVerified | null>(null);
   const [loaded, setLoaded] = useState(false);
-  const [tab, setTab] = useState<"post" | "market" | "myPtl">("post");
+  const [tab, setTab] = useState<"myPosts" | "market">("market");
+  const [postFlow, setPostFlow] = useState<null | "selection" | "truckSpace" | "adjustment">(null);
   const [showProfile, setShowProfile] = useState(false);
   const [showEditProfile, setShowEditProfile] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -483,30 +484,81 @@ useEffect(() => {
             <Text style={styles.headerSubtitle} numberOfLines={1}>Hi, {profile.name.split(" ")[0]}</Text>
           </View>
         </View>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-          <TouchableOpacity testID="main-invite-btn" onPress={async () => {
-            const msg = `🚛 *Join me on Truck Traffic!*\n\nFind truck space & post loads instantly across India.\n\n📲 Download the app or visit: https://www.trucktraffic.in\n\nLet\'s connect on the platform!`;
-            try { await Linking.openURL(`https://wa.me/?text=${encodeURIComponent(msg)}`); } catch {}
-          }} style={{ backgroundColor: "#E8F8EE", borderRadius: 8, paddingHorizontal: 8, paddingVertical: 5, flexDirection: "row", alignItems: "center", gap: 4 }}>
-            <Ionicons name="logo-whatsapp" size={16} color="#25D366" />
-            <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", fontWeight: "700", color: "#25D366" }}>Invite</Text>
-          </TouchableOpacity>
-          <TouchableOpacity testID="open-profile-btn" onPress={() => setShowProfile(true)} style={styles.iconBtn}>
-            <Ionicons name="person-circle-outline" size={28} color={COLORS.primary} />
-          </TouchableOpacity>
-        </View>
+        <TouchableOpacity testID="open-profile-btn" onPress={() => setShowProfile(true)} style={styles.iconBtn}>
+          <Ionicons name="person-circle-outline" size={28} color={COLORS.primary} />
+        </TouchableOpacity>
       </View>
 
       <View style={{ flex: 1 }}>
-        {tab === "post"   && <PostLoadScreen profile={profile} onPosted={() => setTab("market")} />}
-        {tab === "market" && <LoadMarketScreen profile={profile} />}
-        {tab === "myPtl"  && <PostPtlLoadScreen profile={profile} onNotificationsRead={() => setUnreadCount(0)} />}
+        {postFlow === "selection" && (
+          <PostSelectionScreen
+            onSelectTruckSpace={() => setPostFlow("truckSpace")}
+            onSelectAdjustment={() => setPostFlow("adjustment")}
+          />
+        )}
+        {postFlow === "truckSpace" && (
+          <View style={{ flex: 1 }}>
+            <TouchableOpacity
+              onPress={() => setPostFlow("selection")}
+              style={newStyles.changeTypeBtn}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="arrow-back" size={14} color={COLORS.primary} />
+              <Text style={newStyles.changeTypeBtnText}>Change posting type</Text>
+            </TouchableOpacity>
+            <PostLoadScreen
+              profile={profile}
+              onPosted={() => { setPostFlow(null); setTab("market"); }}
+            />
+          </View>
+        )}
+        {postFlow === "adjustment" && (
+          <View style={{ flex: 1 }}>
+            <TouchableOpacity
+              onPress={() => setPostFlow("selection")}
+              style={newStyles.changeTypeBtn}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="arrow-back" size={14} color={COLORS.primary} />
+              <Text style={newStyles.changeTypeBtnText}>Change posting type</Text>
+            </TouchableOpacity>
+            <PostPtlLoadScreen
+              profile={profile}
+              onNotificationsRead={() => setUnreadCount(0)}
+            />
+          </View>
+        )}
+        {!postFlow && tab === "market"  && <LoadMarketScreen profile={profile} />}
+        {!postFlow && tab === "myPosts" && <MyPostsScreen profile={profile} />}
       </View>
 
-      <View style={styles.bottomNav} testID="bottom-nav">
-        <BottomNavBtn icon="add-circle-outline" label="Post Space"  active={tab === "post"}   onPress={() => setTab("post")}   testID="bottom-nav-post" />
-        <BottomNavBtn icon="search-outline"     label="Marketplace" active={tab === "market"} onPress={() => setTab("market")} testID="bottom-nav-market" />
-        <BottomNavBtn icon="cube-outline"       label="My PTL"      active={tab === "myPtl"}  onPress={() => { setTab("myPtl"); fetchUnread(profile.phone); }} badge={unreadCount} testID="bottom-nav-postload" />
+      {/* ── New bottom nav with floating FAB ── */}
+      <View style={newStyles.bottomNavNew} testID="bottom-nav">
+        <BottomNavBtn
+          icon="clipboard-outline"
+          label="My Posts"
+          active={!postFlow && tab === "myPosts"}
+          onPress={() => { setPostFlow(null); setTab("myPosts"); }}
+          testID="bottom-nav-myposts"
+        />
+        <View style={newStyles.fabContainer}>
+          <TouchableOpacity
+            testID="bottom-nav-post"
+            onPress={() => setPostFlow("selection")}
+            style={newStyles.fabBtn}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="add" size={32} color={COLORS.surface} />
+          </TouchableOpacity>
+          <Text style={[styles.bottomNavLabel, !!postFlow && styles.bottomNavLabelActive]}>Post</Text>
+        </View>
+        <BottomNavBtn
+          icon="storefront-outline"
+          label="Marketplace"
+          active={!postFlow && tab === "market"}
+          onPress={() => { setPostFlow(null); setTab("market"); }}
+          testID="bottom-nav-market"
+        />
       </View>
     </SafeAreaView>
   );
@@ -533,14 +585,14 @@ function BottomNavBtn({ icon, label, active, onPress, testID, badge }: {
 }
 
 // Swipe-left/right between tabs
-function SwipeableTabs({ tab, setTab, children }: { tab: "post" | "market"; setTab: (t: "post" | "market") => void; children: React.ReactNode }) {
+function SwipeableTabs({ tab, setTab, children }: { tab: "myPosts" | "market"; setTab: (t: "myPosts" | "market") => void; children: React.ReactNode }) {
   const responder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => false,
       onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 24 && Math.abs(g.dy) < 24,
       onPanResponderRelease: (_, g) => {
         if (g.dx < -60) setTabRef.current("market");
-        else if (g.dx > 60) setTabRef.current("post");
+        else if (g.dx > 60) setTabRef.current("myPosts");
       },
     })
   ).current;
@@ -1780,7 +1832,7 @@ const handleInvite = async () => {
           <View style={styles.emptyWrap} testID="profile-empty">
             <Ionicons name="cube-outline" size={42} color={COLORS.textSubtle} />
             <Text style={styles.emptyTitle}>No truck spaces posted yet</Text>
-            <Text style={styles.emptySub}>Post your first truck space from the "Post Space" tab.</Text>
+            <Text style={styles.emptySub}>Post your first truck space from the Post button.</Text>
           </View>
         ) : null}
         ListFooterComponent={
@@ -3597,7 +3649,7 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
                 <View style={styles.emptyWrap} testID="ptl-empty-state">
                   <Ionicons name="cube-outline" size={48} color={COLORS.textSubtle} />
                   <Text style={styles.emptyTitle}>{ptlFilter ? "No matching groups found" : "No groups forming yet"}</Text>
-                  <Text style={styles.emptySub}>{ptlFilter ? "Try adjusting your filter or clear it to see all groups." : "Tap the My PTL tab to post a partial load."}</Text>
+                  <Text style={styles.emptySub}>{ptlFilter ? "Try adjusting your filter or clear it to see all groups." : "Tap Post → Adjustment to post a partial load."}</Text>
                 </View>
               )
             }
@@ -6357,7 +6409,317 @@ function MyPtlLoadsList({ profile }: { profile: Profile }) {
 }
 
 
-// ============== Styles ==============
+// ============== New nav / post-flow styles ==============
+const newStyles = StyleSheet.create({
+  bottomNavNew: {
+    flexDirection: "row",
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
+    backgroundColor: COLORS.surface,
+    paddingBottom: 8,
+    paddingTop: 4,
+    alignItems: "flex-end",
+  },
+  fabContainer: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "flex-end",
+    paddingBottom: 2,
+  },
+  fabBtn: {
+    width: 62,
+    height: 62,
+    borderRadius: 31,
+    backgroundColor: COLORS.primary,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 2,
+    marginTop: -22,
+    shadowColor: COLORS.primary,
+    shadowOpacity: 0.38,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 10,
+  },
+  changeTypeBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 16,
+    paddingVertical: 11,
+    backgroundColor: COLORS.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  changeTypeBtnText: {
+    color: COLORS.primary,
+    fontFamily: "Inter_600SemiBold",
+    fontWeight: "600",
+    fontSize: 13,
+  },
+  postTypeCard: {
+    borderRadius: 20,
+    marginBottom: 16,
+    overflow: "hidden",
+    shadowColor: "#000",
+    shadowOpacity: 0.07,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
+  },
+  postTypeCardInner: {
+    flexDirection: "row",
+    alignItems: "center",
+    minHeight: 148,
+    padding: 20,
+    gap: 14,
+  },
+  postTypeIconLeft: {
+    width: 68,
+    alignItems: "center",
+    justifyContent: "center",
+    opacity: 0.7,
+  },
+  postTypeIconBadge: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 8,
+  },
+  postTypeTitle: {
+    fontSize: 20,
+    fontFamily: "Inter_700Bold",
+    fontWeight: "700",
+    color: COLORS.text,
+    letterSpacing: -0.2,
+  },
+  postTypeDivider: {
+    width: 32,
+    height: 2.5,
+    borderRadius: 2,
+    marginVertical: 7,
+  },
+  postTypeDesc: {
+    fontSize: 13,
+    fontFamily: "Inter_400Regular",
+    color: COLORS.textMuted,
+    lineHeight: 19,
+  },
+  postTypeChevron: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+    marginLeft: 4,
+    alignSelf: "center",
+  },
+  myPostsSegmentWrap: {
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 10,
+    backgroundColor: COLORS.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+});
+
+// ============== Post Selection Screen ==============
+function PostSelectionScreen({
+  onSelectTruckSpace,
+  onSelectAdjustment,
+}: {
+  onSelectTruckSpace: () => void;
+  onSelectAdjustment: () => void;
+}) {
+  return (
+    <ScrollView
+      contentContainerStyle={{ padding: 20, paddingTop: 28 }}
+      testID="post-selection-screen"
+      showsVerticalScrollIndicator={false}
+    >
+      <Text style={{
+        fontSize: 26,
+        fontFamily: "Inter_700Bold",
+        fontWeight: "700",
+        color: COLORS.text,
+        marginBottom: 28,
+        lineHeight: 34,
+        letterSpacing: -0.3,
+      }}>
+        What would you like to post?
+      </Text>
+
+      {/* ── Truck Space Card ── */}
+      <TouchableOpacity
+        testID="select-truck-space"
+        activeOpacity={0.85}
+        onPress={onSelectTruckSpace}
+        style={newStyles.postTypeCard}
+      >
+        <View style={[newStyles.postTypeCardInner, { backgroundColor: "#EBF2FF" }]}>
+          <View style={newStyles.postTypeIconLeft}>
+            <Ionicons name="truck-outline" size={52} color="#A8C4F0" />
+          </View>
+          <View style={{ flex: 1 }}>
+            <View style={[newStyles.postTypeIconBadge, { backgroundColor: COLORS.primary }]}>
+              <Ionicons name="truck-outline" size={17} color={COLORS.surface} />
+            </View>
+            <Text style={newStyles.postTypeTitle}>Truck Space</Text>
+            <View style={[newStyles.postTypeDivider, { backgroundColor: COLORS.primary }]} />
+            <Text style={newStyles.postTypeDesc}>{"Truck already available.\nFill your empty capacity."}</Text>
+          </View>
+          <View style={[newStyles.postTypeChevron, { backgroundColor: COLORS.primary }]}>
+            <Ionicons name="chevron-forward" size={18} color={COLORS.surface} />
+          </View>
+        </View>
+      </TouchableOpacity>
+
+      {/* ── Adjustment Card ── */}
+      <TouchableOpacity
+        testID="select-adjustment"
+        activeOpacity={0.85}
+        onPress={onSelectAdjustment}
+        style={newStyles.postTypeCard}
+      >
+        <View style={[newStyles.postTypeCardInner, { backgroundColor: "#FFF3EB" }]}>
+          <View style={newStyles.postTypeIconLeft}>
+            <Ionicons name="cube-outline" size={52} color="#F4B87E" />
+          </View>
+          <View style={{ flex: 1 }}>
+            <View style={[newStyles.postTypeIconBadge, { backgroundColor: COLORS.secondary }]}>
+              <Ionicons name="cube-outline" size={17} color={COLORS.surface} />
+            </View>
+            <Text style={newStyles.postTypeTitle}>Adjustment</Text>
+            <View style={[newStyles.postTypeDivider, { backgroundColor: COLORS.secondary }]} />
+            <Text style={newStyles.postTypeDesc}>{"Post your load.\nWe'll find another load to make a full truck."}</Text>
+          </View>
+          <View style={[newStyles.postTypeChevron, { backgroundColor: COLORS.secondary }]}>
+            <Ionicons name="chevron-forward" size={18} color={COLORS.surface} />
+          </View>
+        </View>
+      </TouchableOpacity>
+    </ScrollView>
+  );
+}
+
+// ============== My Truck Space Postings List ==============
+function MyTruckSpacePostsList({ profile }: { profile: Profile }) {
+  const [myLoads, setMyLoads] = useState<Load[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [editLoad, setEditLoad] = useState<Load | null>(null);
+
+  const fetchMy = useCallback(async () => {
+    try {
+      const r = await fetch(`${API}/loads`);
+      const j: Load[] = await r.json();
+      setMyLoads(j.filter((l) => l.poster_phone === profile.phone));
+    } catch {} finally {
+      setLoading(false); setRefreshing(false);
+    }
+  }, [profile.phone]);
+
+  useEffect(() => { fetchMy(); }, [fetchMy]);
+
+  const deleteLoad = (load: Load) => {
+    Alert.alert("Delete Posting", "Are you sure you want to delete this posting? This cannot be undone.", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Delete", style: "destructive", onPress: async () => {
+        try {
+          await fetch(`${API}/loads/${load.id}`, { method: "DELETE" });
+          setMyLoads(prev => prev.filter(l => l.id !== load.id));
+        } catch { Alert.alert("Error", "Failed to delete. Please try again."); }
+      }},
+    ]);
+  };
+
+  return (
+    <>
+      <FlatList
+        testID="my-truck-space-list"
+        data={loading ? [] : myLoads}
+        keyExtractor={(it) => it.id}
+        contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchMy(); }} />}
+        ListHeaderComponent={loading ? <ActivityIndicator color={COLORS.primary} style={{ marginTop: 24 }} /> : null}
+        ListEmptyComponent={!loading ? (
+          <View style={styles.emptyWrap} testID="my-truck-space-empty">
+            <Ionicons name="truck-outline" size={42} color={COLORS.textSubtle} />
+            <Text style={styles.emptyTitle}>No truck spaces posted yet</Text>
+            <Text style={styles.emptySub}>Tap Post to add your first truck space.</Text>
+          </View>
+        ) : null}
+        renderItem={({ item }) => (
+          <View>
+            <LoadCard load={item} isMine={true} />
+            <View style={profileStyles.actionRow}>
+              <TouchableOpacity style={profileStyles.editBtn} onPress={() => setEditLoad(item)} testID={`edit-load-${item.id}`}>
+                <Ionicons name="create-outline" size={15} color={COLORS.primary} />
+                <Text style={profileStyles.editBtnText}>Edit</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={profileStyles.deleteBtn} onPress={() => deleteLoad(item)} testID={`delete-load-${item.id}`}>
+                <Ionicons name="trash-outline" size={15} color={COLORS.danger} />
+                <Text style={profileStyles.deleteBtnText}>Delete</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+      />
+      {editLoad && (
+        <EditLoadModal
+          load={editLoad}
+          visible={!!editLoad}
+          onClose={() => setEditLoad(null)}
+          onSaved={() => { setEditLoad(null); fetchMy(); }}
+        />
+      )}
+    </>
+  );
+}
+
+// ============== My Posts Screen (segmented: Truck Space | Adjustment) ==============
+function MyPostsScreen({ profile }: { profile: Profile }) {
+  const [activeTab, setActiveTab] = useState<"truckSpace" | "adjustment">("truckSpace");
+
+  return (
+    <View style={styles.fill}>
+      <View style={newStyles.myPostsSegmentWrap}>
+        <View style={styles.segment}>
+          <TouchableOpacity
+            style={[styles.segmentBtn, activeTab === "truckSpace" && styles.segmentBtnOn]}
+            onPress={() => setActiveTab("truckSpace")}
+            activeOpacity={0.8}
+          >
+            <Text style={[styles.segmentText, activeTab === "truckSpace" && styles.segmentTextOn]}>
+              Truck Space
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.segmentBtn, activeTab === "adjustment" && styles.segmentBtnOn]}
+            onPress={() => setActiveTab("adjustment")}
+            activeOpacity={0.8}
+          >
+            <Text style={[styles.segmentText, activeTab === "adjustment" && styles.segmentTextOn]}>
+              Adjustment
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+      {activeTab === "truckSpace" ? (
+        <MyTruckSpacePostsList profile={profile} />
+      ) : (
+        <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+          <MyPtlLoadsList profile={profile} />
+        </ScrollView>
+      )}
+    </View>
+  );
+}
+
+
 const styles = StyleSheet.create({
   fill: { flex: 1, backgroundColor: COLORS.bg },
   center: { alignItems: "center", justifyContent: "center" },
