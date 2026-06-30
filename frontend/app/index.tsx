@@ -3490,6 +3490,7 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
       if (f?.originCity) params.set("origin_city", f.originCity);
       if (f?.destCity) params.set("dest_city", f.destCity);
       if (f?.weightKg) params.set("weight_kg", String(f.weightKg));
+      params.set("viewer_phone", profile.phone);
       const qs = params.toString();
       const r = await fetch(`${API}/ptl/groups${qs ? "?" + qs : ""}`);
       const j = await r.json();
@@ -3500,7 +3501,7 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
       setPtlLoading(false);
       setPtlRefreshing(false);
     }
-  }, [ptlFilter]);
+  }, [ptlFilter, profile.phone]);
 
   const fetchLoads = useCallback(async () => {
     try { const r = await fetch(`${API}/loads`); const j = await r.json(); setAllLoads(j); }
@@ -4860,7 +4861,7 @@ function SectionTitle({ icon, title }: { icon: any; title: string }) {
 
 function PtlGroupCard({ group, profile, onPress, contactsMap }: { group: PtlGroup; profile: Profile; onPress: () => void; contactsMap?: Map<string, string> }) {
   const member = (group.members || [])[0];
-  const isMine = (group.members || []).some(m => m.phone === profile.phone);
+  const isMine = !!member?.is_me || (group.members || []).some(m => !!m.phone && m.phone === profile.phone);
   const [showPosterProfile, setShowPosterProfile] = useState(false);
 
   const shareOnWhatsApp = async () => {
