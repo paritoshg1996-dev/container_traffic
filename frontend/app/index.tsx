@@ -3556,7 +3556,7 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
       <View style={styles.modeToggleBar} testID="market-mode-toggle">
         <TouchableOpacity
           testID="market-mode-full"
-          style={[styles.modeToggleBtn, marketMode === "full" && styles.modeToggleBtnActive]}
+          style={[styles.modeToggleBtn, marketMode === "full" && [styles.modeToggleBtnActive, { backgroundColor: COLORS.primary }]]}
           onPress={() => setMarketMode("full")}
         >
           <Ionicons name="car-outline" size={14} color={marketMode === "full" ? COLORS.surface : COLORS.textMuted} />
@@ -3564,7 +3564,7 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
         </TouchableOpacity>
         <TouchableOpacity
           testID="market-mode-ptl"
-          style={[styles.modeToggleBtn, marketMode === "ptl" && styles.modeToggleBtnActive]}
+          style={[styles.modeToggleBtn, marketMode === "ptl" && [styles.modeToggleBtnActive, { backgroundColor: COLORS.secondary }]]}
           onPress={() => { setMarketMode("ptl"); fetchPtlGroups(); }}
         >
           <Ionicons name="cube-outline" size={14} color={marketMode === "ptl" ? COLORS.surface : COLORS.textMuted} />
@@ -3653,7 +3653,7 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
               )
             }
             renderItem={({ item }) => (
-              <PtlGroupCard group={item} profile={profile} onPress={() => { setSelectedGroup(item); setShowPtlDetail(true); }} />
+              <PtlGroupCard group={item} profile={profile} contactsMap={contactsMap} onPress={() => { setSelectedGroup(item); setShowPtlDetail(true); }} />
             )}
           />
         </>
@@ -3827,7 +3827,7 @@ function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhon
 
   return (
     <TouchableOpacity activeOpacity={0.92} onPress={() => setShowDetail(true)} testID={`load-card-${load.id}`}>
-    <View style={styles.card}>
+    <View style={[styles.card, marketCardStyles.truckCardOutline]}>
       {/* Share-to-WhatsApp button pinned to top-right of the card. The
           combined "share-social" icon + "Share to" label + WhatsApp logo makes
           it unambiguous that this *forwards* the load details to a WhatsApp
@@ -4896,35 +4896,42 @@ function SectionTitle({ icon, title }: { icon: any; title: string }) {
 // ============== PTL (Partial Truck Load) Components ==============
 // ==========================================================================
 
-function PtlGroupCard({ group, profile, onPress }: { group: PtlGroup; profile: Profile; onPress: () => void }) {
+function PtlGroupCard({ group, profile, onPress, contactsMap }: { group: PtlGroup; profile: Profile; onPress: () => void; contactsMap?: Map<string, string> }) {
   const member = (group.members || [])[0];
   const isMine = (group.members || []).some(m => m.phone === profile.phone);
-  const fillPct = group.fill_pct || 0;
-  const fillColor = fillPct >= 85 ? "#FF6B00" : fillPct >= 60 ? "#F59E0B" : "#22C55E";
+  const [showPosterProfile, setShowPosterProfile] = useState(false);
 
   const shareOnWhatsApp = async () => {
     const text =
-      `📦 *Partial Load Group - Truck Traffic*\n\n` +
+      `📦 *Partial Load Available - Truck Traffic*\n\n` +
       `📍 From: ${group.origin_display}\n📍 To: ${group.destination_display}\n\n` +
-      `⚖️ Space left: ${((group.capacity_remaining_kg || 0) / 1000).toFixed(1)} T\n` +
-      `📊 Group fill: ${fillPct.toFixed(0)}% of 20T truck\n` +
-      `👥 ${(group.load_ids || []).length} shipper(s) joined\n\n` +
+      `⚖️ Weight: ${((group.total_weight_kg || 0) / 1000).toFixed(1)} T\n\n` +
       `📲 Find partial loads on Truck Traffic\nhttps://www.trucktraffic.in`;
     try { await Linking.openURL(`https://wa.me/?text=${encodeURIComponent(text)}`); }
     catch { Alert.alert("Error", "WhatsApp could not be opened."); }
   };
 
-  const renderEndpoint = (iconName: any, iconColor: string, locality: string) => (
-    <View style={cardStyles.routeEndpoint}>
-      <Ionicons name={iconName} size={13} color={iconColor} style={{ marginTop: 3 }} />
-      <View style={{ flex: 1 }}>
-        <Text style={cardStyles.routeL1} numberOfLines={1} ellipsizeMode="tail">{locality}</Text>
-      </View>
-    </View>
-  );
+  const dateStr = useMemo(() => {
+    try { return new Date(group.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }); }
+    catch { return group.created_at; }
+  }, [group.created_at]);
+
+  // Adapter: PosterProfileModal expects a `Load`-shaped object. PTL members
+  // aren't truck-space loads, so we build a minimal stand-in carrying only
+  // the fields the modal actually reads (poster name/phone/company); the
+  // rest are harmless placeholders since the modal never touches them.
+  const posterAsLoad = member ? ({
+    id: group.id,
+    origin_pincode: "", origin_locality: group.origin_display, origin_city: "", origin_state: "",
+    destination_pincode: "", destination_locality: group.destination_display, destination_city: "", destination_state: "",
+    cargo_types: group.cargo_categories || [], cargo_placement: "", weight_tons: (group.total_weight_kg || 0) / 1000,
+    space_cuft: null, loading_date: group.created_at,
+    poster_name: member.name || "Shipper", poster_phone: member.phone || "", poster_company: member.company || "",
+    created_at: group.created_at,
+  } as unknown as Load) : null;
 
   return (
-    <TouchableOpacity testID={`ptl-group-card-${group.id}`} onPress={onPress} activeOpacity={0.92} style={styles.card}>
+    <TouchableOpacity testID={`ptl-group-card-${group.id}`} onPress={onPress} activeOpacity={0.92} style={[styles.card, marketCardStyles.cardOutline]}>
       {/* Share pill — top right, same position as LoadCard */}
       <TouchableOpacity style={cardStyles.shareTopPill} onPress={shareOnWhatsApp} activeOpacity={0.85} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
         <Ionicons name="share-social" size={13} color="#25D366" />
@@ -4932,77 +4939,89 @@ function PtlGroupCard({ group, profile, onPress }: { group: PtlGroup; profile: P
         <Ionicons name="logo-whatsapp" size={14} color="#25D366" />
       </TouchableOpacity>
 
-      {/* LINE 1: Route */}
+      {/* LINE 1: Route — origin / destination stacked, same layout as Find Truck card */}
       <View style={[styles.cardRouteRow, { paddingRight: 110 }]}>
-        {renderEndpoint("location", COLORS.secondary, group.origin_display)}
-        <View style={{ height: 8 }} />
-        {renderEndpoint("flag", COLORS.primary, group.destination_display)}
+        <View style={styles.flex1}>
+          <RouteEndpointBlock iconName="location" iconColor={COLORS.secondary} locality={group.origin_display || ""} city="" state="" pincode="" />
+          <View style={{ height: 8 }} />
+          <RouteEndpointBlock iconName="flag" iconColor={COLORS.primary} locality={group.destination_display || ""} city="" state="" pincode="" />
+        </View>
       </View>
 
       <View style={styles.divider} />
 
-      {/* LINE 2: Meta chips */}
+      {/* LINE 2: Loading date · Weight posted — only these two, matching Find Truck card's meta line */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={cardStyles.metaScrollContent}>
+        <View style={cardStyles.metaChip}>
+          <Ionicons name="calendar-outline" size={12} color={COLORS.textMuted} />
+          <Text style={cardStyles.metaText}>{dateStr}</Text>
+        </View>
         <View style={cardStyles.metaChip}>
           <Ionicons name="barbell-outline" size={12} color={COLORS.textMuted} />
           <Text style={cardStyles.metaText}>{((group.total_weight_kg || 0) / 1000).toFixed(1)}T posted</Text>
-        </View>
-        <View style={[cardStyles.metaChip, { backgroundColor: "#ECFDF5" }]}>
-          <Ionicons name="cube-outline" size={12} color={COLORS.success} />
-          <Text style={[cardStyles.metaText, { color: COLORS.success }]}>{((group.capacity_remaining_kg || 0) / 1000).toFixed(1)}T free</Text>
-        </View>
-        <View style={[cardStyles.metaChip, { backgroundColor: "#FEF9EC" }]}>
-          <Ionicons name="people-outline" size={12} color="#92400E" />
-          <Text style={[cardStyles.metaText, { color: "#92400E" }]}>{(group.load_ids || []).length} shipper{(group.load_ids || []).length !== 1 ? "s" : ""}</Text>
-        </View>
-        {(group.cargo_categories || []).map((cat, i) => (
-          <View key={i} style={[cardStyles.metaChip, { backgroundColor: "#F0F4FF" }]}>
-            <Text style={[cardStyles.metaText, { color: COLORS.primary }]}>{cat}</Text>
-          </View>
-        ))}
-        <View style={[cardStyles.metaChip, { gap: 6, minWidth: 90 }]}>
-          <View style={{ width: 56, height: 5, backgroundColor: "#F3F4F6", borderRadius: 100, overflow: "hidden" }}>
-            <View style={{ width: `${Math.min(fillPct, 100)}%`, height: "100%", backgroundColor: fillColor, borderRadius: 100 }} />
-          </View>
-          <Text style={[cardStyles.metaText, { color: fillColor }]}>{fillPct.toFixed(0)}%</Text>
         </View>
       </ScrollView>
 
       <View style={styles.divider} />
 
-      {/* LINE 3: Poster + call */}
+      {/* LINE 3: Poster (tappable → profile) + call, same as Find Truck card */}
       {member && (
         <View style={cardStyles.line3Row}>
           <View style={cardStyles.contactSection}>
-            <Text style={[styles.posterName, !isMine && { color: COLORS.primary }]} numberOfLines={1}>
-              {member.name || "Shipper"}{isMine ? <Text style={styles.youTag}> · You</Text> : ""}
-            </Text>
+            <View style={cardStyles.posterNameRow}>
+              <TouchableOpacity onPress={() => !isMine && member.phone && setShowPosterProfile(true)} activeOpacity={isMine ? 1 : 0.7}>
+                <Text style={[styles.posterName, !isMine && { color: COLORS.primary, textDecorationLine: "underline" }]} numberOfLines={1}>
+                  {member.name || "Shipper"}{isMine ? <Text style={styles.youTag}> · You</Text> : ""}
+                </Text>
+              </TouchableOpacity>
+              {!isMine && member.phone && contactsMap?.get(member.phone) ? (
+                <View style={cardStyles.savedBadge} testID={`ptl-contact-saved-${group.id}`}>
+                  <Ionicons name="person" size={10} color={COLORS.primary} />
+                  <Text style={cardStyles.savedBadgeText} numberOfLines={1}>{`Saved · ${contactsMap.get(member.phone)}`}</Text>
+                </View>
+              ) : null}
+            </View>
             {member.company ? <Text style={styles.posterCompany} numberOfLines={1}>{member.company}</Text> : null}
-            {member.origin_locality ? <Text style={styles.posterPhone}>{member.origin_locality}</Text> : null}
+            {member.phone ? <Text style={styles.posterPhone}>+91 {member.phone}</Text> : null}
           </View>
           {!isMine && member.phone ? (
-            <TouchableOpacity style={[styles.callBtn, { alignSelf: "center" }]} onPress={() => Linking.openURL(`tel:${member.phone}`).catch(() => {})}>
+            <TouchableOpacity testID={`ptl-call-btn-${group.id}`} style={[styles.callBtn, { alignSelf: "center" }]} onPress={() => Linking.openURL(`tel:${member.phone}`).catch(() => {})}>
               <Ionicons name="call" size={16} color={COLORS.surface} />
               <Text style={styles.callBtnText}>Call</Text>
             </TouchableOpacity>
           ) : isMine ? (
             <View style={[styles.callBtn, { alignSelf: "center", backgroundColor: COLORS.success }]}>
               <Ionicons name="checkmark-circle" size={16} color={COLORS.surface} />
-              <Text style={styles.callBtnText}>My Group</Text>
+              <Text style={styles.callBtnText}>Your Post</Text>
             </View>
           ) : null}
         </View>
+      )}
+
+      {posterAsLoad && showPosterProfile && !isMine && (
+        <PosterProfileModal
+          visible={showPosterProfile}
+          load={posterAsLoad}
+          viewerPhone={profile.phone}
+          onClose={() => setShowPosterProfile(false)}
+        />
       )}
     </TouchableOpacity>
   );
 }
 
-function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute }: {
+const marketCardStyles = StyleSheet.create({
+  cardOutline: { borderColor: COLORS.secondary, borderWidth: 1.5 },
+  truckCardOutline: { borderColor: COLORS.primary, borderWidth: 1.5 },
+});
+
+function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editLoad }: {
   visible: boolean;
   profile: Profile;
   onClose: () => void;
   onPosted: (resp: { load_id: string; group_id: string | null }) => void;
   prefillRoute?: { origin?: { locality: string; city: string; pincode: string; latitude?: number | null; longitude?: number | null }; dest?: { locality: string; city: string; pincode: string; latitude?: number | null; longitude?: number | null } };
+  editLoad?: PtlLoad | null;
 }) {
   const [originText, setOriginText] = useState("");
   const [originPin, setOriginPin] = useState("");
@@ -5016,7 +5035,33 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute }: {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (visible && prefillRoute) {
+    if (visible && editLoad) {
+      setOriginText(editLoad.origin_locality || editLoad.origin_city || "");
+      setOriginPin(editLoad.origin_pincode || "");
+      setOriginInfo({
+        locality: editLoad.origin_locality,
+        city: editLoad.origin_city,
+        pincode: editLoad.origin_pincode,
+        latitude: editLoad.origin_latitude,
+        longitude: editLoad.origin_longitude,
+      });
+      setDestText(editLoad.destination_locality || editLoad.destination_city || "");
+      setDestPin(editLoad.destination_pincode || "");
+      setDestInfo({
+        locality: editLoad.destination_locality,
+        city: editLoad.destination_city,
+        pincode: editLoad.destination_pincode,
+        latitude: editLoad.destination_latitude,
+        longitude: editLoad.destination_longitude,
+      });
+      setCargoType(editLoad.cargo_type || "Bags");
+      setCargoCategory(editLoad.cargo_category || "GENERAL");
+      setWeightKg(editLoad.weight_kg ? String(Math.round(editLoad.weight_kg)) : "");
+    }
+  }, [visible, editLoad]);
+
+  useEffect(() => {
+    if (visible && prefillRoute && !editLoad) {
       if (prefillRoute.origin) {
         setOriginText(prefillRoute.origin.locality || prefillRoute.origin.city || "");
         setOriginPin(prefillRoute.origin.pincode || "");
@@ -5086,6 +5131,11 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute }: {
 
     setBusy(true);
     try {
+      if (editLoad) {
+        try {
+          await fetch(`${API}/ptl/loads/${editLoad.id}?phone=${encodeURIComponent(profile.phone)}`, { method: "DELETE" });
+        } catch {}
+      }
       const res = await fetch(`${API}/ptl/loads`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -5118,7 +5168,7 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute }: {
         return;
       }
       Alert.alert(
-        "Load posted!",
+        editLoad ? "Posting updated!" : "Load posted!",
         data.group_id
           ? `You've been matched to group ${data.group_id}.`
           : "Starting a new group on this route.",
@@ -5137,7 +5187,7 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute }: {
       <View style={styles.ptlModalBackdrop}>
         <View style={styles.ptlModalSheet} testID="post-ptl-modal">
           <View style={styles.ptlModalHeader}>
-            <Text style={styles.ptlModalTitle}>Post partial load</Text>
+            <Text style={styles.ptlModalTitle}>{editLoad ? "Edit partial load" : "Post partial load"}</Text>
             <TouchableOpacity onPress={onClose} testID="post-ptl-close">
               <Ionicons name="close" size={26} color={COLORS.text} />
             </TouchableOpacity>
@@ -5201,8 +5251,8 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute }: {
             >
               {busy ? <ActivityIndicator color={COLORS.surface} /> : (
                 <>
-                  <Text style={styles.primaryBtnText}>Find me a group</Text>
-                  <Ionicons name="search" size={18} color={COLORS.surface} />
+                  <Text style={styles.primaryBtnText}>{editLoad ? "Save changes" : "Find me a group"}</Text>
+                  <Ionicons name={editLoad ? "checkmark" : "search"} size={18} color={COLORS.surface} />
                 </>
               )}
             </TouchableOpacity>
@@ -6201,7 +6251,9 @@ function MyPtlLoadsList({ profile }: { profile: Profile }) {
   const [loads, setLoads] = useState<PtlLoad[]>([]);
   const [loading, setLoading] = useState(true);
   const [groupCache, setGroupCache] = useState<Record<string, PtlGroup>>({});
-  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+  const [selectedGroup, setSelectedGroup] = useState<PtlGroup | null>(null);
+  const [showDetail, setShowDetail] = useState(false);
+  const [editLoad, setEditLoad] = useState<PtlLoad | null>(null);
 
   const fetchMyLoads = useCallback(async () => {
     try {
@@ -6232,21 +6284,58 @@ function MyPtlLoadsList({ profile }: { profile: Profile }) {
 
   useEffect(() => { fetchMyLoads(); }, [fetchMyLoads]);
 
-  const cancelLoad = (l: PtlLoad) => {
+  // Build a PtlGroup-shaped object for each of my loads so it can be
+  // rendered with the exact same card used in Marketplace → Find Partial Loads.
+  // Prefer the real fetched group (has all members/fill info); fall back to a
+  // single-member synthetic group when no group has formed yet.
+  const groupFor = (item: PtlLoad): PtlGroup => {
+    const real = item.group_id ? groupCache[item.group_id] : null;
+    if (real) return real;
+    return {
+      id: item.id,
+      corridor: "",
+      origin_display: item.origin_locality || item.origin_city || "",
+      destination_display: item.destination_locality || item.destination_city || "",
+      load_ids: [item.id],
+      total_weight_kg: item.weight_kg,
+      capacity_kg: TRUCK_CAPACITY_KG,
+      capacity_remaining_kg: TRUCK_CAPACITY_KG - item.weight_kg,
+      fill_pct: 0,
+      cargo_categories: item.cargo_category ? [item.cargo_category] : [],
+      status: "FORMING",
+      created_at: item.posted_at,
+      members: [{
+        load_id: item.id,
+        phone: profile.phone,
+        name: profile.name,
+        company: item.poster_company,
+        origin_locality: item.origin_locality,
+        origin_city: item.origin_city,
+        destination_locality: item.destination_locality,
+        destination_city: item.destination_city,
+        weight_kg: item.weight_kg,
+        cargo_type: item.cargo_type,
+        cargo_category: item.cargo_category,
+        is_me: true,
+      }],
+    };
+  };
+
+  const deleteLoad = (item: PtlLoad) => {
     Alert.alert(
-      "Cancel this load?",
-      "It will be removed from the group and other members will see the updated capacity.",
+      "Delete Posting",
+      "Are you sure you want to delete this posting? This cannot be undone.",
       [
-        { text: "Keep", style: "cancel" },
+        { text: "Cancel", style: "cancel" },
         {
-          text: "Cancel load",
+          text: "Delete",
           style: "destructive",
           onPress: async () => {
             try {
-              const r = await fetch(`${API}/ptl/loads/${l.id}?phone=${encodeURIComponent(profile.phone)}`, { method: "DELETE" });
+              const r = await fetch(`${API}/ptl/loads/${item.id}?phone=${encodeURIComponent(profile.phone)}`, { method: "DELETE" });
               if (!r.ok) {
                 const j = await r.json().catch(() => ({}));
-                return Alert.alert("Failed", j?.detail || "Could not cancel.");
+                return Alert.alert("Failed", j?.detail || "Could not delete.");
               }
               fetchMyLoads();
             } catch (e: any) {
@@ -6274,77 +6363,48 @@ function MyPtlLoadsList({ profile }: { profile: Profile }) {
   return (
     <View testID="myptl-list">
       {loads.map((item) => {
-        const g = item.group_id ? groupCache[item.group_id] : null;
-        const pill = (() => {
-          if (item.status === "OPEN") return { bg: "#FEF3C7", fg: "#92400E", text: "Searching for partner…", icon: "search-outline" };
-          if (item.status === "MATCHED") return { bg: "#DBEAFE", fg: "#1D4ED8", text: "Paired · View & call", icon: "people-outline" };
-          if (item.status === "CONFIRMED") return { bg: "#DCFCE7", fg: "#15803D", text: "Confirmed ✓", icon: "checkmark-circle-outline" };
-          return { bg: "#F3F4F6", fg: "#6B7280", text: "Cancelled", icon: "close-circle-outline" };
-        })();
-        const tappable = item.status === "MATCHED" || item.status === "CONFIRMED";
+        const g = groupFor(item);
+        const editable = item.status === "OPEN" || item.status === "MATCHED";
         return (
-          <View key={item.id} style={styles.ptlCard} testID={`myptl-card-${item.id}`}>
-            <RouteEndpointBlock
-              iconName="location" iconColor={COLORS.secondary}
-              locality={item.origin_locality || ""} city={item.origin_city || ""} state={""} pincode={item.origin_pincode || ""}
+          <View key={item.id}>
+            <PtlGroupCard
+              group={g}
+              profile={profile}
+              onPress={() => { setSelectedGroup(g); setShowDetail(true); }}
             />
-            <View style={{ height: 8 }} />
-            <RouteEndpointBlock
-              iconName="flag" iconColor={COLORS.primary}
-              locality={item.destination_locality || ""} city={item.destination_city || ""} state={""} pincode={item.destination_pincode || ""}
-            />
-            <View style={{ height: 10 }} />
-
-            <TouchableOpacity
-              disabled={!tappable}
-              onPress={() => item.group_id && setSelectedGroupId(item.group_id)}
-              style={[styles.ptlMyStatusPill, { backgroundColor: pill.bg }]}
-              testID={`myptl-status-${item.id}`}
-            >
-              <Ionicons name={pill.icon as any} size={14} color={pill.fg} />
-              <Text style={[styles.ptlMyStatusText, { color: pill.fg }]}>{pill.text}</Text>
-              {tappable && <Ionicons name="chevron-forward" size={14} color={pill.fg} />}
-            </TouchableOpacity>
-
-            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
-              <View style={styles.ptlChip}><Text style={styles.ptlChipText}>{item.cargo_type}</Text></View>
-              <View style={styles.ptlChip}><Text style={styles.ptlChipText}>{Math.round(item.weight_kg).toLocaleString()} kg</Text></View>
-              {item.cargo_category && item.cargo_category !== "GENERAL" && (
-                <View style={[styles.ptlChip, { backgroundColor: "#FEE2E2" }]}><Text style={[styles.ptlChipText, { color: "#B91C1C" }]}>{item.cargo_category}</Text></View>
-              )}
-            </View>
-
-            {g && (
-              <Text style={[styles.ptlMetaText, { marginTop: 10 }]} numberOfLines={1}>
-                {(() => {
-                  const partner = (g.members || []).find((m: PtlMember) => !m.is_me);
-                  if (!partner) return "Waiting for a partner…";
-                  return `Paired with ${partner.name || "co-loader"}${partner.company ? ` · ${partner.company}` : ""}`;
-                })()}
-              </Text>
-            )}
-
-            {(item.status === "OPEN" || item.status === "MATCHED") && (
-              <TouchableOpacity
-                testID={`myptl-cancel-${item.id}`}
-                style={styles.ptlCancelBtn}
-                onPress={() => cancelLoad(item)}
-              >
-                <Ionicons name="trash-outline" size={14} color={COLORS.danger} />
-                <Text style={styles.ptlCancelText}>Cancel load</Text>
-              </TouchableOpacity>
+            {editable && (
+              <View style={profileStyles.actionRow}>
+                <TouchableOpacity style={profileStyles.editBtn} onPress={() => setEditLoad(item)} testID={`edit-ptl-${item.id}`}>
+                  <Ionicons name="create-outline" size={15} color={COLORS.primary} />
+                  <Text style={profileStyles.editBtnText}>Edit</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={profileStyles.deleteBtn} onPress={() => deleteLoad(item)} testID={`delete-ptl-${item.id}`}>
+                  <Ionicons name="trash-outline" size={15} color={COLORS.danger} />
+                  <Text style={profileStyles.deleteBtnText}>Delete</Text>
+                </TouchableOpacity>
+              </View>
             )}
           </View>
         );
       })}
-      <PtlGroupDetailModal
-        visible={!!selectedGroupId}
-        groupId={selectedGroupId}
-        profile={profile}
-        onClose={() => setSelectedGroupId(null)}
-        onChanged={() => fetchMyLoads()}
-        onJoinNew={() => setSelectedGroupId(null)}
-      />
+      {selectedGroup && (
+        <ListingDetailModal
+          visible={showDetail}
+          ptlGroup={selectedGroup}
+          viewerPhone={profile.phone}
+          viewerName={profile.name}
+          onClose={() => { setShowDetail(false); setSelectedGroup(null); }}
+        />
+      )}
+      {editLoad && (
+        <PostPtlModal
+          visible={!!editLoad}
+          profile={profile}
+          editLoad={editLoad}
+          onClose={() => setEditLoad(null)}
+          onPosted={() => { setEditLoad(null); fetchMyLoads(); }}
+        />
+      )}
     </View>
   );
 }
