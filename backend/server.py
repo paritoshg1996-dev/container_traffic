@@ -1561,7 +1561,9 @@ async def cancel_ptl_load(load_id: str, phone: str):
 async def list_ptl_groups(
     origin_city: Optional[str] = None,
     dest_city: Optional[str] = None,
+    viewer_phone: Optional[str] = None,
 ):
+    viewer = _norm_phone(viewer_phone) if viewer_phone else ""
     # Marketplace only surfaces FORMING groups — those still looking for a
     # partner. PAIRED and CONFIRMED groups are private to their two members.
     query: dict = {"status": "FORMING"}
@@ -1576,13 +1578,12 @@ async def list_ptl_groups(
 
     out: List[dict] = []
     for g in groups:
-        # Attach lightweight member summaries (no phone numbers exposed here)
         load_ids = g.get("load_ids", [])
         members: List[dict] = []
         if load_ids:
             loads = await db.ptl_loads.find(
                 {"id": {"$in": load_ids}, "status": {"$ne": "CANCELLED"}},
-                {"_id": 0, "poster_name": 1, "poster_company": 1,
+                {"_id": 0, "poster_name": 1, "poster_company": 1, "poster_phone": 1,
                  "origin": 1, "destination": 1, "weight_kg": 1, "cargo_type": 1,
                  "cargo_category": 1, "status": 1, "truck_type": 1, "loading_date": 1,
                  "dimension_length": 1, "dimension_breadth": 1, "dimension_height": 1,
@@ -1591,6 +1592,7 @@ async def list_ptl_groups(
             for l in loads:
                 o = l.get("origin") or {}
                 d = l.get("destination") or {}
+                poster_phone = l.get("poster_phone", "")
                 members.append({
                     "name": l.get("poster_name", ""),
                     "company": l.get("poster_company", ""),
@@ -1611,6 +1613,8 @@ async def list_ptl_groups(
                     "dimension_height": l.get("dimension_height"),
                     "cargo_placement": l.get("cargo_placement", ""),
                     "images": l.get("images") or [],
+                    "phone": poster_phone,
+                    "is_me": (viewer and poster_phone == viewer) or False,
                 })
         g_out = _strip_group_internals(g)
         g_out["members"] = members
