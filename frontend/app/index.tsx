@@ -19,7 +19,7 @@ import {
   Dimensions,
   PanResponder,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { rs, rf } from "../theme/responsive";
 import DateTimePicker from "@react-native-community/datetimepicker";
@@ -467,22 +467,35 @@ useEffect(() => {
     );
   }
 
+  const insets = useSafeAreaInsets();
+
   return (
     <SafeAreaView style={styles.fill} edges={["top"]}>
       <View style={styles.header} testID="app-header">
         <View style={styles.headerLeft}>
-          <View style={{ flex: 1 }}>
-            <Text
-              style={styles.headerTitle}
-              numberOfLines={1}
-              adjustsFontSizeToFit
-              minimumFontScale={0.7}
-              allowFontScaling={false}
+          {(postFlow === "truckSpace" || postFlow === "adjustment") ? (
+            <TouchableOpacity
+              testID="post-flow-back-btn"
+              onPress={() => setPostFlow("selection")}
+              style={newStyles.headerBackBtn}
+              activeOpacity={0.7}
             >
-              Truck Traffic PTL
-            </Text>
-            <Text style={styles.headerSubtitle} numberOfLines={1}>Hi, {profile.name.split(" ")[0]}</Text>
-          </View>
+              <Ionicons name="arrow-back" size={24} color={COLORS.primary} />
+            </TouchableOpacity>
+          ) : (
+            <View style={{ flex: 1 }}>
+              <Text
+                style={styles.headerTitle}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.7}
+                allowFontScaling={false}
+              >
+                Truck Traffic PTL
+              </Text>
+              <Text style={styles.headerSubtitle} numberOfLines={1}>Hi, {profile.name.split(" ")[0]}</Text>
+            </View>
+          )}
         </View>
         <TouchableOpacity testID="open-profile-btn" onPress={() => setShowProfile(true)} style={styles.iconBtn}>
           <Ionicons name="person-circle-outline" size={28} color={COLORS.primary} />
@@ -497,43 +510,23 @@ useEffect(() => {
           />
         )}
         {postFlow === "truckSpace" && (
-          <View style={{ flex: 1 }}>
-            <TouchableOpacity
-              onPress={() => setPostFlow("selection")}
-              style={newStyles.changeTypeBtn}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="arrow-back" size={14} color={COLORS.primary} />
-              <Text style={newStyles.changeTypeBtnText}>Change posting type</Text>
-            </TouchableOpacity>
-            <PostLoadScreen
-              profile={profile}
-              onPosted={() => { setPostFlow(null); setTab("market"); }}
-            />
-          </View>
+          <PostLoadScreen
+            profile={profile}
+            onPosted={() => { setPostFlow(null); setTab("market"); }}
+          />
         )}
         {postFlow === "adjustment" && (
-          <View style={{ flex: 1 }}>
-            <TouchableOpacity
-              onPress={() => setPostFlow("selection")}
-              style={newStyles.changeTypeBtn}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="arrow-back" size={14} color={COLORS.primary} />
-              <Text style={newStyles.changeTypeBtnText}>Change posting type</Text>
-            </TouchableOpacity>
-            <PostPtlLoadScreen
-              profile={profile}
-              onNotificationsRead={() => setUnreadCount(0)}
-            />
-          </View>
+          <PostPtlLoadScreen
+            profile={profile}
+            onNotificationsRead={() => setUnreadCount(0)}
+          />
         )}
         {!postFlow && tab === "market"  && <LoadMarketScreen profile={profile} />}
         {!postFlow && tab === "myPosts" && <MyPostsScreen profile={profile} />}
       </View>
 
       {/* ── New bottom nav with floating FAB ── */}
-      <View style={newStyles.bottomNavNew} testID="bottom-nav">
+      <View style={[newStyles.bottomNavNew, { paddingBottom: Math.max(8, insets.bottom) }]} testID="bottom-nav">
         <BottomNavBtn
           icon="clipboard-outline"
           label="My Posts"
@@ -1785,78 +1778,44 @@ const handleInvite = async () => {
           </TouchableOpacity>
         </View>
       </View>
-      <FlatList
-        testID="my-loads-list"
-        data={loading ? [] : myLoads}
-        keyExtractor={(it) => it.id}
+      <ScrollView
+        testID="profile-scroll"
         contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchMy(); }} />}
-        ListHeaderComponent={
-          <>
-            <View style={styles.profileCard} testID="profile-card">
-              <View style={styles.avatarBig}><Text style={styles.avatarBigText}>{initials || "?"}</Text></View>
-              <Text style={styles.profileCardName} testID="profile-card-name">{profile.name}</Text>
-              {profile.company ? <Text style={styles.profileCardCompany} testID="profile-card-company">{profile.company}</Text> : null}
-              <View style={styles.profilePhoneRow}>
-                <Ionicons name="call-outline" size={14} color={COLORS.textMuted} />
-                <Text style={styles.profileCardPhone} testID="profile-card-phone">+91 {profile.phone}</Text>
-              </View>
-              {/* Verification badge / CTA */}
-              {profile.profile_verified ? (
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 10, backgroundColor: "#E6F9F0", borderRadius: 100, paddingVertical: 5, paddingHorizontal: 14, borderWidth: 1, borderColor: "#1A9E5A" }}>
-                  <Ionicons name="checkmark-circle" size={16} color="#1A9E5A" />
-                  <Text style={{ fontSize: 12, color: "#1A9E5A", fontFamily: "Inter_700Bold", fontWeight: "700" }}>Verified Transporter</Text>
-                </View>
-              ) : (
-                <TouchableOpacity
-                  style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 10, backgroundColor: "#FFF4EE", borderRadius: 100, paddingVertical: 5, paddingHorizontal: 14, borderWidth: 1, borderColor: COLORS.secondary }}
-                  onPress={() => setShowVerifyDocs(true)}
-                  activeOpacity={0.8}
-                >
-                  <Ionicons name="shield-checkmark-outline" size={16} color={COLORS.secondary} />
-                  <Text style={{ fontSize: 12, color: COLORS.secondary, fontFamily: "Inter_700Bold", fontWeight: "700" }}>
-                    {profile.verification_submitted ? "Verification Under Review" : "Get Verified →"}
-                  </Text>
-                </TouchableOpacity>
-              )}
-            </View>
-            <View style={styles.statsRow}>
-              <View style={styles.statBox}><Text style={styles.statValue} testID="my-loads-count">{myLoads.length}</Text><Text style={styles.statLabel}>Loads Posted</Text></View>
-              <View style={styles.statBox}><Text style={styles.statValue}>{myLoads.reduce((s, l) => s + (l.weight_tons || 0), 0).toFixed(1)} T</Text><Text style={styles.statLabel}>Total Weight</Text></View>
-            </View>
-            <Text style={styles.sectionHeading}>My Posted Truck Spaces</Text>
-            {loading ? <ActivityIndicator color={COLORS.primary} style={{ marginTop: 24 }} /> : null}
-          </>
-        }
-        ListEmptyComponent={!loading ? (
-          <View style={styles.emptyWrap} testID="profile-empty">
-            <Ionicons name="cube-outline" size={42} color={COLORS.textSubtle} />
-            <Text style={styles.emptyTitle}>No truck spaces posted yet</Text>
-            <Text style={styles.emptySub}>Post your first truck space from the Post button.</Text>
+      >
+        <View style={styles.profileCard} testID="profile-card">
+          <View style={styles.avatarBig}><Text style={styles.avatarBigText}>{initials || "?"}</Text></View>
+          <Text style={styles.profileCardName} testID="profile-card-name">{profile.name}</Text>
+          {profile.company ? <Text style={styles.profileCardCompany} testID="profile-card-company">{profile.company}</Text> : null}
+          <View style={styles.profilePhoneRow}>
+            <Ionicons name="call-outline" size={14} color={COLORS.textMuted} />
+            <Text style={styles.profileCardPhone} testID="profile-card-phone">+91 {profile.phone}</Text>
           </View>
-        ) : null}
-        ListFooterComponent={
-          <>
-            <Text style={[styles.sectionHeading, { marginTop: 24 }]}>My Posted Partial Loads</Text>
-            <MyPtlLoadsList profile={profile} />
-          </>
-        }
-        renderItem={({ item }) => (
-          <View>
-            <LoadCard load={item} isMine={true} />
-            <View style={profileStyles.actionRow}>
-              <TouchableOpacity style={profileStyles.editBtn} onPress={() => setEditLoad(item)} testID={`edit-load-${item.id}`}>
-                <Ionicons name="create-outline" size={15} color={COLORS.primary} />
-                <Text style={profileStyles.editBtnText}>Edit</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={profileStyles.deleteBtn} onPress={() => deleteLoad(item)} testID={`delete-load-${item.id}`}>
-                <Ionicons name="trash-outline" size={15} color={COLORS.danger} />
-                <Text style={profileStyles.deleteBtnText}>Delete</Text>
-              </TouchableOpacity>
+          {/* Verification badge / CTA */}
+          {profile.profile_verified ? (
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 10, backgroundColor: "#E6F9F0", borderRadius: 100, paddingVertical: 5, paddingHorizontal: 14, borderWidth: 1, borderColor: "#1A9E5A" }}>
+              <Ionicons name="checkmark-circle" size={16} color="#1A9E5A" />
+              <Text style={{ fontSize: 12, color: "#1A9E5A", fontFamily: "Inter_700Bold", fontWeight: "700" }}>Verified Transporter</Text>
             </View>
-          </View>
-        )}
-      />
+          ) : (
+            <TouchableOpacity
+              style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 10, backgroundColor: "#FFF4EE", borderRadius: 100, paddingVertical: 5, paddingHorizontal: 14, borderWidth: 1, borderColor: COLORS.secondary }}
+              onPress={() => setShowVerifyDocs(true)}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="shield-checkmark-outline" size={16} color={COLORS.secondary} />
+              <Text style={{ fontSize: 12, color: COLORS.secondary, fontFamily: "Inter_700Bold", fontWeight: "700" }}>
+                {profile.verification_submitted ? "Verification Under Review" : "Get Verified →"}
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
+        <View style={styles.statsRow}>
+          <View style={styles.statBox}><Text style={styles.statValue} testID="my-loads-count">{myLoads.length}</Text><Text style={styles.statLabel}>Loads Posted</Text></View>
+          <View style={styles.statBox}><Text style={styles.statValue}>{myLoads.reduce((s, l) => s + (l.weight_tons || 0), 0).toFixed(1)} T</Text><Text style={styles.statLabel}>Total Weight</Text></View>
+        </View>
+        {loading ? <ActivityIndicator color={COLORS.primary} style={{ marginTop: 24 }} /> : null}
+      </ScrollView>
       {showVerifyDocs && (
         <VerificationDocsScreen
           phone={profile.phone}
@@ -6441,21 +6400,12 @@ const newStyles = StyleSheet.create({
     shadowOffset: { width: 0, height: 5 },
     elevation: 10,
   },
-  changeTypeBtn: {
-    flexDirection: "row",
+  headerBackBtn: {
+    width: 38,
+    height: 38,
     alignItems: "center",
-    gap: 6,
-    paddingHorizontal: 16,
-    paddingVertical: 11,
-    backgroundColor: COLORS.surface,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
-  },
-  changeTypeBtnText: {
-    color: COLORS.primary,
-    fontFamily: "Inter_600SemiBold",
-    fontWeight: "600",
-    fontSize: 13,
+    justifyContent: "center",
+    marginLeft: -6,
   },
   postTypeCard: {
     borderRadius: 20,
