@@ -1916,6 +1916,10 @@ const profileStyles = StyleSheet.create({
   editBtnText: { color: COLORS.primary, fontFamily: "Inter_700Bold", fontWeight: "700", fontSize: 13 },
   deleteBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 10, borderRadius: 12, borderWidth: 1.5, borderColor: COLORS.danger, backgroundColor: "#FDF1F1" },
   deleteBtnText: { color: COLORS.danger, fontFamily: "Inter_700Bold", fontWeight: "700", fontSize: 13 },
+  bidsBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 11, borderRadius: 12, backgroundColor: COLORS.secondary, marginTop: -6, marginBottom: 10, paddingHorizontal: 14, alignSelf: "stretch" },
+  bidsBtnText: { color: COLORS.surface, fontFamily: "Inter_700Bold", fontWeight: "700", fontSize: 13, letterSpacing: 0.2 },
+  bidsCountPill: { backgroundColor: "rgba(255,255,255,0.25)", paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999, minWidth: 24, alignItems: "center" },
+  bidsCountText: { color: COLORS.surface, fontFamily: "Inter_700Bold", fontWeight: "700", fontSize: 12 },
 });
 
 // ============== Post Load ==============
@@ -3969,6 +3973,408 @@ function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhon
 }
 
 
+// ============== Bid types ==============
+type Bid = {
+  id: string;
+  listing_id: string;
+  listing_type: "load" | "ptl";
+  poster_phone: string;
+  bidder_phone: string;
+  bidder_name: string;
+  bidder_company?: string;
+  origin_locality: string;
+  origin_city: string;
+  origin_pincode: string;
+  origin_latitude?: number | null;
+  origin_longitude?: number | null;
+  destination_locality: string;
+  destination_city: string;
+  destination_pincode: string;
+  destination_latitude?: number | null;
+  destination_longitude?: number | null;
+  weight_tons: number;
+  cargo_type: string;
+  origin_deviation_km?: number | null;
+  destination_deviation_km?: number | null;
+  created_at: string;
+  updated_at: string;
+};
+
+const BID_CARGO_TYPES = ["Bags", "Carton Box", "Pipes", "Drums", "Fresh Produce", "Others"];
+
+// ============== BidFormModal ==============
+// Small bottom-sheet form that lets a non-poster offer a bid on a listing.
+// Captures origin/destination/weight/cargo_type. Deviation from the listing's
+// origin/destination is computed server-side from pincode → lat/lon lookup.
+function BidFormModal({
+  visible, listingId, listingType, viewerPhone, existingBid, onClose, onSubmitted,
+}: {
+  visible: boolean;
+  listingId: string;
+  listingType: "load" | "ptl";
+  viewerPhone: string;
+  existingBid: Bid | null;
+  onClose: () => void;
+  onSubmitted: () => void;
+}) {
+  const [originPin, setOriginPin] = useState("");
+  const [originCity, setOriginCity] = useState("");
+  const [originLocality, setOriginLocality] = useState("");
+  const [destPin, setDestPin] = useState("");
+  const [destCity, setDestCity] = useState("");
+  const [destLocality, setDestLocality] = useState("");
+  const [weight, setWeight] = useState("");
+  const [cargoType, setCargoType] = useState("Bags");
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (!visible) return;
+    if (existingBid) {
+      setOriginPin(existingBid.origin_pincode || "");
+      setOriginCity(existingBid.origin_city || "");
+      setOriginLocality(existingBid.origin_locality || "");
+      setDestPin(existingBid.destination_pincode || "");
+      setDestCity(existingBid.destination_city || "");
+      setDestLocality(existingBid.destination_locality || "");
+      setWeight(existingBid.weight_tons ? String(existingBid.weight_tons) : "");
+      setCargoType(existingBid.cargo_type || "Bags");
+    } else {
+      setOriginPin(""); setOriginCity(""); setOriginLocality("");
+      setDestPin(""); setDestCity(""); setDestLocality("");
+      setWeight(""); setCargoType("Bags");
+    }
+  }, [visible, existingBid]);
+
+  // Resolve city/locality from pincode (best-effort, doesn't block submit)
+  const lookupPin = async (pin: string, side: "o" | "d") => {
+    if (!/^\d{6}$/.test(pin)) return;
+    try {
+      const r = await fetch(`${API}/pincode/${pin}`);
+      const j = await r.json();
+      if (j.valid) {
+        if (side === "o") { setOriginCity(j.city || ""); setOriginLocality(j.locality || ""); }
+        else { setDestCity(j.city || ""); setDestLocality(j.locality || ""); }
+      }
+    } catch {}
+  };
+
+  const submit = async () => {
+    if (!/^\d{6}$/.test(originPin)) return Alert.alert("Origin pincode", "Enter a valid 6-digit origin pincode");
+    if (!/^\d{6}$/.test(destPin)) return Alert.alert("Destination pincode", "Enter a valid 6-digit destination pincode");
+    const w = parseFloat(weight);
+    if (!w || w <= 0) return Alert.alert("Weight", "Enter a valid weight in tons");
+    if (!cargoType) return Alert.alert("Cargo type", "Select a cargo type");
+    setSubmitting(true);
+    try {
+      // Best-effort geocode for both endpoints to compute deviation server-side
+      const [og, dg] = await Promise.all([
+        fetch(`${API}/geocode/${originPin}`).then(r => r.json()).catch(() => null),
+        fetch(`${API}/geocode/${destPin}`).then(r => r.json()).catch(() => null),
+      ]);
+      const body = {
+        listing_id: listingId,
+        listing_type: listingType,
+        bidder_phone: viewerPhone,
+        origin_pincode: originPin,
+        origin_city: originCity,
+        origin_locality: originLocality,
+        origin_latitude: og?.found ? og.lat : null,
+        origin_longitude: og?.found ? og.lon : null,
+        destination_pincode: destPin,
+        destination_city: destCity,
+        destination_locality: destLocality,
+        destination_latitude: dg?.found ? dg.lat : null,
+        destination_longitude: dg?.found ? dg.lon : null,
+        weight_tons: w,
+        cargo_type: cargoType,
+      };
+      const r = await fetch(`${API}/bids`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j?.detail || "Failed to place bid");
+      Alert.alert(j.updated ? "Bid updated ✓" : "Bid placed ✓", "The poster has been notified of your offer.");
+      onSubmitted();
+    } catch (e: any) {
+      Alert.alert("Bid failed", e?.message || "Try again");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+      <View style={bidStyles.backdrop}>
+        <View style={bidStyles.sheet}>
+          <View style={bidStyles.sheetHeader}>
+            <Text style={bidStyles.sheetTitle}>{existingBid ? "Update your bid" : "Place your bid"}</Text>
+            <TouchableOpacity onPress={onClose} testID="bid-form-close" hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Ionicons name="close" size={22} color={COLORS.textMuted} />
+            </TouchableOpacity>
+          </View>
+          <ScrollView contentContainerStyle={{ paddingBottom: 20 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+            <Text style={bidStyles.fieldLabel}>YOUR ORIGIN</Text>
+            <View style={{ flexDirection: "row", gap: 10 }}>
+              <TextInput
+                testID="bid-origin-pincode"
+                style={[bidStyles.input, { flex: 1 }]}
+                placeholder="Pincode"
+                placeholderTextColor={COLORS.textSubtle}
+                keyboardType="number-pad"
+                maxLength={6}
+                value={originPin}
+                onChangeText={(t) => { setOriginPin(t); if (t.length === 6) lookupPin(t, "o"); }}
+              />
+              <TextInput
+                testID="bid-origin-city"
+                style={[bidStyles.input, { flex: 2 }]}
+                placeholder="City"
+                placeholderTextColor={COLORS.textSubtle}
+                value={originCity}
+                onChangeText={setOriginCity}
+              />
+            </View>
+
+            <Text style={[bidStyles.fieldLabel, { marginTop: 14 }]}>YOUR DESTINATION</Text>
+            <View style={{ flexDirection: "row", gap: 10 }}>
+              <TextInput
+                testID="bid-dest-pincode"
+                style={[bidStyles.input, { flex: 1 }]}
+                placeholder="Pincode"
+                placeholderTextColor={COLORS.textSubtle}
+                keyboardType="number-pad"
+                maxLength={6}
+                value={destPin}
+                onChangeText={(t) => { setDestPin(t); if (t.length === 6) lookupPin(t, "d"); }}
+              />
+              <TextInput
+                testID="bid-dest-city"
+                style={[bidStyles.input, { flex: 2 }]}
+                placeholder="City"
+                placeholderTextColor={COLORS.textSubtle}
+                value={destCity}
+                onChangeText={setDestCity}
+              />
+            </View>
+
+            <Text style={[bidStyles.fieldLabel, { marginTop: 14 }]}>WEIGHT (TONS)</Text>
+            <TextInput
+              testID="bid-weight"
+              style={bidStyles.input}
+              placeholder="e.g. 5"
+              placeholderTextColor={COLORS.textSubtle}
+              keyboardType="decimal-pad"
+              value={weight}
+              onChangeText={setWeight}
+            />
+
+            <Text style={[bidStyles.fieldLabel, { marginTop: 14 }]}>CARGO TYPE</Text>
+            <View style={bidStyles.cargoGrid}>
+              {BID_CARGO_TYPES.map((ct) => {
+                const active = cargoType === ct;
+                return (
+                  <TouchableOpacity
+                    key={ct}
+                    testID={`bid-cargo-${ct}`}
+                    onPress={() => setCargoType(ct)}
+                    style={[bidStyles.cargoPill, active && bidStyles.cargoPillOn]}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={[bidStyles.cargoPillText, active && bidStyles.cargoPillTextOn]}>{ct}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </ScrollView>
+          <TouchableOpacity
+            testID="bid-submit"
+            style={[bidStyles.submitBtn, submitting && { opacity: 0.6 }]}
+            onPress={submit}
+            disabled={submitting}
+            activeOpacity={0.85}
+          >
+            {submitting ? <ActivityIndicator color={COLORS.surface} /> : (
+              <>
+                <Ionicons name="cash-outline" size={18} color={COLORS.surface} />
+                <Text style={bidStyles.submitBtnText}>{existingBid ? "Update Bid" : "Submit Bid"}</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+const bidStyles = StyleSheet.create({
+  backdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" },
+  sheet: { backgroundColor: COLORS.surface, borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: 20, paddingBottom: 28, maxHeight: "92%" },
+  sheetHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 16 },
+  sheetTitle: { fontSize: 18, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.text, letterSpacing: -0.2 },
+  fieldLabel: { fontSize: 11, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.textMuted, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 6 },
+  input: { backgroundColor: COLORS.bg, borderWidth: 1, borderColor: COLORS.border, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, fontSize: 14, fontFamily: "Inter_500Medium", color: COLORS.text },
+  cargoGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  cargoPill: { backgroundColor: COLORS.bg, borderWidth: 1, borderColor: COLORS.border, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 9 },
+  cargoPillOn: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
+  cargoPillText: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: COLORS.text },
+  cargoPillTextOn: { color: COLORS.surface, fontFamily: "Inter_700Bold", fontWeight: "700" },
+  submitBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: COLORS.primary, borderRadius: 12, paddingVertical: 15, marginTop: 8 },
+  submitBtnText: { fontSize: 15, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.surface, letterSpacing: 0.2 },
+});
+
+// ============== BidsReceivedModal ==============
+// Shown when the post owner taps "Bids Received" on one of their posts.
+// Lists every bid placed on that listing with the bidder's contact + deviation.
+function BidsReceivedModal({
+  visible, listingId, viewerPhone, postRouteLabel, onClose,
+}: {
+  visible: boolean;
+  listingId: string;
+  viewerPhone: string;
+  postRouteLabel: string;
+  onClose: () => void;
+}) {
+  const [bids, setBids] = useState<Bid[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!visible || !listingId) return;
+    setLoading(true);
+    fetch(`${API}/bids/listing/${encodeURIComponent(listingId)}?viewer_phone=${encodeURIComponent(viewerPhone)}`)
+      .then(r => r.json())
+      .then((j) => { setBids(Array.isArray(j) ? j : []); })
+      .catch(() => setBids([]))
+      .finally(() => setLoading(false));
+  }, [visible, listingId, viewerPhone]);
+
+  const call = (phone: string) => {
+    if (phone) Linking.openURL(`tel:${phone}`).catch(() => Alert.alert("Error", "Cannot open dialer"));
+  };
+
+  return (
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose} presentationStyle="fullScreen">
+      <SafeAreaView style={[styles.fill, { backgroundColor: COLORS.bg }]} edges={["top"]}>
+        <View style={styles.fsHeader}>
+          <TouchableOpacity onPress={onClose} style={styles.iconBtn} testID="bids-received-back">
+            <Ionicons name="arrow-back" size={24} color={COLORS.text} />
+          </TouchableOpacity>
+          <Text style={styles.fsHeaderTitle}>Bids Received</Text>
+          <View style={{ width: 32 }} />
+        </View>
+        {postRouteLabel ? (
+          <View style={{ paddingHorizontal: 16, paddingTop: 10 }}>
+            <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: COLORS.textMuted }}>
+              {postRouteLabel}
+            </Text>
+          </View>
+        ) : null}
+        {loading ? (
+          <ActivityIndicator color={COLORS.primary} style={{ marginTop: 32 }} />
+        ) : bids.length === 0 ? (
+          <View style={styles.emptyWrap} testID="bids-received-empty">
+            <Ionicons name="cash-outline" size={42} color={COLORS.textSubtle} />
+            <Text style={styles.emptyTitle}>No bids yet</Text>
+            <Text style={styles.emptySub}>You'll see offers from interested transporters here.</Text>
+          </View>
+        ) : (
+          <FlatList
+            testID="bids-received-list"
+            data={bids}
+            keyExtractor={(b) => b.id}
+            contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
+            renderItem={({ item }) => (
+              <View style={brStyles.card} testID={`bid-card-${item.id}`}>
+                <View style={brStyles.headerRow}>
+                  <View style={brStyles.avatar}>
+                    <Text style={brStyles.avatarText}>
+                      {(item.bidder_name || "?").split(" ").map(p => p[0]).filter(Boolean).slice(0, 2).join("").toUpperCase()}
+                    </Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={brStyles.bidderName}>{item.bidder_name || "Unknown"}</Text>
+                    {item.bidder_company ? <Text style={brStyles.bidderCompany}>{item.bidder_company}</Text> : null}
+                  </View>
+                  <TouchableOpacity
+                    style={brStyles.callBtn}
+                    onPress={() => call(item.bidder_phone)}
+                    testID={`bid-call-${item.bidder_phone}`}
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons name="call" size={16} color={COLORS.surface} />
+                    <Text style={brStyles.callBtnText}>Call</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <View style={brStyles.routeBlock}>
+                  <View style={brStyles.routeRow}>
+                    <Ionicons name="location" size={14} color={COLORS.secondary} />
+                    <Text style={brStyles.routeText} numberOfLines={1}>
+                      {[item.origin_locality, item.origin_city].filter(Boolean).join(", ") || "—"}
+                      {item.origin_pincode ? ` · ${item.origin_pincode}` : ""}
+                    </Text>
+                  </View>
+                  <View style={brStyles.routeRow}>
+                    <Ionicons name="flag" size={14} color={COLORS.primary} />
+                    <Text style={brStyles.routeText} numberOfLines={1}>
+                      {[item.destination_locality, item.destination_city].filter(Boolean).join(", ") || "—"}
+                      {item.destination_pincode ? ` · ${item.destination_pincode}` : ""}
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={brStyles.metaRow}>
+                  <View style={brStyles.metaChip}>
+                    <Ionicons name="barbell-outline" size={13} color={COLORS.textMuted} />
+                    <Text style={brStyles.metaText}>{item.weight_tons} T</Text>
+                  </View>
+                  <View style={brStyles.metaChip}>
+                    <Ionicons name="cube-outline" size={13} color={COLORS.textMuted} />
+                    <Text style={brStyles.metaText}>{item.cargo_type}</Text>
+                  </View>
+                </View>
+
+                {(item.origin_deviation_km != null || item.destination_deviation_km != null) && (
+                  <View style={brStyles.deviationBlock}>
+                    <Ionicons name="git-network-outline" size={13} color={COLORS.secondary} />
+                    <Text style={brStyles.deviationText}>
+                      Deviation:
+                      {item.origin_deviation_km != null ? ` origin ${item.origin_deviation_km} km` : ""}
+                      {item.origin_deviation_km != null && item.destination_deviation_km != null ? " · " : ""}
+                      {item.destination_deviation_km != null ? `dest ${item.destination_deviation_km} km` : ""}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            )}
+          />
+        )}
+      </SafeAreaView>
+    </Modal>
+  );
+}
+
+const brStyles = StyleSheet.create({
+  card: { backgroundColor: COLORS.surface, borderRadius: 14, borderWidth: 1, borderColor: COLORS.border, padding: 14, marginBottom: 12 },
+  headerRow: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 12 },
+  avatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: "#EEF2FA", alignItems: "center", justifyContent: "center" },
+  avatarText: { fontSize: 14, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.primary },
+  bidderName: { fontSize: 15, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.text },
+  bidderCompany: { fontSize: 12, fontFamily: "Inter_400Regular", color: COLORS.textMuted, marginTop: 1 },
+  callBtn: { flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: COLORS.success, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999 },
+  callBtnText: { fontSize: 12, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.surface },
+  routeBlock: { backgroundColor: COLORS.bg, borderRadius: 10, padding: 10, gap: 6, marginBottom: 10 },
+  routeRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  routeText: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: COLORS.text, flex: 1 },
+  metaRow: { flexDirection: "row", gap: 8, marginBottom: 8 },
+  metaChip: { flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: COLORS.bg, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, borderWidth: 1, borderColor: COLORS.border },
+  metaText: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: COLORS.text },
+  deviationBlock: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: "#FFF3EB", paddingHorizontal: 10, paddingVertical: 8, borderRadius: 8 },
+  deviationText: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: COLORS.secondary, flex: 1 },
+});
+
+
 // ============== ListingDetailModal ==============
 function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, contactName, onClose }: {
   visible: boolean; load?: Load | null; ptlGroup?: PtlGroup | null;
@@ -3979,17 +4385,32 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
   const [alreadyExpressed, setAlreadyExpressed] = useState(false);
   const [showImagesLocal, setShowImagesLocal] = useState(false);
   const [viewerStart, setViewerStart] = useState<number | null>(null);
+  const [showBidForm, setShowBidForm] = useState(false);
+  const [myBid, setMyBid] = useState<Bid | null>(null);
 
+  // For bidding, we need the bid target = the post the user is looking at.
+  // Truck Space → load.id  (listing_type "load")
+  // Partial Load → the PTL load_id of the post's owner (not the group_id).
+  //   FORMING groups have exactly 1 member = the poster; in market view the
+  //   modal is opened with a single-member group, so members[0] is the poster.
+  const ptlPosterMember = (ptlGroup?.members || []).find(m => !m.is_me) || (ptlGroup?.members || [])[0];
+  const bidListingId = load?.id || ptlPosterMember?.load_id || "";
+  const bidListingType: "load" | "ptl" = load ? "load" : "ptl";
   const listingId = load?.id || ptlGroup?.id || "";
   const listingType = load ? "load" : "ptl_group";
   const isMine = load ? load.poster_phone === viewerPhone : (ptlGroup?.members || []).some(m => m.phone === viewerPhone);
 
   useEffect(() => {
     if (!visible || !listingId || !viewerPhone || isMine) return;
-    setInterestSent(false); setAlreadyExpressed(false);
+    setInterestSent(false); setAlreadyExpressed(false); setMyBid(null);
     fetch(`${API}/interests/check?viewer_phone=${encodeURIComponent(viewerPhone)}&listing_id=${encodeURIComponent(listingId)}`)
       .then(r => r.json()).then(d => { if (d.expressed) setAlreadyExpressed(true); }).catch(() => {});
-  }, [visible, listingId]);
+    // Has the viewer already bid on this post?
+    if (bidListingId) {
+      fetch(`${API}/bids/check?viewer_phone=${encodeURIComponent(viewerPhone)}&listing_id=${encodeURIComponent(bidListingId)}`)
+        .then(r => r.json()).then(d => { if (d.bid_placed && d.bid) setMyBid(d.bid); }).catch(() => {});
+    }
+  }, [visible, listingId, bidListingId]);
 
   const sendInterest = async () => {
     if (interestSent || alreadyExpressed || isMine) return;
@@ -4170,6 +4591,7 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
   };
 
   const interested = interestSent || alreadyExpressed;
+  void interested; void sendInterest; void interestLoading;  // kept for future use; CTA replaced by Bid button
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose} presentationStyle="fullScreen">
@@ -4184,19 +4606,36 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
         </ScrollView>
         {!isMine && (
           <View style={detailStyles.ctaBar}>
-            <TouchableOpacity style={[detailStyles.interestedBtn, interested && detailStyles.interestedBtnDone]} onPress={sendInterest} disabled={interested || interestLoading} activeOpacity={0.85}>
-              {interestLoading ? <ActivityIndicator size="small" color={COLORS.surface} /> : (
-                <>
-                  <Ionicons name={interested ? "checkmark-circle" : "hand-right-outline"} size={20} color={COLORS.surface} />
-                  <Text style={detailStyles.interestedBtnText}>{interested ? "Interest Sent ✓" : "I'm Interested"}</Text>
-                </>
-              )}
+            <TouchableOpacity
+              testID="open-bid-form"
+              style={[detailStyles.bidBtn, !!myBid && detailStyles.bidBtnDone]}
+              onPress={() => setShowBidForm(true)}
+              activeOpacity={0.85}
+            >
+              <Ionicons name={myBid ? "checkmark-circle" : "cash-outline"} size={20} color={COLORS.surface} />
+              <Text style={detailStyles.bidBtnText}>{myBid ? "Bid Placed · Edit" : "Bid"}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={detailStyles.callBarBtn} onPress={callPoster}>
               <Ionicons name="call" size={20} color={COLORS.primary} />
             </TouchableOpacity>
           </View>
         )}
+        {!isMine && bidListingId ? (
+          <BidFormModal
+            visible={showBidForm}
+            listingId={bidListingId}
+            listingType={bidListingType}
+            viewerPhone={viewerPhone}
+            existingBid={myBid}
+            onClose={() => setShowBidForm(false)}
+            onSubmitted={() => {
+              setShowBidForm(false);
+              // Refresh bid state so the CTA flips to "Bid Placed · Edit"
+              fetch(`${API}/bids/check?viewer_phone=${encodeURIComponent(viewerPhone)}&listing_id=${encodeURIComponent(bidListingId)}`)
+                .then(r => r.json()).then(d => { if (d.bid_placed && d.bid) setMyBid(d.bid); }).catch(() => {});
+            }}
+          />
+        ) : null}
       </SafeAreaView>
     </Modal>
   );
@@ -4238,6 +4677,9 @@ const detailStyles = StyleSheet.create({
   interestedBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: COLORS.primary, borderRadius: 12, paddingVertical: 14 },
   interestedBtnDone: { backgroundColor: COLORS.success },
   interestedBtnText: { fontSize: 15, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.surface },
+  bidBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: COLORS.primary, borderRadius: 12, paddingVertical: 14 },
+  bidBtnDone: { backgroundColor: COLORS.success },
+  bidBtnText: { fontSize: 15, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.surface, letterSpacing: 0.3 },
   callBarBtn: { width: 52, height: 52, borderRadius: 12, backgroundColor: COLORS.bgMuted, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: COLORS.border },
 });
 
@@ -6316,13 +6758,19 @@ function MyPtlLoadsList({ profile }: { profile: Profile }) {
   const [selectedGroup, setSelectedGroup] = useState<PtlGroup | null>(null);
   const [showDetail, setShowDetail] = useState(false);
   const [editLoad, setEditLoad] = useState<PtlLoad | null>(null);
+  const [bidCounts, setBidCounts] = useState<Record<string, number>>({});
+  const [bidsForListing, setBidsForListing] = useState<{ id: string; label: string } | null>(null);
 
   const fetchMyLoads = useCallback(async () => {
     try {
-      const r = await fetch(`${API}/ptl/loads/my/${encodeURIComponent(profile.phone)}`);
+      const [r, countsRes] = await Promise.all([
+        fetch(`${API}/ptl/loads/my/${encodeURIComponent(profile.phone)}`),
+        fetch(`${API}/bids/counts/${encodeURIComponent(profile.phone)}`).then(rr => rr.json()).catch(() => ({})),
+      ]);
       const data = await r.json();
       const list: PtlLoad[] = Array.isArray(data) ? data : [];
       setLoads(list);
+      setBidCounts(typeof countsRes === "object" && countsRes ? countsRes : {});
       const gids = Array.from(new Set(list.map((l) => l.group_id).filter(Boolean) as string[]));
       const fetched: Record<string, PtlGroup> = {};
       await Promise.all(
@@ -6436,6 +6884,8 @@ function MyPtlLoadsList({ profile }: { profile: Profile }) {
       {loads.map((item) => {
         const g = groupFor(item);
         const editable = item.status === "OPEN" || item.status === "MATCHED";
+        const cnt = bidCounts[item.id] || 0;
+        const label = `${item.origin_locality || item.origin_city || "Origin"} → ${item.destination_locality || item.destination_city || "Destination"}`;
         return (
           <View key={item.id}>
             <PtlGroupCard
@@ -6443,6 +6893,18 @@ function MyPtlLoadsList({ profile }: { profile: Profile }) {
               profile={profile}
               onPress={() => { setSelectedGroup(g); setShowDetail(true); }}
             />
+            <TouchableOpacity
+              testID={`bids-received-${item.id}`}
+              style={profileStyles.bidsBtn}
+              activeOpacity={0.85}
+              onPress={() => setBidsForListing({ id: item.id, label })}
+            >
+              <Ionicons name="cash-outline" size={15} color={COLORS.surface} />
+              <Text style={profileStyles.bidsBtnText}>Bids Received</Text>
+              <View style={profileStyles.bidsCountPill}>
+                <Text style={profileStyles.bidsCountText}>{cnt}</Text>
+              </View>
+            </TouchableOpacity>
             {editable && (
               <View style={profileStyles.actionRow}>
                 <TouchableOpacity style={profileStyles.editBtn} onPress={() => setEditLoad(item)} testID={`edit-ptl-${item.id}`}>
@@ -6474,6 +6936,15 @@ function MyPtlLoadsList({ profile }: { profile: Profile }) {
           editLoad={editLoad}
           onClose={() => setEditLoad(null)}
           onPosted={() => { setEditLoad(null); fetchMyLoads(); }}
+        />
+      )}
+      {bidsForListing && (
+        <BidsReceivedModal
+          visible={!!bidsForListing}
+          listingId={bidsForListing.id}
+          viewerPhone={profile.phone}
+          postRouteLabel={bidsForListing.label}
+          onClose={() => setBidsForListing(null)}
         />
       )}
     </View>
@@ -6674,12 +7145,18 @@ function MyTruckSpacePostsList({ profile }: { profile: Profile }) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [editLoad, setEditLoad] = useState<Load | null>(null);
+  const [bidCounts, setBidCounts] = useState<Record<string, number>>({});
+  const [bidsForListing, setBidsForListing] = useState<{ id: string; label: string } | null>(null);
 
   const fetchMy = useCallback(async () => {
     try {
-      const r = await fetch(`${API}/loads`);
-      const j: Load[] = await r.json();
+      const [loadsRes, countsRes] = await Promise.all([
+        fetch(`${API}/loads`).then(r => r.json()),
+        fetch(`${API}/bids/counts/${encodeURIComponent(profile.phone)}`).then(r => r.json()).catch(() => ({})),
+      ]);
+      const j: Load[] = Array.isArray(loadsRes) ? loadsRes : [];
       setMyLoads(j.filter((l) => l.poster_phone === profile.phone));
+      setBidCounts(typeof countsRes === "object" && countsRes ? countsRes : {});
     } catch {} finally {
       setLoading(false); setRefreshing(false);
     }
@@ -6715,21 +7192,37 @@ function MyTruckSpacePostsList({ profile }: { profile: Profile }) {
             <Text style={styles.emptySub}>Tap Post to add your first truck space.</Text>
           </View>
         ) : null}
-        renderItem={({ item }) => (
-          <View>
-            <LoadCard load={item} isMine={true} />
-            <View style={profileStyles.actionRow}>
-              <TouchableOpacity style={profileStyles.editBtn} onPress={() => setEditLoad(item)} testID={`edit-load-${item.id}`}>
-                <Ionicons name="create-outline" size={15} color={COLORS.primary} />
-                <Text style={profileStyles.editBtnText}>Edit</Text>
+        renderItem={({ item }) => {
+          const cnt = bidCounts[item.id] || 0;
+          const label = `${item.origin_locality || item.origin_city || "Origin"} → ${item.destination_locality || item.destination_city || "Destination"}`;
+          return (
+            <View>
+              <LoadCard load={item} isMine={true} />
+              <TouchableOpacity
+                testID={`bids-received-${item.id}`}
+                style={profileStyles.bidsBtn}
+                activeOpacity={0.85}
+                onPress={() => setBidsForListing({ id: item.id, label })}
+              >
+                <Ionicons name="cash-outline" size={15} color={COLORS.surface} />
+                <Text style={profileStyles.bidsBtnText}>Bids Received</Text>
+                <View style={profileStyles.bidsCountPill}>
+                  <Text style={profileStyles.bidsCountText}>{cnt}</Text>
+                </View>
               </TouchableOpacity>
-              <TouchableOpacity style={profileStyles.deleteBtn} onPress={() => deleteLoad(item)} testID={`delete-load-${item.id}`}>
-                <Ionicons name="trash-outline" size={15} color={COLORS.danger} />
-                <Text style={profileStyles.deleteBtnText}>Delete</Text>
-              </TouchableOpacity>
+              <View style={profileStyles.actionRow}>
+                <TouchableOpacity style={profileStyles.editBtn} onPress={() => setEditLoad(item)} testID={`edit-load-${item.id}`}>
+                  <Ionicons name="create-outline" size={15} color={COLORS.primary} />
+                  <Text style={profileStyles.editBtnText}>Edit</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={profileStyles.deleteBtn} onPress={() => deleteLoad(item)} testID={`delete-load-${item.id}`}>
+                  <Ionicons name="trash-outline" size={15} color={COLORS.danger} />
+                  <Text style={profileStyles.deleteBtnText}>Delete</Text>
+                </TouchableOpacity>
+              </View>
             </View>
-          </View>
-        )}
+          );
+        }}
       />
       {editLoad && (
         <EditLoadModal
@@ -6737,6 +7230,15 @@ function MyTruckSpacePostsList({ profile }: { profile: Profile }) {
           visible={!!editLoad}
           onClose={() => setEditLoad(null)}
           onSaved={() => { setEditLoad(null); fetchMy(); }}
+        />
+      )}
+      {bidsForListing && (
+        <BidsReceivedModal
+          visible={!!bidsForListing}
+          listingId={bidsForListing.id}
+          viewerPhone={profile.phone}
+          postRouteLabel={bidsForListing.label}
+          onClose={() => setBidsForListing(null)}
         />
       )}
     </>

@@ -1,0 +1,51 @@
+{
+  "summary": "Comprehensive pytest suite for the new Bid backend feature: 17 tests across create/update, validation, deviation, check, listing-view, counts and withdraw. All 17 tests pass against the local backend at http://localhost:8001.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "POST /api/bids (update branch)",
+        "issue": "On update, the returned response carries the bidder profile (bidder_name/bidder_company) taken from the LATEST users lookup, but on an update the bidder profile in the DB is also overwritten via $set bid_doc. This is consistent — just noting that resubmitting a bid will refresh the cached bidder_name/bidder_company even if the bidder didn't change them. Not a bug, just a behaviour to document."
+      },
+      {
+        "endpoint": "GET /api/bids/check",
+        "issue": "When viewer_phone is malformed (not 10 digits) it returns {bid_placed:false} silently with HTTP 200 instead of 400. Consistent with GET /api/bids/counts/{phone} which also returns {} for malformed phones — fine for a public read endpoint but worth documenting."
+      },
+      {
+        "endpoint": "DELETE /api/bids/{listing_id}",
+        "issue": "Returns 404 if the bid was never placed (or already withdrawn). Frontend should treat 404 on withdraw as 'already gone' rather than surfacing an error to the user."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_bids_api.py",
+    "/app/test_reports/pytest/bids_api_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is now 1962 lines — strongly consider splitting bids/PTL/loads/users into separate routers/modules. File-size guideline (>700 lines) is well exceeded.",
+    "Bid endpoints currently rely on viewer_phone passed as a query param for authorization (owner-only access to /api/bids/listing/{id}). There is no token verification — anyone who knows the poster's phone number can list their bids. Acceptable for an internal MVP but should be hardened (use /api/auth/verify-token like other endpoints).",
+    "BidCreate.weight_tons has no upper bound; consider validating against TRUCK_CAPACITY_KG / a sane max so bidders cannot submit absurd values.",
+    "POST /api/bids does not require listing_type to actually match where the listing lives — if a caller sends listing_type='load' but the id is a PTL id, _get_listing returns None and the call 404s (good). However a caller could send listing_type='ptl' for a real load id and the listing would not be found. The endpoint already behaves correctly, but a clearer error message like 'listing not found in <listing_type> collection' would help debugging.",
+    "Indexes on db.bids are created lazily on startup. Safe — but the unique compound index (listing_id, bidder_phone) means any race on first-create will collide with the existing update branch. Current code handles this by check-then-update; under high concurrency a brief race window exists where two inserts could both happen. Consider using upsert with $setOnInsert for atomicity.",
+    "bidder_name/bidder_company are denormalised onto the bid at write time. If the bidder later updates their profile, the bid still shows the OLD name/company. Acceptable, but should be a product decision (denormalise vs join-on-read)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_bids_api.py (new)"
+  ],
+  "success_rate": {
+    "backend": "100%",
+    "frontend": "N/A (backend-only test request)"
+  },
+  "test_credentials": "None required — Bid APIs are unauthenticated. Test users are created on the fly with random 10-digit phones (TEST_Poster, TEST_Bidder, TEST_Bidder2).",
+  "seed_data_creation": "Tests create their own fresh users, loads and a PTL load per module run, all suffixed/named with TEST_. No global seed required. MongoDB will retain these documents after the run; consider periodic cleanup of TEST_-prefixed records.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All 17 bid tests pass against http://localhost:8001. The prod backend (https://ptl-market.onrender.com/api) does NOT yet have these endpoints — do not test against it. To re-run: `python -m pytest /app/backend/tests/test_bids_api.py -v`. Coverage matrix maps 1:1 to the 13 scenarios in the original review request. Note that server.py is now very large (~2k lines) and a refactor was flagged for the main agent.",
+  "rca of the issue": "N/A — no bugs found. Feature works end-to-end as specified."
+}

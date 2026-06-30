@@ -1694,6 +1694,233 @@ async def confirm_group_membership(group_id: str, phone: str):
     return {"confirmed": True}
 
 
+# ============================================================================
+# ===== Bids =====
+# ============================================================================
+# A bid is an offer placed by a non-poster user on a Truck Space (loads) or
+# Partial Load (ptl_loads) listing. The bid captures the bidder's intended
+# origin/destination/weight/cargo so the poster can compare each interested
+# party. Exactly one active bid per (bidder_phone, listing_id) — re-submitting
+# updates the existing record.
+
+class BidCreate(BaseModel):
+    listing_id: str
+    listing_type: str                 # "load" (truck space) | "ptl" (partial load)
+    bidder_phone: str
+    origin_locality: Optional[str] = ""
+    origin_city: Optional[str] = ""
+    origin_pincode: Optional[str] = ""
+    origin_latitude: Optional[float] = None
+    origin_longitude: Optional[float] = None
+    destination_locality: Optional[str] = ""
+    destination_city: Optional[str] = ""
+    destination_pincode: Optional[str] = ""
+    destination_latitude: Optional[float] = None
+    destination_longitude: Optional[float] = None
+    weight_tons: float
+    cargo_type: str
+
+
+async def _get_listing(listing_id: str, listing_type: str):
+    """Fetch the underlying listing doc and normalise its origin/destination
+    + poster_phone shape. Returns None if not found."""
+    if listing_type == "load":
+        doc = await db.loads.find_one({"id": listing_id}, {
+            "_id": 0, "id": 1, "poster_phone": 1,
+            "origin_locality": 1, "origin_city": 1, "origin_pincode": 1,
+            "origin_latitude": 1, "origin_longitude": 1,
+            "destination_locality": 1, "destination_city": 1, "destination_pincode": 1,
+            "destination_latitude": 1, "destination_longitude": 1,
+        })
+        if not doc:
+            return None
+        return {
+            "id": doc["id"],
+            "poster_phone": doc.get("poster_phone", ""),
+            "origin_locality": doc.get("origin_locality", ""),
+            "origin_city": doc.get("origin_city", ""),
+            "origin_pincode": doc.get("origin_pincode", ""),
+            "origin_latitude": doc.get("origin_latitude"),
+            "origin_longitude": doc.get("origin_longitude"),
+            "destination_locality": doc.get("destination_locality", ""),
+            "destination_city": doc.get("destination_city", ""),
+            "destination_pincode": doc.get("destination_pincode", ""),
+            "destination_latitude": doc.get("destination_latitude"),
+            "destination_longitude": doc.get("destination_longitude"),
+        }
+    if listing_type == "ptl":
+        doc = await db.ptl_loads.find_one({"id": listing_id}, {"_id": 0})
+        if not doc:
+            return None
+        o = doc.get("origin") or {}
+        d = doc.get("destination") or {}
+        return {
+            "id": doc["id"],
+            "poster_phone": doc.get("poster_phone", ""),
+            "origin_locality": o.get("locality", ""),
+            "origin_city": o.get("city", ""),
+            "origin_pincode": o.get("pincode", ""),
+            "origin_latitude": o.get("latitude"),
+            "origin_longitude": o.get("longitude"),
+            "destination_locality": d.get("locality", ""),
+            "destination_city": d.get("city", ""),
+            "destination_pincode": d.get("pincode", ""),
+            "destination_latitude": d.get("latitude"),
+            "destination_longitude": d.get("longitude"),
+        }
+    return None
+
+
+def _deviation_km(
+    bid_lat: Optional[float], bid_lon: Optional[float],
+    post_lat: Optional[float], post_lon: Optional[float],
+) -> Optional[float]:
+    """Straight-line distance between bid endpoint and post endpoint in km,
+    rounded to 1 decimal. Returns None when either side has no coordinates."""
+    if bid_lat is None or bid_lon is None or post_lat is None or post_lon is None:
+        return None
+    return round(haversine_km(bid_lat, bid_lon, post_lat, post_lon), 1)
+
+
+@api_router.post("/bids")
+async def create_or_update_bid(payload: BidCreate):
+    """Place (or replace) a bid on a Truck Space or Partial Load listing.
+    Enforces: one bid per (bidder_phone, listing_id); bidder cannot equal poster."""
+    bidder = _norm_phone(payload.bidder_phone)
+    if len(bidder) != 10:
+        raise HTTPException(status_code=400, detail="bidder_phone must be a 10-digit number")
+    if payload.listing_type not in ("load", "ptl"):
+        raise HTTPException(status_code=400, detail="listing_type must be 'load' or 'ptl'")
+    if payload.weight_tons <= 0:
+        raise HTTPException(status_code=400, detail="weight_tons must be > 0")
+    if not (payload.cargo_type or "").strip():
+        raise HTTPException(status_code=400, detail="cargo_type is required")
+
+    listing = await _get_listing(payload.listing_id, payload.listing_type)
+    if not listing:
+        raise HTTPException(status_code=404, detail="Listing not found")
+    if listing["poster_phone"] == bidder:
+        raise HTTPException(status_code=400, detail="You cannot bid on your own post")
+
+    # Look up bidder profile for display name / company
+    user = await db.users.find_one({"phone": bidder}, {"_id": 0, "name": 1, "company": 1})
+
+    origin_dev = _deviation_km(
+        payload.origin_latitude, payload.origin_longitude,
+        listing.get("origin_latitude"), listing.get("origin_longitude"),
+    )
+    dest_dev = _deviation_km(
+        payload.destination_latitude, payload.destination_longitude,
+        listing.get("destination_latitude"), listing.get("destination_longitude"),
+    )
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    bid_doc = {
+        "listing_id": payload.listing_id,
+        "listing_type": payload.listing_type,
+        "poster_phone": listing["poster_phone"],
+        "bidder_phone": bidder,
+        "bidder_name": (user or {}).get("name", ""),
+        "bidder_company": (user or {}).get("company", ""),
+        "origin_locality": payload.origin_locality or "",
+        "origin_city": payload.origin_city or "",
+        "origin_pincode": payload.origin_pincode or "",
+        "origin_latitude": payload.origin_latitude,
+        "origin_longitude": payload.origin_longitude,
+        "destination_locality": payload.destination_locality or "",
+        "destination_city": payload.destination_city or "",
+        "destination_pincode": payload.destination_pincode or "",
+        "destination_latitude": payload.destination_latitude,
+        "destination_longitude": payload.destination_longitude,
+        "weight_tons": payload.weight_tons,
+        "cargo_type": payload.cargo_type,
+        "origin_deviation_km": origin_dev,
+        "destination_deviation_km": dest_dev,
+        "updated_at": now_iso,
+    }
+
+    existing = await db.bids.find_one(
+        {"listing_id": payload.listing_id, "bidder_phone": bidder},
+        {"_id": 0, "id": 1, "created_at": 1},
+    )
+    if existing:
+        await db.bids.update_one(
+            {"listing_id": payload.listing_id, "bidder_phone": bidder},
+            {"$set": bid_doc},
+        )
+        bid_doc["id"] = existing["id"]
+        bid_doc["created_at"] = existing.get("created_at", now_iso)
+        return {**bid_doc, "updated": True}
+    bid_doc["id"] = str(uuid.uuid4())
+    bid_doc["created_at"] = now_iso
+    await db.bids.insert_one(bid_doc)
+    bid_doc.pop("_id", None)
+    return {**bid_doc, "updated": False}
+
+
+@api_router.get("/bids/check")
+async def check_bid(viewer_phone: str, listing_id: str):
+    """Has this viewer already bid on this listing?"""
+    v = _norm_phone(viewer_phone)
+    if len(v) != 10:
+        return {"bid_placed": False}
+    doc = await db.bids.find_one(
+        {"listing_id": listing_id, "bidder_phone": v},
+        {"_id": 0},
+    )
+    return {"bid_placed": bool(doc), "bid": doc}
+
+
+@api_router.get("/bids/listing/{listing_id}")
+async def list_bids_for_listing(listing_id: str, viewer_phone: str):
+    """Return all bids for a listing. Only the listing's poster can view."""
+    v = _norm_phone(viewer_phone)
+    if len(v) != 10:
+        raise HTTPException(status_code=400, detail="viewer_phone must be 10 digits")
+    # Find the listing across both collections to verify ownership
+    load = await db.loads.find_one({"id": listing_id}, {"_id": 0, "poster_phone": 1})
+    ptl = None
+    if not load:
+        ptl = await db.ptl_loads.find_one({"id": listing_id}, {"_id": 0, "poster_phone": 1})
+    if not load and not ptl:
+        raise HTTPException(status_code=404, detail="Listing not found")
+    owner = (load or ptl).get("poster_phone", "")
+    if owner != v:
+        raise HTTPException(status_code=403, detail="Only the post owner can view bids")
+    cursor = db.bids.find({"listing_id": listing_id}, {"_id": 0}).sort("created_at", -1)
+    out = await cursor.to_list(length=500)
+    return out
+
+
+@api_router.get("/bids/counts/{phone}")
+async def bid_counts_for_my_posts(phone: str):
+    """Count of bids per listing for posts owned by `phone`.
+    Returns {listing_id: count}. Used by My Posts to show a badge on each post."""
+    p = _norm_phone(phone)
+    if len(p) != 10:
+        return {}
+    pipeline = [
+        {"$match": {"poster_phone": p}},
+        {"$group": {"_id": "$listing_id", "count": {"$sum": 1}}},
+    ]
+    out: dict = {}
+    async for row in db.bids.aggregate(pipeline):
+        out[row["_id"]] = row["count"]
+    return out
+
+
+@api_router.delete("/bids/{listing_id}")
+async def withdraw_bid(listing_id: str, phone: str):
+    """A bidder withdraws their bid from a listing."""
+    p = _norm_phone(phone)
+    if len(p) != 10:
+        raise HTTPException(status_code=400, detail="phone must be 10 digits")
+    res = await db.bids.delete_one({"listing_id": listing_id, "bidder_phone": p})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="No bid to withdraw")
+    return {"withdrawn": True}
+
+
 app.include_router(api_router)
 
 app.add_middleware(
@@ -1721,6 +1948,10 @@ async def startup():
         await db.ptl_groups.create_index("id", unique=True, background=True)
         # TTL — auto-delete expired PTL loads (expires_at is a BSON Date)
         await db.ptl_loads.create_index([("expires_at", 1)], expireAfterSeconds=0, background=True)
+        # Bids — one bid per (bidder, listing); lookup by listing and by poster
+        await db.bids.create_index([("listing_id", 1), ("bidder_phone", 1)], unique=True, background=True)
+        await db.bids.create_index([("poster_phone", 1)], background=True)
+        await db.bids.create_index([("listing_id", 1), ("created_at", -1)], background=True)
         logger.info("MongoDB indexes ensured on startup.")
     except Exception as e:
         logger.warning(f"Index creation on startup failed (non-fatal): {e}")
