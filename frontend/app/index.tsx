@@ -1711,7 +1711,7 @@ function VerificationDocsScreen({ phone, alreadySubmitted, onClose }: {
           <Text style={styles.headerTitle}>Get Verified</Text>
           <View style={{ width: 40 }} />
         </View>
-        <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
+        <SafeScrollView contentContainerStyle={{ padding: 20, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
           {submitted ? (
             <View style={{ alignItems: "center", paddingTop: 40, gap: 16 }}>
               <Ionicons name="time-outline" size={56} color={COLORS.secondary} />
@@ -1791,7 +1791,7 @@ function ProfileScreen({ profile, onClose, onEdit }: { profile: Profile; onClose
   const [showVerifyDocs, setShowVerifyDocs] = useState(false);
 
 const handleInvite = async () => {
-    const msg = `🚛 *Join me on Truck Traffic!*\n\nFind truck space & post loads instantly across India.\n\n📲 Download the app or visit: https://www.trucktraffic.in\n\nLet\'s connect on the platform!`;
+    const msg = `🚛 *Join me on Truck Traffic!*\n\nFind truck space & post loads instantly across India.\n\n📲 Download: https://play.google.com/store/apps/details?id=com.ptlmarket.trucktraffic\n🌐 Website: https://www.trucktraffic.in\n\nLet\'s connect on the platform!`;
     try {
       await Linking.openURL(`https://wa.me/?text=${encodeURIComponent(msg)}`);
     } catch {
@@ -1848,7 +1848,7 @@ const handleInvite = async () => {
       </View>
       <ScrollView
         testID="profile-scroll"
-        contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
+        contentContainerStyle={{ padding: 16, paddingBottom: 80 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchMy(); }} />}
       >
         <View style={styles.profileCard} testID="profile-card">
@@ -2118,7 +2118,8 @@ if (pricePerTon && parseInt(pricePerTon, 10) > 10000) return Alert.alert("Price 
           `📞 *Contact:* ${profile.name}` +
           (profile.company ? ` — ${profile.company}` : "") +
           `\n+91 ${profile.phone}\n\n` +
-          `🔗 *Get more info:*\n${postShareUrl}`;
+          `🔗 *More info:* ${postShareUrl}\n` +
+          `📲 *Playstore:* https://play.google.com/store/apps/details?id=com.ptlmarket.trucktraffic`;
         const waUrl = `https://wa.me/?text=${encodeURIComponent(text)}`;
         const canOpen = await Linking.canOpenURL(waUrl).catch(() => false);
         if (canOpen) {
@@ -2652,6 +2653,32 @@ function VoiceListenOverlay({ visible, onCancel, status }: { visible: boolean; o
 
 // ============== RouteSearchModal ==============
 const RECENT_KEY_PREFIX = "recent_routes_";
+const RECENT_GLOBAL_KEY = "recent_routes_global";
+
+// Returns the safe bottom inset padded to at least MIN_BOTTOM so content is
+// never obscured by Android gesture bars or iOS home indicators.
+const MIN_BOTTOM = 16;
+function useBottomInset(): number {
+  const insets = useSafeAreaInsets();
+  return Math.max(MIN_BOTTOM, insets.bottom);
+}
+
+// Drop-in replacement for ScrollView that always adds a safe bottom inset on
+// top of whatever paddingBottom the caller passes in contentContainerStyle.
+// This is the single source of truth for bottom-safe-area across the whole app.
+function SafeScrollView({ contentContainerStyle, children, ...rest }: React.ComponentProps<typeof ScrollView>) {
+  const bottomInset = useBottomInset();
+  const base = StyleSheet.flatten(contentContainerStyle) || {};
+  const extraBottom = typeof base.paddingBottom === "number" ? base.paddingBottom : 0;
+  return (
+    <ScrollView
+      contentContainerStyle={[base, { paddingBottom: extraBottom + bottomInset }]}
+      {...rest}
+    >
+      {children}
+    </ScrollView>
+  );
+}
 
 // Mappls Autosuggest — mirrors the TruckTraffic web autocomplete exactly:
 //   1. Concatenate suggestedLocations + userAddedLocations in returned order.
@@ -2664,19 +2691,19 @@ const RECENT_KEY_PREFIX = "recent_routes_";
 //
 // Backend storage (place_name, full_address, lat/lon, eLoc) is unchanged.
 
-async function getRecentSearches(prefix: string): Promise<CitySuggestion[]> {
+async function getRecentSearches(_prefix: string): Promise<CitySuggestion[]> {
   try {
-    const raw = await AsyncStorage.getItem(RECENT_KEY_PREFIX + prefix);
+    const raw = await AsyncStorage.getItem(RECENT_GLOBAL_KEY);
     return raw ? JSON.parse(raw) : [];
   } catch { return []; }
 }
 
-async function saveRecentSearch(prefix: string, s: CitySuggestion) {
+async function saveRecentSearch(_prefix: string, s: CitySuggestion) {
   try {
-    const existing = await getRecentSearches(prefix);
+    const existing = await getRecentSearches("");
     const filtered = existing.filter((r) => r.pincode !== s.pincode);
-    const updated = [s, ...filtered].slice(0, 5);
-    await AsyncStorage.setItem(RECENT_KEY_PREFIX + prefix, JSON.stringify(updated));
+    const updated = [s, ...filtered].slice(0, 8);
+    await AsyncStorage.setItem(RECENT_GLOBAL_KEY, JSON.stringify(updated));
   } catch {}
 }
 
@@ -3096,7 +3123,7 @@ const pincode: string =
               : `${r.section}-${r.data.pincode}-${i}`
           }
           keyboardShouldPersistTaps="handled"
-          contentContainerStyle={{ paddingBottom: 40 }}
+          contentContainerStyle={{ paddingBottom: 80 }}
           renderItem={({ item }) => {
             if (item.kind === "header") {
               return (
@@ -3517,7 +3544,18 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
       const qs = params.toString();
       const r = await fetch(`${API}/ptl/groups${qs ? "?" + qs : ""}`);
       const j = await r.json();
-      setPtlGroups(Array.isArray(j) ? j : []);
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const active = (Array.isArray(j) ? j : []).filter((g: PtlGroup) => {
+        // Find the earliest loading_date among members; hide if it's in the past
+        const dates = (g.members || [])
+          .map((m: any) => m.loading_date)
+          .filter(Boolean)
+          .map((d: string) => { try { const dt = new Date(d); dt.setHours(0,0,0,0); return dt; } catch { return null; } })
+          .filter(Boolean) as Date[];
+        if (dates.length === 0) return true; // no loading date = always show
+        return dates.some(d => d >= today);   // show if at least one member's date is today or future
+      });
+      setPtlGroups(active);
     } catch {
       Alert.alert("Error", "Failed to fetch PTL groups");
     } finally {
@@ -3637,7 +3675,7 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
           testID="loads-list"
           data={displayLoads}
           keyExtractor={(it) => it.id}
-          contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
+          contentContainerStyle={{ padding: 16, paddingBottom: 80 }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchLoads(); }} />}
           ListFooterComponent={isFiltered && displayLoads.length > 0 ? <Text style={styles.approxNote}>* Distances are approximate (straight-line)</Text> : null}
           ListEmptyComponent={
@@ -3677,7 +3715,7 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
             testID="ptl-groups-list"
             data={ptlGroups}
             keyExtractor={(g) => g.id}
-            contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
+            contentContainerStyle={{ padding: 16, paddingBottom: 80 }}
             refreshControl={<RefreshControl refreshing={ptlRefreshing} onRefresh={() => { setPtlRefreshing(true); fetchPtlGroups(); }} />}
             ListEmptyComponent={
               ptlLoading ? (
@@ -3839,7 +3877,8 @@ function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhon
       `📞 *Contact:* ${load.poster_name}` +
       (load.poster_company ? ` — ${load.poster_company}` : "") +
       `\n+91 ${load.poster_phone}\n\n` +
-      `🔗 *Get more info:*\n${shareUrl}`;
+      `🔗 *More info:* ${shareUrl}\n` +
+      `📲 *Playstore:* https://play.google.com/store/apps/details?id=com.ptlmarket.trucktraffic`;
     try { await Linking.openURL(`https://wa.me/?text=${encodeURIComponent(text)}`); }
     catch { Alert.alert("Error", "WhatsApp could not be opened."); }
   };
@@ -3890,7 +3929,7 @@ function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhon
 
       <View style={styles.divider} />
 
-      {/* LINE 2: Date · Weight · Truck — single horizontal row (other optional details live in the detail page) */}
+      {/* LINE 2: Date · Weight Free · Truck type name + logo */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={cardStyles.metaScrollContent}>
         <View style={cardStyles.metaChip}>
           <Ionicons name="calendar-outline" size={12} color={COLORS.textMuted} />
@@ -3898,11 +3937,12 @@ function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhon
         </View>
         <View style={cardStyles.metaChip}>
           <Ionicons name="barbell-outline" size={12} color={COLORS.textMuted} />
-          <Text style={cardStyles.metaText}>{load.weight_tons}T</Text>
+          <Text style={cardStyles.metaText}>{load.weight_tons}T Free</Text>
         </View>
-        {truckImg ? (
-          <View style={cardStyles.truckMiniWrap}>
-            <Image source={truckImg} style={cardStyles.truckMiniImg} resizeMode="contain" />
+        {load.truck_type ? (
+          <View style={cardStyles.metaChip}>
+            {truckImg ? <Image source={truckImg} style={cardStyles.truckMiniImg} resizeMode="contain" /> : null}
+            <Text style={cardStyles.metaText}>{load.truck_type}</Text>
           </View>
         ) : null}
       </ScrollView>
@@ -4017,6 +4057,7 @@ function BidFormModal({
   onClose: () => void;
   onSubmitted: () => void;
 }) {
+  const bottomInset = useBottomInset();
   const [originPin, setOriginPin] = useState("");
   const [originCity, setOriginCity] = useState("");
   const [originLocality, setOriginLocality] = useState("");
@@ -4107,7 +4148,7 @@ function BidFormModal({
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <View style={bidStyles.backdrop}>
-        <View style={bidStyles.sheet}>
+        <View style={[bidStyles.sheet, { paddingBottom: bottomInset + 12 }]}>
           <View style={bidStyles.sheetHeader}>
             <Text style={bidStyles.sheetTitle}>{existingBid ? "Update your bid" : "Place your bid"}</Text>
             <TouchableOpacity onPress={onClose} testID="bid-form-close" hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
@@ -4210,7 +4251,7 @@ function BidFormModal({
 
 const bidStyles = StyleSheet.create({
   backdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" },
-  sheet: { backgroundColor: COLORS.surface, borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: 20, paddingBottom: 28, maxHeight: "92%" },
+  sheet: { backgroundColor: COLORS.surface, borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: 20, maxHeight: "92%" },
   sheetHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 16 },
   sheetTitle: { fontSize: 18, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.text, letterSpacing: -0.2 },
   fieldLabel: { fontSize: 11, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.textMuted, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 6 },
@@ -4283,7 +4324,7 @@ function BidsReceivedModal({
             testID="bids-received-list"
             data={bids}
             keyExtractor={(b) => b.id}
-            contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
+            contentContainerStyle={{ padding: 16, paddingBottom: 80 }}
             renderItem={({ item }) => (
               <View style={brStyles.card} testID={`bid-card-${item.id}`}>
                 <View style={brStyles.headerRow}>
@@ -4380,6 +4421,7 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
   visible: boolean; load?: Load | null; ptlGroup?: PtlGroup | null;
   viewerPhone: string; viewerName: string; contactName?: string; onClose: () => void;
 }) {
+  const bottomInset = useBottomInset();
   const [interestSent, setInterestSent] = useState(false);
   const [interestLoading, setInterestLoading] = useState(false);
   const [alreadyExpressed, setAlreadyExpressed] = useState(false);
@@ -4387,6 +4429,7 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
   const [viewerStart, setViewerStart] = useState<number | null>(null);
   const [showBidForm, setShowBidForm] = useState(false);
   const [myBid, setMyBid] = useState<Bid | null>(null);
+  const [showPtlPosterProfile, setShowPtlPosterProfile] = useState(false);
 
   // For bidding, we need the bid target = the post the user is looking at.
   // Truck Space → load.id  (listing_type "load")
@@ -4471,9 +4514,9 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
           </View>
         </View>
         <View style={detailStyles.section}>
-          <Text style={detailStyles.sectionTitle}>Load Details</Text>
+          <Text style={detailStyles.sectionTitle}>Truck Details</Text>
           <DetailRow icon="calendar-outline" label="Loading Date" value={dateStr} />
-          <DetailRow icon="barbell-outline" label="Weight" value={`${l.weight_tons} Tons`} />
+          <DetailRow icon="barbell-outline" label="Weight" value={`${l.weight_tons} Tons free`} />
           {l.truck_type ? <DetailRow icon="car-outline" label="Truck Type" value={l.truck_type} truckImg={truckImg} /> : null}
           {dimStr ? <DetailRow icon="resize-outline" label="Dimensions (L×B×H)" value={dimStr} /> : null}
           {l.cargo_placement ? <DetailRow icon="layers-outline" label="Cargo Placement" value={l.cargo_placement} /> : null}
@@ -4538,15 +4581,29 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
         <View style={detailStyles.section}>
           <Text style={detailStyles.sectionTitle}>Route</Text>
           <View style={detailStyles.routeBlock}>
-            <View style={detailStyles.routeRow}><Ionicons name="location" size={16} color={COLORS.secondary} /><Text style={detailStyles.routeLocality}>{g.origin_display}</Text></View>
+            <View style={detailStyles.routeRow}>
+              <Ionicons name="location" size={16} color={COLORS.secondary} />
+              <View style={{ flex: 1 }}>
+                <Text style={detailStyles.routeLocality}>{primary?.origin_locality || g.origin_display}</Text>
+                {primary?.origin_city && primary.origin_city !== primary?.origin_locality ? <Text style={detailStyles.routeCity}>{primary.origin_city}</Text> : null}
+                {primary?.origin_pincode ? <Text style={detailStyles.routePin}>{primary.origin_pincode}</Text> : null}
+              </View>
+            </View>
             <View style={detailStyles.routeDividerLine} />
-            <View style={detailStyles.routeRow}><Ionicons name="flag" size={16} color={COLORS.primary} /><Text style={detailStyles.routeLocality}>{g.destination_display}</Text></View>
+            <View style={detailStyles.routeRow}>
+              <Ionicons name="flag" size={16} color={COLORS.primary} />
+              <View style={{ flex: 1 }}>
+                <Text style={detailStyles.routeLocality}>{primary?.destination_locality || g.destination_display}</Text>
+                {primary?.destination_city && primary.destination_city !== primary?.destination_locality ? <Text style={detailStyles.routeCity}>{primary.destination_city}</Text> : null}
+                {primary?.destination_pincode ? <Text style={detailStyles.routePin}>{primary.destination_pincode}</Text> : null}
+              </View>
+            </View>
           </View>
         </View>
         <View style={detailStyles.section}>
           <Text style={detailStyles.sectionTitle}>Load Details</Text>
           {dateStr ? <DetailRow icon="calendar-outline" label="Loading Date" value={dateStr} /> : null}
-          <DetailRow icon="barbell-outline" label="Weight" value={`${(weightKg / 1000).toFixed(1)} Tons`} />
+          <DetailRow icon="barbell-outline" label="Weight" value={`${(weightKg / 1000).toFixed(1)} Tons posted`} />
           {cargoLabel ? <DetailRow icon="cube-outline" label="Cargo Type" value={cargoLabel} /> : null}
           {primary?.truck_type ? <DetailRow icon="car-outline" label="Truck Type" value={primary.truck_type} truckImg={truckImg} /> : null}
           {dimStr ? <DetailRow icon="resize-outline" label="Dimensions (L×B×H)" value={dimStr} /> : null}
@@ -4575,15 +4632,20 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
         {primary && (
           <View style={detailStyles.section}>
             <Text style={detailStyles.sectionTitle}>Posted By</Text>
-            <View style={detailStyles.posterBlock}>
-              <View style={detailStyles.avatarCircle}><Text style={detailStyles.avatarText}>{(primary.name || "?").split(" ").map((p: string) => p[0]).filter(Boolean).slice(0, 2).join("").toUpperCase()}</Text></View>
-              <View style={{ flex: 1 }}>
-                <Text style={detailStyles.posterName}>{primary.name}{primary.is_me ? " (You)" : ""}</Text>
-                {primary.company ? <Text style={detailStyles.posterCompany}>{primary.company}</Text> : null}
-                {contactName ? <Text style={{ fontSize: 11, color: COLORS.primary, fontFamily: "Inter_500Medium", marginTop: 2 }}>Saved as "{contactName}"</Text> : null}
+            <TouchableOpacity activeOpacity={isMine ? 1 : 0.8} onPress={() => !isMine && primary.phone && setShowPtlPosterProfile(true)}>
+              <View style={detailStyles.posterBlock}>
+                <View style={detailStyles.avatarCircle}><Text style={detailStyles.avatarText}>{(primary.name || "?").split(" ").map((p: string) => p[0]).filter(Boolean).slice(0, 2).join("").toUpperCase()}</Text></View>
+                <View style={{ flex: 1 }}>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                    <Text style={[detailStyles.posterName, !isMine && { color: COLORS.primary, textDecorationLine: "underline" }]}>{primary.name}</Text>
+                    {isMine && <Text style={styles.youTag}>· You</Text>}
+                  </View>
+                  {primary.company ? <Text style={detailStyles.posterCompany}>{primary.company}</Text> : null}
+                  {contactName ? <Text style={{ fontSize: 11, color: COLORS.primary, fontFamily: "Inter_500Medium", marginTop: 2 }}>Saved as "{contactName}"</Text> : null}
+                </View>
+                {!isMine && primary.phone && <TouchableOpacity style={styles.callBtn} onPress={callPoster}><Ionicons name="call" size={16} color={COLORS.surface} /><Text style={styles.callBtnText}>Call</Text></TouchableOpacity>}
               </View>
-              {!isMine && primary.phone && <TouchableOpacity style={styles.callBtn} onPress={callPoster}><Ionicons name="call" size={16} color={COLORS.surface} /><Text style={styles.callBtnText}>Call</Text></TouchableOpacity>}
-            </View>
+            </TouchableOpacity>
           </View>
         )}
       </>
@@ -4593,19 +4655,80 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
   const interested = interestSent || alreadyExpressed;
   void interested; void sendInterest; void interestLoading;  // kept for future use; CTA replaced by Bid button
 
+  const shareDetailOnWhatsApp = async () => {
+    try {
+      let text = "";
+      if (load) {
+        const oLocClean = (load.origin_locality || load.origin_city || "").trim();
+        const dLocClean = (load.destination_locality || load.destination_city || "").trim();
+        const dateShareStr = (() => { try { return new Date(load.loading_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }); } catch { return load.loading_date; } })();
+        const shareUrl = loadSharePath(load);
+        text =
+          `🚛 *Truck Space Available - Truck Traffic*\n\n` +
+          `📍 From: ${oLocClean}, ${load.origin_pincode}\n` +
+          `📍 To: ${dLocClean}, ${load.destination_pincode}\n\n` +
+          `🚚 ${load.truck_type || "Truck"}\n` +
+          `⚖️ *Weight Free:* ${load.weight_tons} Tons\n` +
+          `📅 *Loading:* ${dateShareStr}\n\n` +
+          `📞 ${load.poster_name}${load.poster_company ? ` — ${load.poster_company}` : ""}\n` +
+          `+91 ${load.poster_phone}\n\n` +
+          `🔗 *More info:* ${shareUrl}\n` +
+          `📲 *Playstore:* https://play.google.com/store/apps/details?id=com.ptlmarket.trucktraffic`;
+      } else if (ptlGroup) {
+        const primary = (ptlGroup.members || [])[0];
+        const weightT = ((primary?.weight_kg ?? ptlGroup.total_weight_kg ?? 0) / 1000).toFixed(1);
+        const cargo = (primary?.cargo_type || (ptlGroup.cargo_categories || []).join(", ") || "").replace(/^Others:\s*/, "");
+        const loadingDateStr = primary?.loading_date
+          ? (() => { try { return new Date(primary.loading_date as string).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }); } catch { return primary.loading_date as string; } })()
+          : null;
+        const contactLine = primary?.name
+          ? `📞 *Contact:* ${primary.name}${primary.company ? ` — ${primary.company}` : ""}\n+91 ${primary.phone || ""}`
+          : "";
+        text =
+          `📦 *Partial Load Looking to Combine - Truck Traffic*\n\n` +
+          `📍 Route: ${ptlGroup.origin_display} → ${ptlGroup.destination_display}\n\n` +
+          `A partial load is available on this route and is looking for another load to combine and fill a truck together.\n\n` +
+          `⚖️ *Weight:* ${weightT} T\n` +
+          (cargo ? `📦 *Cargo:* ${cargo}\n` : "") +
+          (loadingDateStr ? `📅 *Loading Date:* ${loadingDateStr}\n` : "") +
+          `\n${contactLine}\n\n` +
+          `🔗 *Website:* https://www.trucktraffic.in\n` +
+          `📲 *Playstore:* https://play.google.com/store/apps/details?id=com.ptlmarket.trucktraffic`;
+      }
+      await Linking.openURL(`https://wa.me/?text=${encodeURIComponent(text)}`);
+    } catch { Alert.alert("Error", "WhatsApp could not be opened."); }
+  };
+
+  const ptlPosterForModal = (() => {
+    if (!ptlGroup) return null;
+    const primary = (ptlGroup.members || []).find(m => !m.is_me) || (ptlGroup.members || [])[0];
+    if (!primary) return null;
+    return {
+      id: ptlGroup.id, origin_pincode: primary.origin_pincode || "", origin_locality: primary.origin_locality || "",
+      origin_city: primary.origin_city || "", origin_state: "", destination_pincode: primary.destination_pincode || "",
+      destination_locality: primary.destination_locality || "", destination_city: primary.destination_city || "",
+      destination_state: "", cargo_types: primary.cargo_type ? [primary.cargo_type] : [],
+      cargo_placement: "", weight_tons: (primary.weight_kg || 0) / 1000, space_cuft: null,
+      loading_date: primary.loading_date || ptlGroup.created_at, poster_name: primary.name || "Shipper",
+      poster_phone: primary.phone || "", poster_company: primary.company || "", created_at: ptlGroup.created_at,
+    } as unknown as Load;
+  })();
+
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose} presentationStyle="fullScreen">
       <SafeAreaView style={[styles.fill, { backgroundColor: COLORS.bg }]} edges={["top"]}>
         <View style={styles.fsHeader}>
           <TouchableOpacity onPress={onClose} style={styles.iconBtn}><Ionicons name="arrow-back" size={24} color={COLORS.text} /></TouchableOpacity>
           <Text style={styles.fsHeaderTitle}>{load ? "Truck Space Detail" : "Partial Load Detail"}</Text>
-          <View style={{ width: 32 }} />
+          <TouchableOpacity onPress={shareDetailOnWhatsApp} style={[styles.iconBtn, { flexDirection: "row", gap: 4, alignItems: "center" }]} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+            <Ionicons name="logo-whatsapp" size={20} color="#25D366" />
+          </TouchableOpacity>
         </View>
-        <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 120 }} showsVerticalScrollIndicator={false}>
+        <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 120 + bottomInset }} showsVerticalScrollIndicator={false}>
           {load ? renderLoadDetail(load) : ptlGroup ? renderPtlDetail(ptlGroup) : null}
         </ScrollView>
         {!isMine && (
-          <View style={detailStyles.ctaBar}>
+          <View style={[detailStyles.ctaBar, { paddingBottom: bottomInset + 12 }]}>
             <TouchableOpacity
               testID="open-bid-form"
               style={[detailStyles.bidBtn, !!myBid && detailStyles.bidBtnDone]}
@@ -4614,9 +4737,6 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
             >
               <Ionicons name={myBid ? "checkmark-circle" : "cash-outline"} size={20} color={COLORS.surface} />
               <Text style={detailStyles.bidBtnText}>{myBid ? "Bid Placed · Edit" : "Bid"}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={detailStyles.callBarBtn} onPress={callPoster}>
-              <Ionicons name="call" size={20} color={COLORS.primary} />
             </TouchableOpacity>
           </View>
         )}
@@ -4630,12 +4750,19 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
             onClose={() => setShowBidForm(false)}
             onSubmitted={() => {
               setShowBidForm(false);
-              // Refresh bid state so the CTA flips to "Bid Placed · Edit"
               fetch(`${API}/bids/check?viewer_phone=${encodeURIComponent(viewerPhone)}&listing_id=${encodeURIComponent(bidListingId)}`)
                 .then(r => r.json()).then(d => { if (d.bid_placed && d.bid) setMyBid(d.bid); }).catch(() => {});
             }}
           />
         ) : null}
+        {ptlPosterForModal && showPtlPosterProfile && (
+          <PosterProfileModal
+            visible={showPtlPosterProfile}
+            load={ptlPosterForModal}
+            viewerPhone={viewerPhone}
+            onClose={() => setShowPtlPosterProfile(false)}
+          />
+        )}
       </SafeAreaView>
     </Modal>
   );
@@ -4673,7 +4800,7 @@ const detailStyles = StyleSheet.create({
   posterCompany: { fontSize: 12, fontFamily: "Inter_400Regular", color: COLORS.textMuted, marginTop: 1 },
   memberRow: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: COLORS.bgMuted },
   fillLabel: { fontSize: 12, fontFamily: "Inter_500Medium", color: COLORS.textMuted },
-  ctaBar: { position: "absolute", bottom: 0, left: 0, right: 0, backgroundColor: COLORS.surface, borderTopWidth: 1, borderTopColor: COLORS.border, padding: 16, paddingBottom: 28, flexDirection: "row", gap: 10 },
+  ctaBar: { position: "absolute", bottom: 0, left: 0, right: 0, backgroundColor: COLORS.surface, borderTopWidth: 1, borderTopColor: COLORS.border, padding: 16, flexDirection: "row", gap: 10 },
   interestedBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: COLORS.primary, borderRadius: 12, paddingVertical: 14 },
   interestedBtnDone: { backgroundColor: COLORS.success },
   interestedBtnText: { fontSize: 15, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.surface },
@@ -4725,7 +4852,7 @@ function FindPtlModal({ visible, initial, onClose, onApply }: {
           <View style={{ width: 32 }} />
         </View>
         <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.fill}>
-          <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
+          <SafeScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
             <Text style={[styles.modalSubtitle, { marginBottom: 16 }]}>Find groups that match your route and have space for your cargo.</Text>
             <SectionTitle icon="navigate-outline" title="Route" />
             <View style={styles.routeInputsRow}>
@@ -4839,7 +4966,7 @@ function PosterProfileModal({ visible, load, contactName, contactsMap, viewerPho
           <Text style={styles.headerTitle}>Poster Profile</Text>
           <View style={{ width: 40 }} />
         </View>
-        <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+        <SafeScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
           {/* Profile card */}
           <View style={styles.profileCard}>
             <View style={styles.avatarBig}>
@@ -5273,7 +5400,7 @@ if (!dc.found) {
           <View style={{ width: 32 }} />
         </View>
         <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.fill}>
-          <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
+          <SafeScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
             <Text style={styles.modalSubtitle}>Enter your cargo details to find matching trucks within 30 km of your route.</Text>
 
             <SectionTitle icon="navigate-outline" title="Route" />
@@ -5350,11 +5477,25 @@ function PtlGroupCard({ group, profile, onPress, contactsMap }: { group: PtlGrou
   const [showPosterProfile, setShowPosterProfile] = useState(false);
 
   const shareOnWhatsApp = async () => {
+    const primary = member;
+    const weightT = ((primary?.weight_kg ?? group.total_weight_kg ?? 0) / 1000).toFixed(1);
+    const cargo = (primary?.cargo_type || (group.cargo_categories || []).join(", ") || "").replace(/^Others:\s*/, "");
+    const loadingDateStr = primary?.loading_date
+      ? (() => { try { return new Date(primary.loading_date as string).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }); } catch { return primary.loading_date as string; } })()
+      : null;
+    const contactLine = primary?.name
+      ? `📞 *Contact:* ${primary.name}${primary.company ? ` — ${primary.company}` : ""}\n+91 ${primary.phone || ""}`
+      : "";
     const text =
-      `📦 *Partial Load Available - Truck Traffic*\n\n` +
-      `📍 From: ${group.origin_display}\n📍 To: ${group.destination_display}\n\n` +
-      `⚖️ Weight: ${((group.total_weight_kg || 0) / 1000).toFixed(1)} T\n\n` +
-      `📲 Find partial loads on Truck Traffic\nhttps://www.trucktraffic.in`;
+      `📦 *Partial Load Looking to Combine - Truck Traffic*\n\n` +
+      `📍 Route: ${group.origin_display} → ${group.destination_display}\n\n` +
+      `A partial load is available on this route and is looking for another load to combine and fill a truck together.\n\n` +
+      `⚖️ *Weight:* ${weightT} T\n` +
+      (cargo ? `📦 *Cargo:* ${cargo}\n` : "") +
+      (loadingDateStr ? `📅 *Loading Date:* ${loadingDateStr}\n` : "") +
+      `\n${contactLine}\n\n` +
+      `🔗 *Website:* https://www.trucktraffic.in\n` +
+      `📲 *Playstore:* https://play.google.com/store/apps/details?id=com.ptlmarket.trucktraffic`;
     try { await Linking.openURL(`https://wa.me/?text=${encodeURIComponent(text)}`); }
     catch { Alert.alert("Error", "WhatsApp could not be opened."); }
   };
@@ -5654,7 +5795,7 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
               <Ionicons name="close" size={26} color={COLORS.text} />
             </TouchableOpacity>
           </View>
-          <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 32 }} keyboardShouldPersistTaps="handled">
+          <SafeScrollView contentContainerStyle={{ padding: 16, paddingBottom: 32 }} keyboardShouldPersistTaps="handled">
             <SmartRouteInput
               label="Origin"
               testIDPrefix="ptl-origin"
@@ -5878,7 +6019,7 @@ function PtlGroupDetailModal({ visible, groupId, profile, onClose, onChanged, on
             <ActivityIndicator size="large" color={COLORS.primary} />
           </View>
         ) : (
-          <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+          <SafeScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
             {banner && (
               <View
                 testID="ptl-result-banner"
@@ -7182,7 +7323,7 @@ function MyTruckSpacePostsList({ profile }: { profile: Profile }) {
         testID="my-truck-space-list"
         data={loading ? [] : myLoads}
         keyExtractor={(it) => it.id}
-        contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
+        contentContainerStyle={{ padding: 16, paddingBottom: 80 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchMy(); }} />}
         ListHeaderComponent={loading ? <ActivityIndicator color={COLORS.primary} style={{ marginTop: 24 }} /> : null}
         ListEmptyComponent={!loading ? (
@@ -7276,7 +7417,7 @@ function MyPostsScreen({ profile }: { profile: Profile }) {
       {activeTab === "truckSpace" ? (
         <MyTruckSpacePostsList profile={profile} />
       ) : (
-        <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+        <SafeScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
           <MyPtlLoadsList profile={profile} />
         </ScrollView>
       )}
