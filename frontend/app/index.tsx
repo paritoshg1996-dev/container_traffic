@@ -342,6 +342,10 @@ export default function Index() {
   const [showProfile, setShowProfile] = useState(false);
   const [showEditProfile, setShowEditProfile] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
+  // Origin/destination filter to auto-apply on the Find (market) page right
+  // after a Truck Space or Partial Load post — whether the WhatsApp share
+  // redirect happens or the user returns straight to the app.
+  const [pendingMarketFilter, setPendingMarketFilter] = useState<ActiveFilter | null>(null);
 
   const fetchUnread = useCallback(async (phone: string) => {
     try {
@@ -531,16 +535,23 @@ useEffect(() => {
         {postFlow === "truckSpace" && (
           <PostLoadScreen
             profile={profile}
-            onPosted={() => { setPostFlow(null); setTab("market"); }}
+            onPosted={(filter) => { setPendingMarketFilter(filter ?? null); setPostFlow(null); setTab("market"); }}
           />
         )}
         {postFlow === "adjustment" && (
           <PostPtlLoadScreen
             profile={profile}
             onNotificationsRead={() => setUnreadCount(0)}
+            onPosted={(filter) => { setPendingMarketFilter(filter ?? null); setPostFlow(null); setTab("market"); }}
           />
         )}
-        {!postFlow && tab === "market"  && <LoadMarketScreen profile={profile} />}
+        {!postFlow && tab === "market"  && (
+          <LoadMarketScreen
+            profile={profile}
+            pendingFilter={pendingMarketFilter}
+            onConsumePendingFilter={() => setPendingMarketFilter(null)}
+          />
+        )}
         {!postFlow && tab === "myPosts" && <MyPostsScreen profile={profile} />}
       </View>
 
@@ -1863,9 +1874,9 @@ const handleInvite = async () => {
           </View>
           {/* Verification badge / CTA */}
           {profile.profile_verified ? (
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 10, backgroundColor: "#E6F9F0", borderRadius: 100, paddingVertical: 5, paddingHorizontal: 14, borderWidth: 1, borderColor: "#1A9E5A" }}>
-              <Ionicons name="checkmark-circle" size={16} color="#1A9E5A" />
-              <Text style={{ fontSize: 12, color: "#1A9E5A", fontFamily: "Inter_700Bold", fontWeight: "700" }}>Verified Transporter</Text>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 10, backgroundColor: "#E6F9F0", borderRadius: 100, paddingVertical: 5, paddingHorizontal: 14, borderWidth: 1, borderColor: COLORS.success }}>
+              <Ionicons name="checkmark-circle" size={16} color={COLORS.success} />
+              <Text style={{ fontSize: 12, color: COLORS.success, fontFamily: "Inter_700Bold", fontWeight: "700" }}>Verified Transporter</Text>
             </View>
           ) : (
             <TouchableOpacity
@@ -1883,11 +1894,11 @@ const handleInvite = async () => {
         <View style={styles.statsRow}>
           <View style={[styles.statBox, profileStyles.statBoxOutline, { borderColor: COLORS.primary }]}>
             <Text style={[styles.statValue, { color: COLORS.primary }]} testID="my-loads-count">{myLoads.length}</Text>
-            <Text style={styles.statLabel}>Truck Space Posted</Text>
+            <Text style={styles.statLabel}>Truck Space</Text>
           </View>
           <View style={[styles.statBox, profileStyles.statBoxOutline, { borderColor: COLORS.secondary }]}>
             <Text style={[styles.statValue, { color: COLORS.secondary }]} testID="my-ptl-count">{myPtlLoads.length}</Text>
-            <Text style={styles.statLabel}>Adjustment Loads Posted</Text>
+            <Text style={styles.statLabel}>Adjustment Loads</Text>
           </View>
         </View>
         {loading ? <ActivityIndicator color={COLORS.primary} style={{ marginTop: 24 }} /> : null}
@@ -1918,14 +1929,14 @@ const profileStyles = StyleSheet.create({
   editBtnText: { color: COLORS.primary, fontFamily: "Inter_700Bold", fontWeight: "700", fontSize: 13 },
   deleteBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 10, borderRadius: 12, borderWidth: 1.5, borderColor: COLORS.danger, backgroundColor: "#FDF1F1" },
   deleteBtnText: { color: COLORS.danger, fontFamily: "Inter_700Bold", fontWeight: "700", fontSize: 13 },
-  bidsBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 11, borderRadius: 12, backgroundColor: COLORS.secondary, marginTop: -6, marginBottom: 10, paddingHorizontal: 14, alignSelf: "stretch" },
+  bidsBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 11, borderRadius: 12, backgroundColor: COLORS.success, marginTop: -6, marginBottom: 10, paddingHorizontal: 14, alignSelf: "stretch" },
   bidsBtnText: { color: COLORS.surface, fontFamily: "Inter_700Bold", fontWeight: "700", fontSize: 13, letterSpacing: 0.2 },
   bidsCountPill: { backgroundColor: "rgba(255,255,255,0.25)", paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999, minWidth: 24, alignItems: "center" },
   bidsCountText: { color: COLORS.surface, fontFamily: "Inter_700Bold", fontWeight: "700", fontSize: 12 },
 });
 
 // ============== Post Load ==============
-function PostLoadScreen({ profile, onPosted }: { profile: Profile; onPosted: () => void }) {
+function PostLoadScreen({ profile, onPosted }: { profile: Profile; onPosted: (filter?: ActiveFilter | null) => void }) {
   const [originText, setOriginText] = useState("");
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [originPin, setOriginPin] = useState("");
@@ -2129,9 +2140,11 @@ if (pricePerTon && parseInt(pricePerTon, 10) > 10000) return Alert.alert("Price 
         } else {
           Alert.alert("Load Posted Successfully! 🎉", "Your load has been posted. WhatsApp is not installed on this device.");
         }
-        reset(); onPosted();
+        const routeFilter = await buildRouteFilterFromPost(originPin, originInfo, destPin, destInfo);
+        reset(); onPosted(routeFilter);
       } else {
-        Alert.alert("Posted!", "Your load has been added to the market.", [{ text: "View Market", onPress: () => { reset(); onPosted(); } }]);
+        const routeFilter = await buildRouteFilterFromPost(originPin, originInfo, destPin, destInfo);
+        Alert.alert("Posted!", "Your load has been added to the market.", [{ text: "View Market", onPress: () => { reset(); onPosted(routeFilter); } }]);
       }
     } catch (e) {
       Alert.alert("Error", "Failed to post load. Please try again.");
@@ -3459,6 +3472,57 @@ function trackDistancesKm(start: { lat: number; lon: number }, end: { lat: numbe
 type ActiveFilter = { origin: string; dest: string; originCity?: string; destCity?: string; weightKg: number; volumeCuft: number | null; originCoord: { lat: number; lon: number }; destCoord: { lat: number; lon: number } };
 type Distances = Record<string, { origin: number; dest: number; offRoute: boolean }>;
 
+// Builds an ActiveFilter (same shape the Find/Filter modal produces) from a
+// route the user just posted (origin/destination pin + autosuggest info).
+// Used to auto-apply origin/destination filters on the Find page right
+// after a Truck Space or Partial Load post, regardless of whether the
+// WhatsApp share redirect happens or the user comes straight back.
+async function buildRouteFilterFromPost(
+  originPin: string,
+  originInfo: RouteInfo,
+  destPin: string,
+  destInfo: RouteInfo,
+): Promise<ActiveFilter | null> {
+  try {
+    let oc: { lat: number; lon: number; found: boolean };
+    if (originInfo?.latitude != null && originInfo?.longitude != null) {
+      oc = { lat: originInfo.latitude, lon: originInfo.longitude, found: true };
+    } else if (/^\d{6}$/.test(originPin)) {
+      oc = await geocodePin(originPin);
+    } else if (originInfo?.eLoc) {
+      oc = await geocodeEloc(originInfo.eLoc, originInfo.placeName || originInfo.city || "", originInfo.fullAddress || "");
+    } else {
+      return null;
+    }
+
+    let dc: { lat: number; lon: number; found: boolean };
+    if (destInfo?.latitude != null && destInfo?.longitude != null) {
+      dc = { lat: destInfo.latitude, lon: destInfo.longitude, found: true };
+    } else if (/^\d{6}$/.test(destPin)) {
+      dc = await geocodePin(destPin);
+    } else if (destInfo?.eLoc) {
+      dc = await geocodeEloc(destInfo.eLoc, destInfo.placeName || destInfo.city || "", destInfo.fullAddress || "");
+    } else {
+      return null;
+    }
+
+    if (!oc.found || !dc.found) return null;
+
+    return {
+      origin: originPin,
+      dest: destPin,
+      originCity: originInfo?.city || originInfo?.locality || originInfo?.placeName || "",
+      destCity: destInfo?.city || destInfo?.locality || destInfo?.placeName || "",
+      weightKg: 0,
+      volumeCuft: null,
+      originCoord: { lat: oc.lat, lon: oc.lon },
+      destCoord: { lat: dc.lat, lon: dc.lon },
+    };
+  } catch {
+    return null;
+  }
+}
+
 // Map of 10-digit phone -> saved contact name from the user's address book.
 // Loaded once per app session if contacts permission is granted, so we can
 // show a "Saved" badge next to load posters the user already knows.
@@ -3513,7 +3577,7 @@ function useContactsMap(userPhone?: string): Map<string, string> {
   return map;
 }
 
-function LoadMarketScreen({ profile }: { profile: Profile }) {
+function LoadMarketScreen({ profile, pendingFilter, onConsumePendingFilter }: { profile: Profile; pendingFilter?: ActiveFilter | null; onConsumePendingFilter?: () => void }) {
   // Independent, toggle-able type filters — both OFF by default, which means
   // "show everything". Selecting one narrows the combined list to just that
   // type; selecting both is equivalent to neither being selected (shows all).
@@ -3647,6 +3711,18 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
     setDistances({});
     fetchPtlGroups(null);
   };
+  // Auto-apply the origin/destination filter carried over from a just-completed
+  // Truck Space / Partial Load post, once loads have finished loading. This
+  // fires whether the user was redirected to WhatsApp and came back, or
+  // skipped the redirect entirely — either way they land here pre-filtered.
+  useEffect(() => {
+    if (pendingFilter && !loading) {
+      onApplyFilter(pendingFilter);
+      onConsumePendingFilter?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingFilter, loading]);
+
   const isFiltered = activeFilter !== null;
   const displayLoads = isFiltered ? filteredLoads || [] : allLoads;
 
@@ -3684,7 +3760,7 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
           onPress={() => setShowTrucks((v) => !v)}
         >
           <Ionicons name="car-outline" size={14} color={showTrucks ? COLORS.surface : COLORS.textMuted} />
-          <Text style={[styles.modeToggleText, showTrucks && styles.modeToggleTextActive]}>Find Truck</Text>
+          <Text style={[styles.modeToggleText, showTrucks && styles.modeToggleTextActive]}>Truck Space</Text>
         </TouchableOpacity>
         <TouchableOpacity
           testID="market-mode-ptl"
@@ -3692,7 +3768,7 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
           onPress={() => setShowPartials((v) => !v)}
         >
           <Ionicons name="cube-outline" size={14} color={showPartials ? COLORS.surface : COLORS.textMuted} />
-          <Text style={[styles.modeToggleText, showPartials && styles.modeToggleTextActive]}>Find Partial Load</Text>
+          <Text style={[styles.modeToggleText, showPartials && styles.modeToggleTextActive]}>Partial Load</Text>
         </TouchableOpacity>
       </View>
 
@@ -3958,7 +4034,7 @@ function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhon
                 </Text>
                 {load.verified && (
                   <View style={cardStyles.verifiedBadge}>
-                    <Ionicons name="checkmark-circle" size={14} color="#1A9E5A" />
+                    <Ionicons name="checkmark-circle" size={14} color={COLORS.success} />
                   </View>
                 )}
               </View>
@@ -4056,12 +4132,12 @@ function BidFormModal({
   onSubmitted: () => void;
 }) {
   const bottomInset = useBottomInset();
+  const [originText, setOriginText] = useState("");
   const [originPin, setOriginPin] = useState("");
-  const [originCity, setOriginCity] = useState("");
-  const [originLocality, setOriginLocality] = useState("");
+  const [originInfo, setOriginInfo] = useState<RouteInfo>(null);
+  const [destText, setDestText] = useState("");
   const [destPin, setDestPin] = useState("");
-  const [destCity, setDestCity] = useState("");
-  const [destLocality, setDestLocality] = useState("");
+  const [destInfo, setDestInfo] = useState<RouteInfo>(null);
   const [weight, setWeight] = useState("");
   const [cargoType, setCargoType] = useState("Bags");
   const [submitting, setSubmitting] = useState(false);
@@ -4070,36 +4146,29 @@ function BidFormModal({
     if (!visible) return;
     if (existingBid) {
       setOriginPin(existingBid.origin_pincode || "");
-      setOriginCity(existingBid.origin_city || "");
-      setOriginLocality(existingBid.origin_locality || "");
+      setOriginText(existingBid.origin_pincode || "");
+      setOriginInfo(existingBid.origin_city || existingBid.origin_locality ? {
+        city: existingBid.origin_city || "", locality: existingBid.origin_locality || "", state: "", valid: true,
+        latitude: existingBid.origin_latitude ?? null, longitude: existingBid.origin_longitude ?? null,
+      } : null);
       setDestPin(existingBid.destination_pincode || "");
-      setDestCity(existingBid.destination_city || "");
-      setDestLocality(existingBid.destination_locality || "");
+      setDestText(existingBid.destination_pincode || "");
+      setDestInfo(existingBid.destination_city || existingBid.destination_locality ? {
+        city: existingBid.destination_city || "", locality: existingBid.destination_locality || "", state: "", valid: true,
+        latitude: existingBid.destination_latitude ?? null, longitude: existingBid.destination_longitude ?? null,
+      } : null);
       setWeight(existingBid.weight_tons ? String(existingBid.weight_tons) : "");
       setCargoType(existingBid.cargo_type || "Bags");
     } else {
-      setOriginPin(""); setOriginCity(""); setOriginLocality("");
-      setDestPin(""); setDestCity(""); setDestLocality("");
+      setOriginPin(""); setOriginText(""); setOriginInfo(null);
+      setDestPin(""); setDestText(""); setDestInfo(null);
       setWeight(""); setCargoType("Bags");
     }
   }, [visible, existingBid]);
 
-  // Resolve city/locality from pincode (best-effort, doesn't block submit)
-  const lookupPin = async (pin: string, side: "o" | "d") => {
-    if (!/^\d{6}$/.test(pin)) return;
-    try {
-      const r = await fetch(`${API}/pincode/${pin}`);
-      const j = await r.json();
-      if (j.valid) {
-        if (side === "o") { setOriginCity(j.city || ""); setOriginLocality(j.locality || ""); }
-        else { setDestCity(j.city || ""); setDestLocality(j.locality || ""); }
-      }
-    } catch {}
-  };
-
   const submit = async () => {
-    if (!/^\d{6}$/.test(originPin)) return Alert.alert("Origin pincode", "Enter a valid 6-digit origin pincode");
-    if (!/^\d{6}$/.test(destPin)) return Alert.alert("Destination pincode", "Enter a valid 6-digit destination pincode");
+    if (!/^\d{6}$/.test(originPin)) return Alert.alert("Origin", "Select a valid origin");
+    if (!/^\d{6}$/.test(destPin)) return Alert.alert("Destination", "Select a valid destination");
     const w = parseFloat(weight);
     if (!w || w <= 0) return Alert.alert("Weight", "Enter a valid weight in tons");
     if (!cargoType) return Alert.alert("Cargo type", "Select a cargo type");
@@ -4115,13 +4184,13 @@ function BidFormModal({
         listing_type: listingType,
         bidder_phone: viewerPhone,
         origin_pincode: originPin,
-        origin_city: originCity,
-        origin_locality: originLocality,
+        origin_city: originInfo?.city || "",
+        origin_locality: originInfo?.locality || "",
         origin_latitude: og?.found ? og.lat : null,
         origin_longitude: og?.found ? og.lon : null,
         destination_pincode: destPin,
-        destination_city: destCity,
-        destination_locality: destLocality,
+        destination_city: destInfo?.city || "",
+        destination_locality: destInfo?.locality || "",
         destination_latitude: dg?.found ? dg.lat : null,
         destination_longitude: dg?.found ? dg.lon : null,
         weight_tons: w,
@@ -4154,47 +4223,25 @@ function BidFormModal({
             </TouchableOpacity>
           </View>
           <ScrollView contentContainerStyle={{ paddingBottom: 20 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-            <Text style={bidStyles.fieldLabel}>YOUR ORIGIN</Text>
-            <View style={{ flexDirection: "row", gap: 10 }}>
-              <TextInput
-                testID="bid-origin-pincode"
-                style={[bidStyles.input, { flex: 1 }]}
-                placeholder="Pincode"
-                placeholderTextColor={COLORS.textSubtle}
-                keyboardType="number-pad"
-                maxLength={6}
-                value={originPin}
-                onChangeText={(t) => { setOriginPin(t); if (t.length === 6) lookupPin(t, "o"); }}
+            <View style={styles.routeInputsRow}>
+              <SmartRouteInput
+                label="Your Origin"
+                testIDPrefix="bid-origin"
+                text={originText}
+                pin={originPin}
+                info={originInfo}
+                onChange={(t, p, i) => { setOriginText(t); setOriginPin(p); setOriginInfo(i); }}
               />
-              <TextInput
-                testID="bid-origin-city"
-                style={[bidStyles.input, { flex: 2 }]}
-                placeholder="City"
-                placeholderTextColor={COLORS.textSubtle}
-                value={originCity}
-                onChangeText={setOriginCity}
-              />
-            </View>
-
-            <Text style={[bidStyles.fieldLabel, { marginTop: 14 }]}>YOUR DESTINATION</Text>
-            <View style={{ flexDirection: "row", gap: 10 }}>
-              <TextInput
-                testID="bid-dest-pincode"
-                style={[bidStyles.input, { flex: 1 }]}
-                placeholder="Pincode"
-                placeholderTextColor={COLORS.textSubtle}
-                keyboardType="number-pad"
-                maxLength={6}
-                value={destPin}
-                onChangeText={(t) => { setDestPin(t); if (t.length === 6) lookupPin(t, "d"); }}
-              />
-              <TextInput
-                testID="bid-dest-city"
-                style={[bidStyles.input, { flex: 2 }]}
-                placeholder="City"
-                placeholderTextColor={COLORS.textSubtle}
-                value={destCity}
-                onChangeText={setDestCity}
+              <View style={styles.routeArrowMid}>
+                <Ionicons name="arrow-forward" size={20} color={COLORS.secondary} />
+              </View>
+              <SmartRouteInput
+                label="Your Destination"
+                testIDPrefix="bid-dest"
+                text={destText}
+                pin={destPin}
+                info={destInfo}
+                onChange={(t, p, i) => { setDestText(t); setDestPin(p); setDestInfo(i); }}
               />
             </View>
 
@@ -4550,7 +4597,7 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
             <View style={{ flex: 1 }}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                 <Text style={detailStyles.posterName}>{l.poster_name}</Text>
-                {l.verified && <Ionicons name="checkmark-circle" size={14} color="#1A9E5A" />}
+                {l.verified && <Ionicons name="checkmark-circle" size={14} color={COLORS.success} />}
               </View>
               {l.poster_company ? <Text style={detailStyles.posterCompany}>{l.poster_company}</Text> : null}
               {contactName ? <Text style={{ fontSize: 11, color: COLORS.primary, fontFamily: "Inter_500Medium", marginTop: 2 }}>Saved as "{contactName}"</Text> : null}
@@ -4980,9 +5027,9 @@ function PosterProfileModal({ visible, load, contactName, contactsMap, viewerPho
             {/* Contact relationship badges */}
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 10, justifyContent: "center" }}>
               {load.verified && (
-                <View style={[posterProfileStyles.badge, { backgroundColor: "#E6F9F0", borderWidth: 1, borderColor: "#1A9E5A" }]}>
-                  <Ionicons name="checkmark-circle" size={14} color="#1A9E5A" />
-                  <Text style={{ fontSize: 11, color: "#1A9E5A", fontFamily: "Inter_700Bold", fontWeight: "700" }}>Verified Transporter</Text>
+                <View style={[posterProfileStyles.badge, { backgroundColor: "#E6F9F0", borderWidth: 1, borderColor: COLORS.success }]}>
+                  <Ionicons name="checkmark-circle" size={14} color={COLORS.success} />
+                  <Text style={{ fontSize: 11, color: COLORS.success, fontFamily: "Inter_700Bold", fontWeight: "700" }}>Verified Transporter</Text>
                 </View>
               )}
               {isDirectContact ? (
@@ -5048,11 +5095,11 @@ function PosterProfileModal({ visible, load, contactName, contactsMap, viewerPho
           <View style={styles.statsRow}>
             <View style={[styles.statBox, profileStyles.statBoxOutline, { borderColor: COLORS.primary }]}>
               <Text style={[styles.statValue, { color: COLORS.primary }]}>{posterLoads.length}</Text>
-              <Text style={styles.statLabel}>Truck Space Posted</Text>
+              <Text style={styles.statLabel}>Truck Space</Text>
             </View>
             <View style={[styles.statBox, profileStyles.statBoxOutline, { borderColor: COLORS.secondary }]}>
               <Text style={[styles.statValue, { color: COLORS.secondary }]}>{posterPtlLoads.length}</Text>
-              <Text style={styles.statLabel}>Adjustment Loads Posted</Text>
+              <Text style={styles.statLabel}>Adjustment Loads</Text>
             </View>
           </View>
 
@@ -5275,7 +5322,6 @@ function FindSpaceModal({ visible, initial, onClose, onApply }: {
   const [destText, setDestText] = useState("");
   const [destPin, setDestPin] = useState("");
   const [destInfo, setDestInfo] = useState<RouteInfo>(null);
-  const [weightTons, setWeightTons] = useState("");
   const [originErr, setOriginErr] = useState("");
   const [destErr, setDestErr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -5284,7 +5330,6 @@ function FindSpaceModal({ visible, initial, onClose, onApply }: {
     if (visible) {
       setOriginPin(initial?.origin || ""); setOriginText(initial?.origin || ""); setOriginInfo(null);
       setDestPin(initial?.dest || ""); setDestText(initial?.dest || ""); setDestInfo(null);
-      setWeightTons(initial?.weightKg ? String(initial.weightKg / 1000) : "");
       setOriginErr(""); setDestErr("");
     }
   }, [visible, initial]);
@@ -5326,9 +5371,6 @@ if (!destValid) {
 }
     
 	  
-	  const wTons = parseFloat(weightTons);
-    if (!wTons || wTons <= 0) return Alert.alert("Required", "Enter cargo weight in tons");
-    const w = wTons * 1000; // convert tons to kg for downstream filter
     setBusy(true);
     try {
       
@@ -5382,7 +5424,7 @@ if (!dc.found) {
   return;
 }
 		
-      await onApply({ origin: originPin, dest: destPin, originCity: originInfo?.city || originInfo?.locality || originInfo?.placeName || "", destCity: destInfo?.city || destInfo?.locality || destInfo?.placeName || "", weightKg: w, volumeCuft: null, originCoord: { lat: oc.lat, lon: oc.lon }, destCoord: { lat: dc.lat, lon: dc.lon } });
+      await onApply({ origin: originPin, dest: destPin, originCity: originInfo?.city || originInfo?.locality || originInfo?.placeName || "", destCity: destInfo?.city || destInfo?.locality || destInfo?.placeName || "", weightKg: 0, volumeCuft: null, originCoord: { lat: oc.lat, lon: oc.lon }, destCoord: { lat: dc.lat, lon: dc.lon } });
     } finally { setBusy(false); }
   };
 
@@ -5424,10 +5466,6 @@ if (!dc.found) {
             </View>
             {originErr ? <Text style={[styles.errorText, { marginTop: -8, marginBottom: 8 }]}>{originErr}</Text> : null}
             {destErr ? <Text style={[styles.errorText, { marginTop: -8, marginBottom: 8 }]}>{destErr}</Text> : null}
-
-            <Field label="Cargo Weight (tons)">
-              <TextInput testID="fs-weight-input" style={[styles.input, weightTons && styles.filledBorder]} placeholder="e.g., 5" placeholderTextColor={COLORS.textSubtle} value={weightTons} onChangeText={(t) => setWeightTons(t.replace(/[^0-9.]/g, ""))} keyboardType="decimal-pad" />
-            </Field>
 
             <View style={styles.row}>
               <TouchableOpacity testID="fs-cancel-btn" style={[styles.outlineBtn, styles.flex1]} onPress={onClose} disabled={busy}>
@@ -5912,7 +5950,7 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
 // CollapsibleSection blocks for optional fields. On submit, creates a
 // standalone partial-load listing and opens WhatsApp with a pre-filled
 // share message (deep link → https://www.trucktraffic.in/a/{group_id}).
-function PostPtlLoadScreen({ profile, onNotificationsRead }: { profile: Profile; onNotificationsRead?: () => void }) {
+function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile: Profile; onNotificationsRead?: () => void; onPosted?: (filter?: ActiveFilter | null) => void }) {
   // Received interests (from bidders / interested viewers)
   const [receivedInterests, setReceivedInterests] = useState<Interest[]>([]);
 
@@ -6170,7 +6208,9 @@ function PostPtlLoadScreen({ profile, onNotificationsRead }: { profile: Profile;
       } else {
         Alert.alert("Partial Load Posted! 🎉", "Your partial load has been posted. WhatsApp is not installed on this device.");
       }
+      const routeFilter = await buildRouteFilterFromPost(originPin, originInfo, destPin, destInfo);
       reset();
+      onPosted?.(routeFilter);
     } catch (e: any) {
       Alert.alert("Network error", e?.message || "Please try again.");
     } finally {
@@ -6192,7 +6232,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead }: { profile: Profile;
                 <View style={{ flex: 1 }}>
                   <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                     <Text style={notifStyles.title}>{interest.viewer_name}</Text>
-                    {interest.viewer_verified && <Ionicons name="checkmark-circle" size={13} color="#1A9E5A" />}
+                    {interest.viewer_verified && <Ionicons name="checkmark-circle" size={13} color={COLORS.success} />}
                   </View>
                   {interest.viewer_company ? <Text style={notifStyles.body}>{interest.viewer_company}</Text> : null}
                   <Text style={notifStyles.body}>Interested in your {interest.listing_type === "ptl_group" ? "partial load group" : "truck space"}{interest.listing_summary?.origin ? ` (${interest.listing_summary.origin} → ${interest.listing_summary.destination})` : ""}</Text>
@@ -7190,7 +7230,7 @@ function MyPostsScreen({ profile }: { profile: Profile }) {
             activeOpacity={0.8}
           >
             <Text style={[styles.segmentText, activeTab === "adjustment" && styles.segmentTextOn]}>
-              Adjustment
+              Partial Load
             </Text>
           </TouchableOpacity>
         </View>
@@ -7363,7 +7403,7 @@ const styles = StyleSheet.create({
   statsRow: { flexDirection: "row", backgroundColor: COLORS.surface, borderRadius: 16, borderWidth: 1, borderColor: COLORS.border, marginTop: 16, paddingVertical: 18 },
   statBox: { flex: 1, alignItems: "center" },
   statValue: { fontSize: 22, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.primary, lineHeight: 28, letterSpacing: -0.2 },
-  statLabel: { fontSize: 11, color: COLORS.textMuted, marginTop: 6, fontFamily: "Inter_500Medium", fontWeight: "500", textTransform: "uppercase", letterSpacing: 0.8 },
+  statLabel: { fontSize: 10, color: COLORS.textMuted, marginTop: 6, fontFamily: "Inter_500Medium", fontWeight: "500", textTransform: "uppercase", letterSpacing: 0.4 },
   sectionHeading: { fontSize: 13, fontFamily: "Inter_600SemiBold", fontWeight: "600", color: COLORS.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginTop: 24, marginBottom: 12 },
   modalBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)", justifyContent: "flex-end" },
   modalSheet: { backgroundColor: COLORS.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, paddingTop: 12, maxHeight: "92%" },
