@@ -1777,7 +1777,7 @@ function VerificationDocsScreen({ phone, alreadySubmitted, onClose }: {
               </TouchableOpacity>
             </>
           )}
-        </ScrollView>
+        </SafeScrollView>
       </SafeAreaView>
     </Modal>
   );
@@ -4863,7 +4863,7 @@ function FindPtlModal({ visible, initial, onClose, onApply }: {
               <View style={{ width: 12 }} />
               <TouchableOpacity style={[styles.primaryBtn, styles.flex1, { marginTop: 0 }]} onPress={submit}><Text style={styles.primaryBtnText}>Show Matching Groups</Text></TouchableOpacity>
             </View>
-          </ScrollView>
+          </SafeScrollView>
         </KeyboardAvoidingView>
       </SafeAreaView>
     </Modal>
@@ -5083,7 +5083,7 @@ function PosterProfileModal({ visible, load, contactName, contactsMap, viewerPho
               ))}
             </>
           )}
-        </ScrollView>
+        </SafeScrollView>
       </SafeAreaView>
     </Modal>
   );
@@ -5436,7 +5436,7 @@ if (!dc.found) {
                 {busy ? <ActivityIndicator color={COLORS.surface} /> : <Text style={styles.primaryBtnText}>Show Matching Trucks</Text>}
               </TouchableOpacity>
             </View>
-          </ScrollView>
+          </SafeScrollView>
         </KeyboardAvoidingView>
       </SafeAreaView>
     </Modal>
@@ -5868,7 +5868,7 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
                 </>
               )}
             </TouchableOpacity>
-          </ScrollView>
+          </SafeScrollView>
         </View>
       </View>
     </Modal>
@@ -7142,7 +7142,7 @@ function MyPostsScreen({ profile }: { profile: Profile }) {
       ) : (
         <SafeScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
           <MyPtlLoadsList profile={profile} />
-        </ScrollView>
+        </SafeScrollView>
       )}
     </View>
   );
