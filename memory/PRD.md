@@ -121,3 +121,37 @@ Second iteration on top of the earlier "no group modal" change.
   `group_id`, both with `matched:false`.
 - Group retrievable via `GET /api/ptl/groups/{group_id}` (same endpoint the
   website's `/a/{group_id}` deep link handler uses).
+
+## 2026-01 — PTL group-formation dead-code cleanup
+Removed ~485 lines of unreachable code from the retired auto-pairing flow.
+
+**Backend (`/app/backend/server.py`)**
+- Deleted `match_ptl_load()` (127 LoC), `confirm_group_membership` endpoint
+  (`POST /ptl/groups/{group_id}/confirm`, 21 LoC), and the pair-only
+  constants `PROXIMITY_KM` / `PTL_MAX_MEMBERS`.
+- `cancel_ptl_load` now always sets remaining groups to `FORMING` (no more
+  PAIRED branch); `get_ptl_group` no longer gates phone visibility on
+  `PAIRED`/`CONFIRMED` — the poster's phone is exposed to any viewer opening
+  the detail.
+
+**Frontend (`/app/frontend/app/index.tsx`)**
+- Deleted the entire `PtlGroupDetailModal` component (252 LoC) — no longer
+  rendered anywhere.
+- Removed `handleAccept`, `handleDecline`, the `PTL_PAIR_REQUEST /
+  ACCEPTED / DECLINED` notification cards, and the local `notifications /
+  notifLoading` state that only fed them.
+- Dropped `PTL_PAIR_*` variants and pair-request-only fields
+  (`requester_*`, `pending_load_id`) from the `AppNotification` type.
+- Removed the unreachable `<PostPtlModal visible={showPostPtl}/>` in the
+  marketplace and its dead `showPostPtl` state (that modal is now only
+  rendered for the *edit* flow from `MyPtlLoadsList`).
+- Simplified `PostPtlModal`'s "Find me a group" branch → since it's only
+  ever invoked with `editLoad`, the button now unconditionally reads
+  "Save changes" and the success message is a neutral "Your partial load
+  is now listed."
+
+**Verified**
+- Backend restarts clean, `POST /ptl/loads` still returns `{load_id,
+  group_id, matched:false}` and creates a solo group.
+- Removed `POST /ptl/groups/{group_id}/confirm` now returns HTTP 404.
+- TypeScript check passes on the modified regions.

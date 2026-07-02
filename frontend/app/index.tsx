@@ -213,14 +213,8 @@ type PtlMember = {
 type AppNotification = {
   id: string;
   recipient_phone: string;
-  type: "PTL_PAIR_REQUEST" | "PTL_PAIR_ACCEPTED" | "PTL_PAIR_DECLINED" | "INTEREST_RECEIVED";
+  type: "INTEREST_RECEIVED";
   group_id?: string;
-  requester_name?: string;
-  requester_company?: string;
-  requester_weight_kg?: number;
-  requester_cargo_type?: string;
-  requester_origin?: string;
-  pending_load_id?: string;
   viewer_name?: string;
   viewer_company?: string;
   viewer_phone?: string;
@@ -3534,7 +3528,6 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
   const [ptlGroups, setPtlGroups] = useState<PtlGroup[]>([]);
   const [ptlLoading, setPtlLoading] = useState(false);
   const [ptlRefreshing, setPtlRefreshing] = useState(false);
-  const [showPostPtl, setShowPostPtl] = useState(false);
   const [selectedGroup, setSelectedGroup] = useState<PtlGroup | null>(null);
   const [showPtlFilter, setShowPtlFilter] = useState(false);
   const [ptlFilter, setPtlFilter] = useState<{ originCity: string; destCity: string; weightKg: number } | null>(null);
@@ -3751,12 +3744,6 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
         initial={ptlFilter}
         onClose={() => setShowPtlFilter(false)}
         onApply={(f) => { setPtlFilter(f); setShowPtlFilter(false); fetchPtlGroups(f); }}
-      />
-      <PostPtlModal
-        visible={showPostPtl}
-        profile={profile}
-        onClose={() => setShowPostPtl(false)}
-        onPosted={() => { setShowPostPtl(false); fetchPtlGroups(); }}
       />
       {selectedGroup && (
         <ListingDetailModal
@@ -5796,9 +5783,7 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
       }
       Alert.alert(
         editLoad ? "Posting updated!" : "Load posted!",
-        data.group_id
-          ? `You've been matched to group ${data.group_id}.`
-          : "Starting a new group on this route.",
+        "Your partial load is now listed.",
       );
       reset();
       onPosted(data);
@@ -5878,8 +5863,8 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
             >
               {busy ? <ActivityIndicator color={COLORS.surface} /> : (
                 <>
-                  <Text style={styles.primaryBtnText}>{editLoad ? "Save changes" : "Find me a group"}</Text>
-                  <Ionicons name={editLoad ? "checkmark" : "search"} size={18} color={COLORS.surface} />
+                  <Text style={styles.primaryBtnText}>Save changes</Text>
+                  <Ionicons name="checkmark" size={18} color={COLORS.surface} />
                 </>
               )}
             </TouchableOpacity>
@@ -5890,306 +5875,25 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
   );
 }
 
-function PtlGroupDetailModal({ visible, groupId, profile, onClose, onChanged, onJoinNew, banner }: {
-  visible: boolean;
-  groupId: string | null;
-  profile: Profile;
-  onClose: () => void;
-  onChanged: () => void;
-  onJoinNew: () => void;
-  banner?: { tone: "success" | "info" | "warn"; title: string; body: string };
-}) {
-  const [group, setGroup] = useState<PtlGroup | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  const fetchGroup = useCallback(async () => {
-    if (!groupId) return;
-    setLoading(true);
-    try {
-      const r = await fetch(`${API}/ptl/groups/${groupId}?viewer_phone=${encodeURIComponent(profile.phone)}`);
-      const j = await r.json();
-      if (r.ok) setGroup(j);
-    } catch {} finally { setLoading(false); }
-  }, [groupId, profile.phone]);
-
-  useEffect(() => {
-    if (visible && groupId) fetchGroup();
-    if (!visible) setGroup(null);
-  }, [visible, groupId, fetchGroup]);
-
-  const myMember = (group?.members || []).find((m) => m.is_me);
-  const partner = (group?.members || []).find((m) => !m.is_me);
-
-  const confirmMembership = async () => {
-    if (!group) return;
-    try {
-      const r = await fetch(`${API}/ptl/groups/${group.id}/confirm?phone=${encodeURIComponent(profile.phone)}`, { method: "POST" });
-      const j = await r.json();
-      if (!r.ok) return Alert.alert("Could not confirm", j?.detail || "Try again");
-      Alert.alert("Confirmed", "You're locked in for this trip.");
-      fetchGroup();
-      onChanged();
-    } catch (e: any) {
-      Alert.alert("Network error", e?.message || "Try again");
-    }
-  };
-
-  const cancelMyLoad = async () => {
-    if (!myMember?.load_id) return;
-    Alert.alert(
-      "Cancel your load?",
-      "You'll leave this group and your co-loader will be back to searching.",
-      [
-        { text: "Keep", style: "cancel" },
-        {
-          text: "Cancel load",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              const r = await fetch(`${API}/ptl/loads/${myMember.load_id}?phone=${encodeURIComponent(profile.phone)}`, { method: "DELETE" });
-              if (!r.ok) {
-                const j = await r.json().catch(() => ({}));
-                return Alert.alert("Could not cancel", j?.detail || "Try again");
-              }
-              onChanged();
-              onClose();
-            } catch (e: any) {
-              Alert.alert("Network error", e?.message || "Try again");
-            }
-          },
-        },
-      ],
-    );
-  };
-
-  const callPartner = async () => {
-    if (!partner?.phone) return;
-    try { await Linking.openURL(`tel:${partner.phone}`); } catch {}
-  };
-
-  const statusPill = (() => {
-    if (!group) return null;
-    if (group.status === "FORMING") return { label: "Waiting for partner", bg: "#FEF3C7", fg: "#92400E" };
-    if (group.status === "PAIRED")  return { label: "Paired", bg: "#DBEAFE", fg: "#1D4ED8" };
-    if (group.status === "CONFIRMED") return { label: "Confirmed ✓", bg: "#DCFCE7", fg: "#15803D" };
-    return { label: group.status, bg: "#F3F4F6", fg: "#6B7280" };
-  })();
-
-  const renderLoadCard = (m: PtlMember | undefined, opts: { isMe: boolean; phoneVisible: boolean }) => {
-    if (!m) return null;
-    const initial = (m.name || (opts.isMe ? "Y" : "?")).trim().slice(0, 1).toUpperCase();
-    return (
-      <View style={[styles.ptlPairCard, opts.isMe && styles.ptlPairCardMe]} testID={`ptl-pair-${opts.isMe ? "me" : "partner"}`}>
-        <View style={styles.ptlPairHeader}>
-          <View style={[styles.ptlAvatar, opts.isMe && { backgroundColor: COLORS.success }]}>
-            <Text style={styles.ptlAvatarText}>{initial}</Text>
-          </View>
-          <View style={{ flex: 1, marginLeft: 12 }}>
-            <Text style={styles.ptlPairName} numberOfLines={1}>
-              {opts.isMe ? "You" : (m.name || "Co-loader")}
-            </Text>
-            {!opts.isMe && !!m.company && (
-              <Text style={styles.ptlPairSub} numberOfLines={1}>{m.company}</Text>
-            )}
-          </View>
-          {m.confirmed && (
-            <Ionicons name="checkmark-circle" size={22} color={COLORS.success} />
-          )}
-        </View>
-        <View style={styles.ptlPairRoute}>
-          <Ionicons name="navigate-outline" size={14} color={COLORS.textMuted} />
-          <Text style={styles.ptlPairRouteText} numberOfLines={1}>
-            {(m as any).origin_locality || "—"} → {(m as any).destination_locality || "—"}
-          </Text>
-        </View>
-        <View style={styles.ptlPairChips}>
-          <View style={styles.ptlChip}><Text style={styles.ptlChipText}>{m.cargo_type || "—"}</Text></View>
-          <View style={styles.ptlChip}><Text style={styles.ptlChipText}>{(m.weight_kg / 1000).toFixed(1)} t</Text></View>
-          {m.cargo_category && m.cargo_category !== "GENERAL" && (
-            <View style={[styles.ptlChip, { backgroundColor: "#FEE2E2" }]}>
-              <Text style={[styles.ptlChipText, { color: "#B91C1C" }]}>{m.cargo_category}</Text>
-            </View>
-          )}
-        </View>
-        {!opts.isMe && (
-          opts.phoneVisible && m.phone ? (
-            <TouchableOpacity testID="ptl-call-partner-btn" style={styles.ptlCallBtn} onPress={callPartner} activeOpacity={0.85}>
-              <Ionicons name="call" size={18} color={COLORS.surface} />
-              <Text style={styles.ptlCallBtnText}>Call {(m.name || "co-loader").split(" ")[0]}</Text>
-            </TouchableOpacity>
-          ) : (
-            <View style={styles.ptlCallLockedRow}>
-              <Ionicons name="lock-closed-outline" size={14} color={COLORS.textMuted} />
-              <Text style={styles.ptlCallLockedText}>Number visible once paired</Text>
-            </View>
-          )
-        )}
-      </View>
-    );
-  };
-
-  return (
-    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-      <SafeAreaView style={[styles.fill, { backgroundColor: COLORS.bg }]} edges={["top"]}>
-        <View style={styles.ptlDetailHeader}>
-          <TouchableOpacity onPress={onClose} testID="ptl-detail-close">
-            <Ionicons name="arrow-back" size={24} color={COLORS.text} />
-          </TouchableOpacity>
-          <Text style={styles.ptlDetailHeaderTitle} numberOfLines={1}>Group details</Text>
-          <View style={{ width: 24 }} />
-        </View>
-        {loading || !group ? (
-          <View style={[styles.fill, styles.center]}>
-            <ActivityIndicator size="large" color={COLORS.primary} />
-          </View>
-        ) : (
-          <SafeScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
-            {banner && (
-              <View
-                testID="ptl-result-banner"
-                style={[
-                  styles.ptlBanner,
-                  banner.tone === "success" && { backgroundColor: "#DCFCE7", borderColor: "#86EFAC" },
-                  banner.tone === "info" && { backgroundColor: "#DBEAFE", borderColor: "#93C5FD" },
-                  banner.tone === "warn" && { backgroundColor: "#FEF3C7", borderColor: "#FDE68A" },
-                ]}
-              >
-                <Ionicons
-                  name={banner.tone === "success" ? "checkmark-circle" : banner.tone === "info" ? "information-circle" : "alert-circle"}
-                  size={22}
-                  color={banner.tone === "success" ? "#15803D" : banner.tone === "info" ? "#1D4ED8" : "#B45309"}
-                />
-                <View style={{ flex: 1, marginLeft: 10 }}>
-                  <Text style={[styles.ptlBannerTitle,
-                    banner.tone === "success" && { color: "#15803D" },
-                    banner.tone === "info" && { color: "#1D4ED8" },
-                    banner.tone === "warn" && { color: "#B45309" },
-                  ]}>{banner.title}</Text>
-                  <Text style={styles.ptlBannerBody}>{banner.body}</Text>
-                </View>
-              </View>
-            )}
-
-            {/* Compact header: corridor + status */}
-            <View style={styles.ptlDetailRouteCard}>
-              <Text style={styles.ptlDetailCorridor}>{group.corridor}</Text>
-              <View style={{ flexDirection: "row", alignItems: "center", marginTop: 6 }}>
-                <Text style={styles.ptlDetailRouteText} numberOfLines={1}>{group.origin_display}</Text>
-                <Ionicons name="arrow-forward" size={16} color={COLORS.textMuted} style={{ marginHorizontal: 10 }} />
-                <Text style={styles.ptlDetailRouteText} numberOfLines={1}>{group.destination_display}</Text>
-              </View>
-              {statusPill && (
-                <View style={[styles.ptlStatusPill, { marginTop: 10, alignSelf: "flex-start", backgroundColor: statusPill.bg }]}>
-                  <Text style={[styles.ptlStatusText, { color: statusPill.fg }]}>{statusPill.label}</Text>
-                </View>
-              )}
-            </View>
-
-            {/* Your load card */}
-            {myMember ? (
-              <>
-                <Text style={styles.ptlSectionLabel}>Your load</Text>
-                {renderLoadCard(myMember, { isMe: true, phoneVisible: false })}
-              </>
-            ) : null}
-
-            {/* Co-loader card OR waiting state */}
-            <Text style={styles.ptlSectionLabel}>Co-loader</Text>
-            {partner ? (
-              renderLoadCard(partner, { isMe: false, phoneVisible: group.status === "PAIRED" || group.status === "CONFIRMED" })
-            ) : (
-              <View style={styles.ptlWaitingCard} testID="ptl-waiting-state">
-                <Ionicons name="hourglass-outline" size={32} color={COLORS.primary} />
-                <Text style={styles.ptlWaitingTitle}>Waiting for a co-loader…</Text>
-                <Text style={styles.ptlWaitingSub}>
-                  We're matching you with another shipper on this route. You'll get a notification as soon as someone joins.
-                </Text>
-              </View>
-            )}
-
-            <View style={{ height: 18 }} />
-
-            {/* Action buttons */}
-            {myMember && partner && !myMember.confirmed && (
-              <TouchableOpacity testID="ptl-confirm-btn" style={styles.primaryBtn} onPress={confirmMembership}>
-                <Text style={styles.primaryBtnText}>Confirm my spot</Text>
-                <Ionicons name="checkmark" size={18} color={COLORS.surface} />
-              </TouchableOpacity>
-            )}
-            {myMember && partner && myMember.confirmed && (
-              <View style={styles.ptlConfirmedBanner}>
-                <Ionicons name="checkmark-circle" size={20} color={COLORS.success} />
-                <Text style={styles.ptlConfirmedText}>
-                  You've confirmed{partner.confirmed ? " · Both confirmed ✓" : " — waiting for co-loader to confirm"}
-                </Text>
-              </View>
-            )}
-            {!myMember && (
-              <TouchableOpacity testID="ptl-join-new-btn" style={styles.primaryBtn} onPress={onJoinNew}>
-                <Text style={styles.primaryBtnText}>Join this group</Text>
-                <Ionicons name="add" size={18} color={COLORS.surface} />
-              </TouchableOpacity>
-            )}
-            {myMember && (
-              <TouchableOpacity testID="ptl-cancel-my-load-btn" style={[styles.ptlCancelBtn, { marginTop: 12 }]} onPress={cancelMyLoad}>
-                <Ionicons name="trash-outline" size={14} color={COLORS.danger} />
-                <Text style={styles.ptlCancelText}>Cancel my load</Text>
-              </TouchableOpacity>
-            )}
-          </ScrollView>
-        )}
-      </SafeAreaView>
-    </Modal>
-  );
-}
-
 // ============== Post Partial Load Screen (3rd bottom-nav tab) ==============
 // Mirrors PostLoadScreen layout 1:1 — same stepper UI for date & weight, same
-// CollapsibleSection blocks for optional fields. On submit, opens the matched
-// or newly-created group inside PtlGroupDetailModal.
+// CollapsibleSection blocks for optional fields. On submit, creates a
+// standalone partial-load listing and opens WhatsApp with a pre-filled
+// share message (deep link → https://www.trucktraffic.in/a/{group_id}).
 function PostPtlLoadScreen({ profile, onNotificationsRead }: { profile: Profile; onNotificationsRead?: () => void }) {
-  // Notifications & received interests
-  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  // Received interests (from bidders / interested viewers)
   const [receivedInterests, setReceivedInterests] = useState<Interest[]>([]);
-  const [notifLoading, setNotifLoading] = useState(false);
 
   useEffect(() => { fetchNotifications(); }, []);
 
   const fetchNotifications = async () => {
-    setNotifLoading(true);
     try {
-      const [nr, ir] = await Promise.all([
-        fetch(`${API}/notifications/${encodeURIComponent(profile.phone)}`),
-        fetch(`${API}/interests/received/${encodeURIComponent(profile.phone)}`),
-      ]);
-      if (nr.ok) setNotifications(await nr.json());
+      const ir = await fetch(`${API}/interests/received/${encodeURIComponent(profile.phone)}`);
       if (ir.ok) setReceivedInterests(await ir.json());
+      // Mark PTL notifications as read so the bottom-tab badge clears.
       fetch(`${API}/notifications/${encodeURIComponent(profile.phone)}/read`, { method: "POST" }).catch(() => {});
       onNotificationsRead?.();
-    } catch {} finally { setNotifLoading(false); }
-  };
-
-  const handleAccept = async (notif: AppNotification) => {
-    if (!notif.group_id) return;
-    try {
-      const r = await fetch(`${API}/ptl/groups/${encodeURIComponent(notif.group_id)}/accept?phone=${encodeURIComponent(profile.phone)}`, { method: "POST" });
-      if (r.ok) { Alert.alert("Accepted!", "The co-loader has been added to your group."); fetchNotifications(); }
-      else { const e = await r.json(); Alert.alert("Error", e.detail || "Could not accept"); }
-    } catch { Alert.alert("Error", "Network error"); }
-  };
-
-  const handleDecline = async (notif: AppNotification) => {
-    if (!notif.group_id) return;
-    Alert.alert("Decline request?", "The co-loader will be notified.", [
-      { text: "Cancel", style: "cancel" },
-      { text: "Decline", style: "destructive", onPress: async () => {
-        try {
-          const r = await fetch(`${API}/ptl/groups/${encodeURIComponent(notif.group_id!)}/decline?phone=${encodeURIComponent(profile.phone)}`, { method: "POST" });
-          if (r.ok) { Alert.alert("Declined", "The request has been declined."); fetchNotifications(); }
-          else { const e = await r.json(); Alert.alert("Error", e.detail || "Could not decline"); }
-        } catch { Alert.alert("Error", "Network error"); }
-      }},
-    ]);
+    } catch {}
   };
 
   // Route
@@ -6445,43 +6149,6 @@ function PostPtlLoadScreen({ profile, onNotificationsRead }: { profile: Profile;
   return (
     <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.fill}>
       <ScrollView contentContainerStyle={styles.formWrap} keyboardShouldPersistTaps="handled" testID="post-ptl-screen">
-
-        {/* ── Notifications ── */}
-        {notifications.filter(n => n.type === "PTL_PAIR_REQUEST").map(notif => (
-          <View key={notif.id} style={notifStyles.card}>
-            <View style={notifStyles.iconWrap}><Ionicons name="people" size={20} color={COLORS.primary} /></View>
-            <View style={{ flex: 1 }}>
-              <Text style={notifStyles.title}>Co-loader Request</Text>
-              <Text style={notifStyles.body}><Text style={{ fontFamily: "Inter_700Bold" }}>{notif.requester_name}</Text>{notif.requester_company ? ` (${notif.requester_company})` : ""} wants to join your group from {notif.requester_origin}. They have {((notif.requester_weight_kg || 0) / 1000).toFixed(1)} T of {notif.requester_cargo_type}.</Text>
-              <View style={{ flexDirection: "row", gap: 8, marginTop: 10 }}>
-                <TouchableOpacity style={[notifStyles.actionBtn, { backgroundColor: COLORS.success }]} onPress={() => handleAccept(notif)}>
-                  <Ionicons name="checkmark" size={14} color={COLORS.surface} /><Text style={notifStyles.actionBtnText}>Accept</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={[notifStyles.actionBtn, { backgroundColor: "#FEE2E2" }]} onPress={() => handleDecline(notif)}>
-                  <Ionicons name="close" size={14} color="#DC2626" /><Text style={[notifStyles.actionBtnText, { color: "#DC2626" }]}>Decline</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        ))}
-        {notifications.filter(n => n.type === "PTL_PAIR_ACCEPTED").map(notif => (
-          <View key={notif.id} style={[notifStyles.card, { borderColor: COLORS.success }]}>
-            <View style={[notifStyles.iconWrap, { backgroundColor: "#ECFDF5" }]}><Ionicons name="checkmark-circle" size={20} color={COLORS.success} /></View>
-            <View style={{ flex: 1 }}>
-              <Text style={notifStyles.title}>Request Accepted ✓</Text>
-              <Text style={notifStyles.body}>Your co-loader request was accepted. Contact them to coordinate pickup.</Text>
-            </View>
-          </View>
-        ))}
-        {notifications.filter(n => n.type === "PTL_PAIR_DECLINED").map(notif => (
-          <View key={notif.id} style={[notifStyles.card, { borderColor: "#FCA5A5" }]}>
-            <View style={[notifStyles.iconWrap, { backgroundColor: "#FEE2E2" }]}><Ionicons name="close-circle" size={20} color="#DC2626" /></View>
-            <View style={{ flex: 1 }}>
-              <Text style={notifStyles.title}>Request Declined</Text>
-              <Text style={notifStyles.body}>Your co-loader request was declined. Your load is back in search.</Text>
-            </View>
-          </View>
-        ))}
 
         {/* ── Received Interests ── */}
         {receivedInterests.length > 0 && (
