@@ -154,12 +154,20 @@ type PtlLoad = {
   poster_company?: string;
   origin_locality: string;
   origin_city: string;
+  origin_state?: string;
   origin_pincode: string;
+  origin_place_name?: string;
+  origin_full_address?: string;
+  origin_eloc?: string;
   origin_latitude?: number | null;
   origin_longitude?: number | null;
   destination_locality: string;
   destination_city: string;
+  destination_state?: string;
   destination_pincode: string;
+  destination_place_name?: string;
+  destination_full_address?: string;
+  destination_eloc?: string;
   destination_latitude?: number | null;
   destination_longitude?: number | null;
   cargo_type: string;
@@ -1775,7 +1783,7 @@ function VerificationDocsScreen({ phone, alreadySubmitted, onClose }: {
               </TouchableOpacity>
             </>
           )}
-        </SafeScrollView>
+        </ScrollView>
       </SafeAreaView>
     </Modal>
   );
@@ -4868,7 +4876,7 @@ function FindPtlModal({ visible, initial, onClose, onApply }: {
               <View style={{ width: 12 }} />
               <TouchableOpacity style={[styles.primaryBtn, styles.flex1, { marginTop: 0 }]} onPress={submit}><Text style={styles.primaryBtnText}>Show Matching Groups</Text></TouchableOpacity>
             </View>
-        </SafeScrollView>
+          </ScrollView>
         </KeyboardAvoidingView>
       </SafeAreaView>
     </Modal>
@@ -5088,7 +5096,7 @@ function PosterProfileModal({ visible, load, contactName, contactsMap, viewerPho
               ))}
             </>
           )}
-       </SafeScrollView>
+        </ScrollView>
       </SafeAreaView>
     </Modal>
   );
@@ -5441,7 +5449,7 @@ if (!dc.found) {
                 {busy ? <ActivityIndicator color={COLORS.surface} /> : <Text style={styles.primaryBtnText}>Show Matching Trucks</Text>}
               </TouchableOpacity>
             </View>
-         </SafeScrollView>
+          </ScrollView>
         </KeyboardAvoidingView>
       </SafeAreaView>
     </Modal>
@@ -5644,7 +5652,11 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
       setOriginInfo({
         locality: editLoad.origin_locality,
         city: editLoad.origin_city,
+        state: (editLoad as any).origin_state,
         pincode: editLoad.origin_pincode,
+        placeName: (editLoad as any).origin_place_name,
+        fullAddress: (editLoad as any).origin_full_address,
+        eLoc: (editLoad as any).origin_eloc,
         latitude: editLoad.origin_latitude,
         longitude: editLoad.origin_longitude,
       });
@@ -5653,7 +5665,11 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
       setDestInfo({
         locality: editLoad.destination_locality,
         city: editLoad.destination_city,
+        state: (editLoad as any).destination_state,
         pincode: editLoad.destination_pincode,
+        placeName: (editLoad as any).destination_place_name,
+        fullAddress: (editLoad as any).destination_full_address,
+        eLoc: (editLoad as any).destination_eloc,
         latitude: editLoad.destination_latitude,
         longitude: editLoad.destination_longitude,
       });
@@ -5746,12 +5762,20 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
           poster_phone: profile.phone,
           origin_locality: originInfo?.locality || originText || originInfo?.placeName || "",
           origin_city: originInfo?.city || originInfo?.locality || originInfo?.placeName || originText || "",
+          origin_state: originInfo?.state || "",
           origin_pincode: originPin || "",
+          origin_place_name: originInfo?.placeName || "",
+          origin_full_address: originInfo?.fullAddress || "",
+          origin_eloc: originInfo?.eLoc || "",
           origin_latitude: originInfo?.latitude ?? null,
           origin_longitude: originInfo?.longitude ?? null,
           destination_locality: destInfo?.locality || destText || destInfo?.placeName || "",
           destination_city: destInfo?.city || destInfo?.locality || destInfo?.placeName || destText || "",
+          destination_state: destInfo?.state || "",
           destination_pincode: destPin || "",
+          destination_place_name: destInfo?.placeName || "",
+          destination_full_address: destInfo?.fullAddress || "",
+          destination_eloc: destInfo?.eLoc || "",
           destination_latitude: destInfo?.latitude ?? null,
           destination_longitude: destInfo?.longitude ?? null,
           cargo_type: cargoType,
@@ -5859,7 +5883,7 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
                 </>
               )}
             </TouchableOpacity>
-        </SafeScrollView>
+          </ScrollView>
         </View>
       </View>
     </Modal>
@@ -6112,7 +6136,7 @@ function PtlGroupDetailModal({ visible, groupId, profile, onClose, onChanged, on
                 <Text style={styles.ptlCancelText}>Cancel my load</Text>
               </TouchableOpacity>
             )}
-         </SafeScrollView>
+          </ScrollView>
         )}
       </SafeAreaView>
     </Modal>
@@ -6331,12 +6355,20 @@ function PostPtlLoadScreen({ profile, onNotificationsRead }: { profile: Profile;
           poster_phone: profile.phone,
           origin_locality: originInfo?.locality || originText || originInfo?.placeName || "",
           origin_city: originInfo?.city || originInfo?.locality || originInfo?.placeName || originText || "",
+          origin_state: originInfo?.state || "",
           origin_pincode: originPin || "",
+          origin_place_name: originInfo?.placeName || "",
+          origin_full_address: originInfo?.fullAddress || "",
+          origin_eloc: originInfo?.eLoc || "",
           origin_latitude: originInfo?.latitude ?? null,
           origin_longitude: originInfo?.longitude ?? null,
           destination_locality: destInfo?.locality || destText || destInfo?.placeName || "",
           destination_city: destInfo?.city || destInfo?.locality || destInfo?.placeName || destText || "",
+          destination_state: destInfo?.state || "",
           destination_pincode: destPin || "",
+          destination_place_name: destInfo?.placeName || "",
+          destination_full_address: destInfo?.fullAddress || "",
+          destination_eloc: destInfo?.eLoc || "",
           destination_latitude: destInfo?.latitude ?? null,
           destination_longitude: destInfo?.longitude ?? null,
           cargo_type: cargoTypeFinal,
@@ -7419,7 +7451,7 @@ function MyPostsScreen({ profile }: { profile: Profile }) {
       ) : (
         <SafeScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
           <MyPtlLoadsList profile={profile} />
-    </SafeScrollView>
+        </ScrollView>
       )}
     </View>
   );
