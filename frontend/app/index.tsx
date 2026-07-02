@@ -3456,7 +3456,7 @@ function trackDistancesKm(start: { lat: number; lon: number }, end: { lat: numbe
   return { cross: Math.abs(xt), along: at };
 }
 
-type ActiveFilter = { origin: string; dest: string; weightKg: number; volumeCuft: number | null; originCoord: { lat: number; lon: number }; destCoord: { lat: number; lon: number } };
+type ActiveFilter = { origin: string; dest: string; originCity?: string; destCity?: string; weightKg: number; volumeCuft: number | null; originCoord: { lat: number; lon: number }; destCoord: { lat: number; lon: number } };
 type Distances = Record<string, { origin: number; dest: number; offRoute: boolean }>;
 
 // Map of 10-digit phone -> saved contact name from the user's address book.
@@ -3514,7 +3514,13 @@ function useContactsMap(userPhone?: string): Map<string, string> {
 }
 
 function LoadMarketScreen({ profile }: { profile: Profile }) {
-  const [marketMode, setMarketMode] = useState<"full" | "ptl">("full");
+  // Independent, toggle-able type filters — both OFF by default, which means
+  // "show everything". Selecting one narrows the combined list to just that
+  // type; selecting both is equivalent to neither being selected (shows all).
+  const [showTrucks, setShowTrucks] = useState(false);
+  const [showPartials, setShowPartials] = useState(false);
+  const includeTrucks = showTrucks || !showPartials;
+  const includePartials = showPartials || !showTrucks;
   const [allLoads, setAllLoads] = useState<Load[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -3529,14 +3535,12 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
   const [ptlLoading, setPtlLoading] = useState(false);
   const [ptlRefreshing, setPtlRefreshing] = useState(false);
   const [selectedGroup, setSelectedGroup] = useState<PtlGroup | null>(null);
-  const [showPtlFilter, setShowPtlFilter] = useState(false);
-  const [ptlFilter, setPtlFilter] = useState<{ originCity: string; destCity: string; weightKg: number } | null>(null);
   const [showPtlDetail, setShowPtlDetail] = useState(false);
 
   const fetchPtlGroups = useCallback(async (filter?: { originCity: string; destCity: string; weightKg: number } | null) => {
     setPtlLoading(true);
     try {
-      const f = filter !== undefined ? filter : ptlFilter;
+      const f = filter !== undefined ? filter : (activeFilter ? { originCity: activeFilter.originCity || "", destCity: activeFilter.destCity || "", weightKg: activeFilter.weightKg } : null);
       const params = new URLSearchParams();
       if (f?.originCity) params.set("origin_city", f.originCity);
       if (f?.destCity) params.set("dest_city", f.destCity);
@@ -3563,7 +3567,9 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
       setPtlLoading(false);
       setPtlRefreshing(false);
     }
-  }, [ptlFilter, profile.phone]);
+  }, [activeFilter, profile.phone]);
+
+  useEffect(() => { fetchPtlGroups(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchLoads = useCallback(async () => {
     try { const r = await fetch(`${API}/loads`); const j = await r.json(); setAllLoads(j); }
@@ -3625,36 +3631,75 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
     setDistances(dist);
   }, [allLoads]);
 
-  const onApplyFilter = async (f: ActiveFilter) => { setActiveFilter(f); setShowFilter(false); await applyFilter(f); };
-  const onClearFilter = () => { setActiveFilter(null); setFilteredLoads(null); setDistances({}); };
+  // Common filter: applies to trucks (client-side haversine route match) and
+  // to partial loads (server-side city/weight match) at the same time.
+  const onApplyFilter = async (f: ActiveFilter) => {
+    setActiveFilter(f);
+    setShowFilter(false);
+    await Promise.all([
+      applyFilter(f),
+      fetchPtlGroups({ originCity: f.originCity || "", destCity: f.destCity || "", weightKg: f.weightKg }),
+    ]);
+  };
+  const onClearFilter = () => {
+    setActiveFilter(null);
+    setFilteredLoads(null);
+    setDistances({});
+    fetchPtlGroups(null);
+  };
   const isFiltered = activeFilter !== null;
   const displayLoads = isFiltered ? filteredLoads || [] : allLoads;
+
+  // Combine both listing types into one feed, tagged by type so the
+  // renderer knows which card component to use. When unfiltered, sort by
+  // recency so newer truck-space and partial-load posts interleave
+  // naturally; when filtered, truck matches (already sorted by relevance)
+  // come first, followed by matching partial-load groups.
+  type FeedItem = { kind: "truck"; key: string; load: Load } | { kind: "ptl"; key: string; group: PtlGroup };
+  const feed = useMemo<FeedItem[]>(() => {
+    const truckItems: FeedItem[] = includeTrucks ? displayLoads.map((l) => ({ kind: "truck" as const, key: `t-${l.id}`, load: l })) : [];
+    const ptlItems: FeedItem[] = includePartials ? ptlGroups.map((g) => ({ kind: "ptl" as const, key: `p-${g.id}`, group: g })) : [];
+    if (isFiltered) return [...truckItems, ...ptlItems];
+    return [...truckItems, ...ptlItems].sort((a, b) => {
+      const ta = a.kind === "truck" ? a.load.created_at : a.group.created_at;
+      const tb = b.kind === "truck" ? b.load.created_at : b.group.created_at;
+      return new Date(tb).getTime() - new Date(ta).getTime();
+    });
+  }, [includeTrucks, includePartials, displayLoads, ptlGroups, isFiltered]);
+
+  const isBusy = loading || ptlLoading;
+  const isRefreshing = refreshing || ptlRefreshing;
+  const onRefreshAll = () => {
+    setRefreshing(true); setPtlRefreshing(true);
+    fetchLoads();
+    fetchPtlGroups();
+  };
 
   return (
     <View style={styles.fill}>
       <View style={styles.modeToggleBar} testID="market-mode-toggle">
         <TouchableOpacity
           testID="market-mode-full"
-          style={[styles.modeToggleBtn, marketMode === "full" && [styles.modeToggleBtnActive, { backgroundColor: COLORS.primary }]]}
-          onPress={() => setMarketMode("full")}
+          style={[styles.modeToggleBtn, showTrucks && [styles.modeToggleBtnActive, { backgroundColor: COLORS.primary }]]}
+          onPress={() => setShowTrucks((v) => !v)}
         >
-          <Ionicons name="car-outline" size={14} color={marketMode === "full" ? COLORS.surface : COLORS.textMuted} />
-          <Text style={[styles.modeToggleText, marketMode === "full" && styles.modeToggleTextActive]}>Find Truck</Text>
+          <Ionicons name="car-outline" size={14} color={showTrucks ? COLORS.surface : COLORS.textMuted} />
+          <Text style={[styles.modeToggleText, showTrucks && styles.modeToggleTextActive]}>Find Truck</Text>
         </TouchableOpacity>
         <TouchableOpacity
           testID="market-mode-ptl"
-          style={[styles.modeToggleBtn, marketMode === "ptl" && [styles.modeToggleBtnActive, { backgroundColor: COLORS.secondary }]]}
-          onPress={() => { setMarketMode("ptl"); fetchPtlGroups(); }}
+          style={[styles.modeToggleBtn, showPartials && [styles.modeToggleBtnActive, { backgroundColor: COLORS.secondary }]]}
+          onPress={() => setShowPartials((v) => !v)}
         >
-          <Ionicons name="cube-outline" size={14} color={marketMode === "ptl" ? COLORS.surface : COLORS.textMuted} />
-          <Text style={[styles.modeToggleText, marketMode === "ptl" && styles.modeToggleTextActive]}>Find Partial Load</Text>
+          <Ionicons name="cube-outline" size={14} color={showPartials ? COLORS.surface : COLORS.textMuted} />
+          <Text style={[styles.modeToggleText, showPartials && styles.modeToggleTextActive]}>Find Partial Load</Text>
         </TouchableOpacity>
       </View>
 
-      {marketMode === "full" ? (
-        <>
-          <View style={styles.marketTop}>
-        <Text style={styles.marketCount} testID="loads-count">{displayLoads.length} {displayLoads.length === 1 ? "truck" : "trucks"} {isFiltered ? "matched" : "available"}</Text>
+      <View style={styles.marketTop}>
+        <Text style={styles.marketCount} testID="loads-count">
+          {feed.length} {feed.length === 1 ? "result" : "results"} {isFiltered ? "matched" : "available"}
+        </Text>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
           {isFiltered && (
             <TouchableOpacity testID="clear-filter-btn" onPress={onClearFilter} style={styles.clearChip}>
@@ -3669,82 +3714,36 @@ function LoadMarketScreen({ profile }: { profile: Profile }) {
           </TouchableOpacity>
         </View>
       </View>
-      {loading ? (
+
+      {isBusy && feed.length === 0 ? (
         <View style={[styles.fill, styles.center]}><ActivityIndicator size="large" color={COLORS.primary} /></View>
       ) : (
         <FlatList
-          testID="loads-list"
-          data={displayLoads}
-          keyExtractor={(it) => it.id}
+          testID="market-feed-list"
+          data={feed}
+          keyExtractor={(it) => it.key}
           contentContainerStyle={{ padding: 16, paddingBottom: 80 }}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchLoads(); }} />}
-          ListFooterComponent={isFiltered && displayLoads.length > 0 ? <Text style={styles.approxNote}>* Distances are approximate (straight-line)</Text> : null}
+          refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={onRefreshAll} />}
+          ListFooterComponent={isFiltered && feed.length > 0 ? <Text style={styles.approxNote}>* Truck-space distances are approximate (straight-line)</Text> : null}
           ListEmptyComponent={
             <View style={styles.emptyWrap} testID="empty-state">
               <Ionicons name={isFiltered ? "search" : "cube-outline"} size={48} color={COLORS.textSubtle} />
-              <Text style={styles.emptyTitle}>{isFiltered ? "No matching trucks found" : "No loads yet"}</Text>
-              <Text style={styles.emptySub}>{isFiltered ? "Try adjusting your cargo details or search within a wider area." : "Be the first to post a load!"}</Text>
+              <Text style={styles.emptyTitle}>{isFiltered ? "No matching listings found" : "No listings yet"}</Text>
+              <Text style={styles.emptySub}>{isFiltered ? "Try adjusting your cargo details or search within a wider area." : "Be the first to post a truck space or partial load!"}</Text>
             </View>
           }
           extraData={contactsMap.size}
-          renderItem={({ item }) => <LoadCard load={item} isMine={item.poster_phone === profile.phone} distance={isFiltered ? distances[item.id] : undefined} contactName={contactsMap.get(item.poster_phone)} contactsMap={contactsMap} viewerPhone={profile.phone} />}
+          renderItem={({ item }) =>
+            item.kind === "truck" ? (
+              <LoadCard load={item.load} isMine={item.load.poster_phone === profile.phone} distance={isFiltered ? distances[item.load.id] : undefined} contactName={contactsMap.get(item.load.poster_phone)} contactsMap={contactsMap} viewerPhone={profile.phone} />
+            ) : (
+              <PtlGroupCard group={item.group} profile={profile} contactsMap={contactsMap} onPress={() => { setSelectedGroup(item.group); setShowPtlDetail(true); }} />
+            )
+          }
         />
-      )}
-      <FindSpaceModal visible={showFilter} initial={activeFilter} onClose={() => setShowFilter(false)} onApply={onApplyFilter} />
-        </>
-      ) : (
-        <>
-          <View style={styles.marketTop}>
-            <Text style={styles.marketCount} testID="ptl-count">
-              {ptlGroups.length} {ptlGroups.length === 1 ? "group" : "groups"} {ptlFilter ? "matched" : "forming"}
-            </Text>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-              {ptlFilter && (
-                <TouchableOpacity testID="ptl-clear-filter-btn" onPress={() => { setPtlFilter(null); fetchPtlGroups(null); }} style={styles.clearChip}>
-                  <Ionicons name="close" size={14} color={COLORS.textMuted} />
-                  <Text style={styles.clearChipText}>Clear</Text>
-                </TouchableOpacity>
-              )}
-              <TouchableOpacity testID="ptl-filter-btn" style={[styles.filterBtn, ptlFilter && styles.filterBtnActive]} onPress={() => setShowPtlFilter(true)}>
-                <Ionicons name="options-outline" size={16} color={ptlFilter ? COLORS.surface : COLORS.primary} />
-                <Text style={[styles.filterBtnText, ptlFilter && { color: COLORS.surface }]}>Filter</Text>
-                {ptlFilter && <View style={styles.filterDot} />}
-              </TouchableOpacity>
-            </View>
-          </View>
-          <FlatList
-            testID="ptl-groups-list"
-            data={ptlGroups}
-            keyExtractor={(g) => g.id}
-            contentContainerStyle={{ padding: 16, paddingBottom: 80 }}
-            refreshControl={<RefreshControl refreshing={ptlRefreshing} onRefresh={() => { setPtlRefreshing(true); fetchPtlGroups(); }} />}
-            ListEmptyComponent={
-              ptlLoading ? (
-                <View style={[styles.center, { paddingVertical: 48 }]}>
-                  <ActivityIndicator size="large" color={COLORS.primary} />
-                </View>
-              ) : (
-                <View style={styles.emptyWrap} testID="ptl-empty-state">
-                  <Ionicons name="cube-outline" size={48} color={COLORS.textSubtle} />
-                  <Text style={styles.emptyTitle}>{ptlFilter ? "No matching groups found" : "No groups forming yet"}</Text>
-                  <Text style={styles.emptySub}>{ptlFilter ? "Try adjusting your filter or clear it to see all groups." : "Tap Post → Adjustment to post a partial load."}</Text>
-                </View>
-              )
-            }
-            renderItem={({ item }) => (
-              <PtlGroupCard group={item} profile={profile} contactsMap={contactsMap} onPress={() => { setSelectedGroup(item); setShowPtlDetail(true); }} />
-            )}
-          />
-        </>
       )}
 
       <FindSpaceModal visible={showFilter} initial={activeFilter} onClose={() => setShowFilter(false)} onApply={onApplyFilter} />
-      <FindPtlModal
-        visible={showPtlFilter}
-        initial={ptlFilter}
-        onClose={() => setShowPtlFilter(false)}
-        onApply={(f) => { setPtlFilter(f); setShowPtlFilter(false); fetchPtlGroups(f); }}
-      />
       {selectedGroup && (
         <ListingDetailModal
           visible={showPtlDetail}
@@ -3884,25 +3883,29 @@ function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhon
   return (
     <TouchableOpacity activeOpacity={0.92} onPress={() => setShowDetail(true)} testID={`load-card-${load.id}`}>
     <View style={[styles.card, marketCardStyles.truckCardOutline]}>
+      {/* At-a-glance type badge. Blue = Truck Space, matching the card's
+          border color and the app's Truck Space theme elsewhere. */}
+      <View style={[marketCardStyles.typeBadgeInline, marketCardStyles.typeBadgeTruck]}>
+        <Ionicons name="car-outline" size={11} color={COLORS.surface} />
+        <Text style={marketCardStyles.typeBadgeText}>TRUCK SPACE</Text>
+      </View>
       {/* Share-to-WhatsApp button pinned to top-right of the card. The
-          combined "share-social" icon + "Share to" label + WhatsApp logo makes
-          it unambiguous that this *forwards* the load details to a WhatsApp
-          chat (it does NOT start a direct chat with the poster). */}
+          combined "share-social" icon makes it clear this *forwards* the
+          load details to a WhatsApp chat (it does NOT start a direct chat
+          with the poster). */}
       <TouchableOpacity
         testID={`share-wa-${load.id}`}
         style={cardStyles.shareTopPill}
         onPress={shareOnWhatsApp}
         activeOpacity={0.85}
-        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
       >
-        <Ionicons name="share-social" size={13} color="#25D366" />
-        <Text style={cardStyles.shareTopPillText}>Share to</Text>
-        <Ionicons name="logo-whatsapp" size={14} color="#25D366" />
+        <Ionicons name="share-social" size={14} color="#25D366" />
       </TouchableOpacity>
 
       {/* LINE 1: Route */}
       <View style={styles.cardRouteRow}>
-        <View style={[styles.flex1, { paddingRight: 110 }]}>
+        <View style={[styles.flex1, { paddingRight: 50 }]}>
           <RouteEndpointBlock
             iconName="location" iconColor={COLORS.secondary}
             locality={load.origin_locality || ""} city={load.origin_city || ""} state={load.origin_state || ""} pincode={load.origin_pincode || ""}
@@ -5209,11 +5212,10 @@ const cardStyles = StyleSheet.create({
     top: 10,
     right: 10,
     zIndex: 5,
-    flexDirection: "row",
+    width: 30,
+    height: 30,
     alignItems: "center",
-    gap: 5,
-    paddingVertical: 5,
-    paddingHorizontal: 9,
+    justifyContent: "center",
     borderRadius: 100,
     borderWidth: 1,
     borderColor: "#25D366",
@@ -5380,7 +5382,7 @@ if (!dc.found) {
   return;
 }
 		
-      await onApply({ origin: originPin, dest: destPin, weightKg: w, volumeCuft: null, originCoord: { lat: oc.lat, lon: oc.lon }, destCoord: { lat: dc.lat, lon: dc.lon } });
+      await onApply({ origin: originPin, dest: destPin, originCity: originInfo?.city || originInfo?.locality || originInfo?.placeName || "", destCity: destInfo?.city || destInfo?.locality || destInfo?.placeName || "", weightKg: w, volumeCuft: null, originCoord: { lat: oc.lat, lon: oc.lon }, destCoord: { lat: dc.lat, lon: dc.lon } });
     } finally { setBusy(false); }
   };
 
@@ -5396,7 +5398,7 @@ if (!dc.found) {
         </View>
         <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.fill}>
           <SafeScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
-            <Text style={styles.modalSubtitle}>Enter your cargo details to find matching trucks within 30 km of your route.</Text>
+            <Text style={styles.modalSubtitle}>Enter your cargo details to find matching truck space and partial loads within 30 km of your route.</Text>
 
             <SectionTitle icon="navigate-outline" title="Route" />
             <View style={styles.routeInputsRow}>
@@ -5518,15 +5520,19 @@ function PtlGroupCard({ group, profile, onPress, contactsMap }: { group: PtlGrou
 
   return (
     <TouchableOpacity testID={`ptl-group-card-${group.id}`} onPress={onPress} activeOpacity={0.92} style={[styles.card, marketCardStyles.cardOutline]}>
+      {/* At-a-glance type badge. Orange = Partial Load, matching the card's
+          border color and the app's Adjustment Load theme elsewhere. */}
+      <View style={[marketCardStyles.typeBadgeInline, marketCardStyles.typeBadgePtl]}>
+        <Ionicons name="cube-outline" size={11} color={COLORS.surface} />
+        <Text style={marketCardStyles.typeBadgeText}>PARTIAL LOAD</Text>
+      </View>
       {/* Share pill — top right, same position as LoadCard */}
-      <TouchableOpacity style={cardStyles.shareTopPill} onPress={shareOnWhatsApp} activeOpacity={0.85} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
-        <Ionicons name="share-social" size={13} color="#25D366" />
-        <Text style={cardStyles.shareTopPillText}>Share to</Text>
-        <Ionicons name="logo-whatsapp" size={14} color="#25D366" />
+      <TouchableOpacity style={cardStyles.shareTopPill} onPress={shareOnWhatsApp} activeOpacity={0.85} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+        <Ionicons name="share-social" size={14} color="#25D366" />
       </TouchableOpacity>
 
       {/* LINE 1: Route — origin / destination stacked, same layout as Find Truck card */}
-      <View style={[styles.cardRouteRow, { paddingRight: 110 }]}>
+      <View style={[styles.cardRouteRow, { paddingRight: 50 }]}>
         <View style={styles.flex1}>
           <RouteEndpointBlock
             iconName="location" iconColor={COLORS.secondary}
@@ -5611,6 +5617,32 @@ function PtlGroupCard({ group, profile, onPress, contactsMap }: { group: PtlGrou
 const marketCardStyles = StyleSheet.create({
   cardOutline: { borderColor: COLORS.secondary, borderWidth: 1.5 },
   truckCardOutline: { borderColor: COLORS.primary, borderWidth: 1.5 },
+  typeBadge: {
+    position: "absolute",
+    top: -1,
+    left: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderBottomLeftRadius: 8,
+    borderBottomRightRadius: 8,
+    zIndex: 2,
+  },
+  typeBadgeInline: {
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    marginBottom: 10,
+  },
+  typeBadgeTruck: { backgroundColor: COLORS.primary },
+  typeBadgePtl: { backgroundColor: COLORS.secondary },
+  typeBadgeText: { fontSize: 10, fontWeight: "800", color: COLORS.surface, letterSpacing: 0.4 },
 });
 
 function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editLoad }: {
@@ -6632,7 +6664,33 @@ function MyPtlLoadsList({ profile }: { profile: Profile }) {
         fetch(`${API}/bids/counts/${encodeURIComponent(profile.phone)}`).then(rr => rr.json()).catch(() => ({})),
       ]);
       const data = await r.json();
-      const list: PtlLoad[] = Array.isArray(data) ? data : [];
+      let list: PtlLoad[] = Array.isArray(data) ? data : [];
+
+      // Postings whose loading date has passed are no longer relevant — delete
+      // them outright (not just hide them client-side) so they don't linger
+      // in My Posts forever. Only auto-clean active postings (OPEN/MATCHED);
+      // CONFIRMED/CANCELLED loads are left alone since they're terminal states.
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const isExpired = (l: PtlLoad) => {
+        if (l.status !== "OPEN" && l.status !== "MATCHED") return false;
+        if (!l.loading_date) return false;
+        try {
+          const d = new Date(l.loading_date);
+          d.setHours(0, 0, 0, 0);
+          return d < today;
+        } catch { return false; }
+      };
+      const expired = list.filter(isExpired);
+      if (expired.length > 0) {
+        await Promise.all(
+          expired.map((l) =>
+            fetch(`${API}/ptl/loads/${l.id}?phone=${encodeURIComponent(profile.phone)}`, { method: "DELETE" }).catch(() => {}),
+          ),
+        );
+        const expiredIds = new Set(expired.map((l) => l.id));
+        list = list.filter((l) => !expiredIds.has(l.id));
+      }
+
       setLoads(list);
       setBidCounts(typeof countsRes === "object" && countsRes ? countsRes : {});
       const gids = Array.from(new Set(list.map((l) => l.group_id).filter(Boolean) as string[]));
