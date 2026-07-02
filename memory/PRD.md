@@ -155,3 +155,34 @@ Removed ~485 lines of unreachable code from the retired auto-pairing flow.
   group_id, matched:false}` and creates a solo group.
 - Removed `POST /ptl/groups/{group_id}/confirm` now returns HTTP 404.
 - TypeScript check passes on the modified regions.
+
+---
+
+## 2026-01 — Adjustment Load (PTL) expired posts: hard-delete instead of soft-cancel
+
+**Problem**
+Adjustment / Partial Load postings whose loading date had passed were
+"disappearing" from My Posts (client-side filter) but the DB rows were
+being kept alive with `status = "CANCELLED"`. User wanted expired
+adjustment entries to be actually deleted from the DB, matching the
+behaviour of Truck Space postings (`DELETE /api/loads/{id}` — hard delete).
+
+**Changes**
+- `backend/server.py` → `DELETE /api/ptl/loads/{load_id}` now
+  hard-deletes the load row (`db.ptl_loads.delete_one`) instead of
+  updating it to `CANCELLED`. Response changed from `{cancelled: true}`
+  to `{deleted: true}`.
+- The endpoint still recomputes the parent group (or deletes the group
+  when the last member is removed), and now also removes orphan bids
+  via `db.bids.delete_many({listing_id: load_id})`.
+- `backend/tests/test_ptl_api.py` updated to assert the row is gone
+  (`ld is None`) and the response contains `deleted: true`.
+
+**Impact on frontend**
+- `MyPtlLoadsList` auto-expiry sweep (loading_date in past) already
+  called this endpoint; it now results in an actual row deletion.
+- Manual "Delete" button on My Posts → Adjustment tab also hard-deletes.
+
+**Verified**
+- Create → 1 row in DB → DELETE returns `{deleted: true}` → 0 rows in
+  DB → second DELETE returns 404. Empty solo group also cleaned up.

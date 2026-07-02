@@ -323,17 +323,17 @@ class TestPtlCancel:
         assert r.status_code == 404
 
     def test_cancel_recomputes_group(self, mongo_db):
-        # Cancel PHONES[1]'s load (load_id_2). Group started with 7000kg (3000+4000).
-        # After cancel total=3000, fill=15%, status FORMING.
+        # Delete PHONES[1]'s load (load_id_2). Group started with 7000kg (3000+4000).
+        # After delete total=3000, fill=15%, status FORMING.
         gid = pytest.shared["group_id"]
         lid = pytest.shared["load_id_2"]
         r = requests.delete(f"{BASE_URL}/ptl/loads/{lid}",
                             params={"phone": PHONES[1]})
         assert r.status_code == 200
-        assert r.json()["cancelled"] is True
-        # Verify load row
+        assert r.json()["deleted"] is True
+        # Verify load row was hard-deleted from DB
         ld = mongo_db.ptl_loads.find_one({"id": lid})
-        assert ld["status"] == "CANCELLED"
+        assert ld is None
         # Verify group recomputed
         g = mongo_db.ptl_groups.find_one({"id": gid})
         assert g is not None

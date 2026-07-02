@@ -1419,7 +1419,10 @@ async def get_my_ptl_loads(phone: str):
     return out
 
 
-# ── CANCEL a PTL load ──────────────────────────────────────────────────────
+# ── DELETE a PTL load (hard delete) ────────────────────────────────────────
+# Hard-deletes the load row from the DB (matches truck-space DELETE behaviour)
+# and recomputes/cleans up the group it belonged to. Related bids for this
+# listing are also removed so they don't linger as orphans.
 @api_router.delete("/ptl/loads/{load_id}")
 async def cancel_ptl_load(load_id: str, phone: str):
     load = await db.ptl_loads.find_one({"id": load_id})
@@ -1427,13 +1430,19 @@ async def cancel_ptl_load(load_id: str, phone: str):
         raise HTTPException(status_code=404, detail="Load not found")
     if load["poster_phone"] != _norm_phone(phone):
         raise HTTPException(status_code=403, detail="Not your load")
-    if load.get("status") == "CANCELLED":
-        return {"cancelled": True}
 
-    await db.ptl_loads.update_one({"id": load_id}, {"$set": {"status": "CANCELLED", "group_id": None}})
-
-    # Remove from group and recompute group totals
     gid = load.get("group_id")
+
+    # Remove the load row itself (hard delete)
+    await db.ptl_loads.delete_one({"id": load_id})
+
+    # Clean up any bids placed on this listing
+    try:
+        await db.bids.delete_many({"listing_id": load_id})
+    except Exception:
+        pass
+
+    # Recompute group totals / clean up empty group
     if gid:
         g = await db.ptl_groups.find_one({"id": gid})
         if g:
@@ -1466,7 +1475,7 @@ async def cancel_ptl_load(load_id: str, phone: str):
                         }
                     },
                 )
-    return {"cancelled": True}
+    return {"deleted": True}
 
 
 # ── GET all FORMING / FULL groups (for browsing in the market) ─────────────
