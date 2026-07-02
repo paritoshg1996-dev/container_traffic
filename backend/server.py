@@ -1418,6 +1418,43 @@ def _strip_group_internals(g: dict) -> dict:
     return out
 
 
+async def _create_solo_ptl_group(new_load: dict) -> str:
+    """Create a standalone group containing only this load — no matching.
+
+    Every posted partial load becomes its own listing; the group is only kept
+    as a container so the existing marketplace, deep-link (`/a/{group_id}`)
+    and Bids Received endpoints keep working without changes.
+    """
+    origin_corridor = derive_corridor(new_load["origin"]["city"])
+    dest_corridor = derive_corridor(new_load["destination"]["city"])
+    now_iso = datetime.now(timezone.utc).isoformat()
+    gid = f"GRP-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{new_load['poster_phone'][-4:]}-{_gen_short_id(4)}"
+    group_doc = {
+        "id": gid,
+        "corridor": f"{origin_corridor}→{dest_corridor}",
+        "origin_display": new_load["origin"]["locality"] or new_load["origin"]["city"],
+        "destination_display": new_load["destination"]["locality"] or new_load["destination"]["city"],
+        "origin_lat": new_load["origin"].get("latitude"),
+        "origin_lon": new_load["origin"].get("longitude"),
+        "dest_lat": new_load["destination"].get("latitude"),
+        "dest_lon": new_load["destination"].get("longitude"),
+        "load_ids": [new_load["id"]],
+        "total_weight_kg": new_load["weight_kg"],
+        "capacity_kg": TRUCK_CAPACITY_KG,
+        "capacity_remaining_kg": max(0, TRUCK_CAPACITY_KG - new_load["weight_kg"]),
+        "fill_pct": round(min(new_load["weight_kg"] / TRUCK_CAPACITY_KG * 100, 999.9), 1),
+        "cargo_categories": [new_load["cargo_category"]],
+        "status": "FORMING",
+        "created_at": now_iso,
+    }
+    await db.ptl_groups.insert_one(group_doc)
+    await db.ptl_loads.update_one(
+        {"id": new_load["id"]},
+        {"$set": {"group_id": gid, "status": "OPEN"}},
+    )
+    return gid
+
+
 # ── POST a new partial load + trigger matching ─────────────────────────────
 @api_router.post("/ptl/loads")
 async def post_ptl_load(payload: PtlLoadPost):
@@ -1470,8 +1507,12 @@ async def post_ptl_load(payload: PtlLoadPost):
         "expires_at": (now + timedelta(days=7)),
     }
     await db.ptl_loads.insert_one(doc)
-    group_id, matched = await match_ptl_load(doc)
-    return {"load_id": load_id, "group_id": group_id, "matched": matched}
+    # No group formation / matching — each posted partial load becomes its own
+    # standalone listing (a solo "group" is created purely so the existing
+    # marketplace endpoints, deep-link paths and Bids Received flows keep
+    # working unchanged).
+    group_id = await _create_solo_ptl_group(doc)
+    return {"load_id": load_id, "group_id": group_id, "matched": False}
 
 
 # ── GET my PTL loads ───────────────────────────────────────────────────────

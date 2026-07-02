@@ -4700,7 +4700,7 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
           (cargo ? `📦 *Cargo:* ${cargo}\n` : "") +
           (loadingDateStr ? `📅 *Loading Date:* ${loadingDateStr}\n` : "") +
           `\n${contactLine}\n\n` +
-          `🔗 *Website:* https://www.trucktraffic.in\n` +
+          `🔗 *More info:* https://www.trucktraffic.in/a/${ptlGroup.id}\n` +
           `📲 *Playstore:* https://play.google.com/store/apps/details?id=com.ptlmarket.trucktraffic`;
       }
       await Linking.openURL(`https://wa.me/?text=${encodeURIComponent(text)}`);
@@ -5502,7 +5502,7 @@ function PtlGroupCard({ group, profile, onPress, contactsMap }: { group: PtlGrou
       (cargo ? `📦 *Cargo:* ${cargo}\n` : "") +
       (loadingDateStr ? `📅 *Loading Date:* ${loadingDateStr}\n` : "") +
       `\n${contactLine}\n\n` +
-      `🔗 *Website:* https://www.trucktraffic.in\n` +
+      `🔗 *More info:* https://www.trucktraffic.in/a/${group.id}\n` +
       `📲 *Playstore:* https://play.google.com/store/apps/details?id=com.ptlmarket.trucktraffic`;
     try { await Linking.openURL(`https://wa.me/?text=${encodeURIComponent(text)}`); }
     catch { Alert.alert("Error", "WhatsApp could not be opened."); }
@@ -6424,7 +6424,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead }: { profile: Profile;
         `📞 *Contact:* ${profile.name}` +
         (profile.company ? ` — ${profile.company}` : "") +
         `\n+91 ${profile.phone}\n\n` +
-        `🔗 *Website:* https://www.trucktraffic.in\n` +
+        (data?.group_id ? `🔗 *More info:* https://www.trucktraffic.in/a/${data.group_id}\n` : `🔗 *Website:* https://www.trucktraffic.in\n`) +
         `📲 *Playstore:* https://play.google.com/store/apps/details?id=com.ptlmarket.trucktraffic`;
 
       const waUrl = `https://wa.me/?text=${encodeURIComponent(waText)}`;

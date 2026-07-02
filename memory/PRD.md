@@ -91,3 +91,33 @@ under a new "Bids Received" button on their My Posts cards.
   the poster on submit.
 - Marketplace / Find Partial Loads and existing PTL group internals were
   intentionally left untouched.
+
+## 2026-01 — Partial Load posting: solo listings + deep-link share
+Second iteration on top of the earlier "no group modal" change.
+
+**Backlog 1 done — backend no longer auto-groups posted PTL loads.**
+- `POST /api/ptl/loads` now calls new helper `_create_solo_ptl_group()` in
+  place of `match_ptl_load()`. Each posted partial load creates its own
+  standalone group (1 load = 1 group), so no more auto-pairing with existing
+  FORMING groups. Response still returns `{load_id, group_id, matched:false}`
+  so the frontend and existing marketplace/deep-link endpoints keep working
+  unchanged.
+- `match_ptl_load()` retained in code (dead-code for now) but no longer
+  called from the post endpoint. Kept for a future opt-in matching feature.
+
+**Backlog 2 done — shareable deep link in WhatsApp messages.**
+- Post Partial Load screen → WhatsApp text now includes
+  `🔗 More info: https://www.trucktraffic.in/a/{group_id}` (falls back to
+  `https://www.trucktraffic.in` only if the backend didn't return a
+  group_id).
+- Marketplace `PtlGroupCard.shareOnWhatsApp` and `ListingDetailModal.
+  shareDetailOnWhatsApp` also switched from the bare website URL to
+  `/a/{group.id}` so any share of an existing partial load opens straight
+  to its detail panel on trucktraffic.in (mirrors the truck-space
+  `/l/{short_id}` behaviour).
+
+**Verified**
+- Two identical-route PTL loads posted back-to-back → each got its own
+  `group_id`, both with `matched:false`.
+- Group retrievable via `GET /api/ptl/groups/{group_id}` (same endpoint the
+  website's `/a/{group_id}` deep link handler uses).
