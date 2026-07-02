@@ -75,3 +75,19 @@ under a new "Bids Received" button on their My Posts cards.
 - P2: Sort / filter bids (by smallest deviation, lowest weight, newest).
 - P3: Move bids router into its own module — server.py is ~2k lines.
 - P3: Push notification on PTL pair formation (currently requires refresh).
+
+## 2026-01 — Partial Load posting: WhatsApp share flow (no group modal)
+- Removed the post-submit group formation modal (`PtlGroupDetailModal`) from
+  `PostPtlLoadScreen` (3rd bottom-nav tab / Post → Adjustment).
+- On successful POST `/ptl/loads`, the app now opens WhatsApp with a
+  pre-filled "Partial Load Available - Truck Traffic" message (route, weight,
+  cargo, loading date, poster contact) — mirroring the Truck Space "Post &
+  Share" flow.
+- Renamed primary CTA from **Post & find a group** → **Post & Share on
+  WhatsApp** (green WhatsApp style + logo icon). TestID `ptl-post-submit-btn`
+  preserved.
+- Kept the individual-load 20-ton cap on the form (weight stepper + modal
+  validation). Only the *group-combined* 20-ton concept is no longer shown to
+  the poster on submit.
+- Marketplace / Find Partial Loads and existing PTL group internals were
+  intentionally left untouched.

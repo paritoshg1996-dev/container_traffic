@@ -6225,8 +6225,6 @@ function PostPtlLoadScreen({ profile, onNotificationsRead }: { profile: Profile;
 
   // Result-flow
   const [busy, setBusy] = useState(false);
-  const [resultGroupId, setResultGroupId] = useState<string | null>(null);
-  const [resultMatched, setResultMatched] = useState<boolean>(false);
 
   const cargoType = cargoTypes[0] || "";
   const cargoCategory = useMemo(() => {
@@ -6394,9 +6392,48 @@ function PostPtlLoadScreen({ profile, onNotificationsRead }: { profile: Profile;
         Alert.alert("Could not post", reason);
         return;
       }
-      // Open the group detail modal with the right banner
-      setResultGroupId(data.group_id);
-      setResultMatched(!!data.matched);
+
+      // Build WhatsApp share message (mirrors the Truck Space "Post & Share" flow)
+      const dateStr = date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+      const oStateName = sanitizeStateForDisplay(originInfo?.state || "", originPin);
+      const dStateName = sanitizeStateForDisplay(destInfo?.state || "", destPin);
+      const oCityClean = sanitizeCityForDisplay(originInfo?.city || "", originPin, oStateName);
+      const dCityClean = sanitizeCityForDisplay(destInfo?.city || "", destPin, dStateName);
+      const oLocClean = (originInfo?.locality || originInfo?.city || originText || "").trim();
+      const dLocClean = (destInfo?.locality || destInfo?.city || destText || "").trim();
+      const oAbbr = stateAbbr(oStateName);
+      const dAbbr = stateAbbr(dStateName);
+      const poArea = oLocClean || oCityClean || originPin;
+      const poCity = oCityClean && oCityClean !== oLocClean ? `, ${oCityClean}` : "";
+      const poState = oAbbr ? `, ${oAbbr}` : "";
+      const pdArea = dLocClean || dCityClean || destPin;
+      const pdCity = dCityClean && dCityClean !== dLocClean ? `, ${dCityClean}` : "";
+      const pdState = dAbbr ? `, ${dAbbr}` : "";
+      const postOriginLabel = `📍 From: ${poArea}${poCity}${poState}${originPin ? `, ${originPin}` : ""}`;
+      const postDestLabel   = `📍 To: ${pdArea}${pdCity}${pdState}${destPin ? `, ${destPin}` : ""}`;
+      const cargoDisplay = cargoTypeFinal.replace(/^Others:\s*/, "");
+      const truckLabelPost = truckType === "Open" ? "Open Truck" : truckType === "Container" ? "Container Truck" : truckType === "Trailer" ? "Trailer Truck" : truckType;
+
+      const waText =
+        `📦 *Partial Load Available - Truck Traffic*\n\n` +
+        `${postOriginLabel}\n${postDestLabel}\n\n` +
+        (truckLabelPost ? `🚚 ${truckLabelPost}\n` : "") +
+        `⚖️ *Weight:* ${weight.toFixed(1)} Tons\n` +
+        (cargoDisplay ? `📦 *Cargo:* ${cargoDisplay}\n` : "") +
+        `📅 *Loading:* ${dateStr}\n\n` +
+        `📞 *Contact:* ${profile.name}` +
+        (profile.company ? ` — ${profile.company}` : "") +
+        `\n+91 ${profile.phone}\n\n` +
+        `🔗 *Website:* https://www.trucktraffic.in\n` +
+        `📲 *Playstore:* https://play.google.com/store/apps/details?id=com.ptlmarket.trucktraffic`;
+
+      const waUrl = `https://wa.me/?text=${encodeURIComponent(waText)}`;
+      const canOpen = await Linking.canOpenURL(waUrl).catch(() => false);
+      if (canOpen) {
+        await Linking.openURL(waUrl).catch(() => {});
+      } else {
+        Alert.alert("Partial Load Posted! 🎉", "Your partial load has been posted. WhatsApp is not installed on this device.");
+      }
       reset();
     } catch (e: any) {
       Alert.alert("Network error", e?.message || "Please try again.");
@@ -6847,35 +6884,22 @@ function PostPtlLoadScreen({ profile, onNotificationsRead }: { profile: Profile;
 
         <TouchableOpacity
           testID="ptl-post-submit-btn"
-          style={[styles.primaryBtn, busy && { opacity: 0.6 }]}
+          style={[styles.whatsappBtn, { marginTop: 24, width: "100%", paddingVertical: 16 }, busy && { opacity: 0.6 }]}
           onPress={submit}
           disabled={busy}
+          activeOpacity={0.82}
         >
           {busy ? <ActivityIndicator color={COLORS.surface} /> : (
-            <>
-              <Text style={styles.primaryBtnText}>Post & find a group</Text>
-              <Ionicons name="search" size={18} color={COLORS.surface} />
-            </>
+            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10 }}>
+              <Ionicons name="logo-whatsapp" size={22} color={COLORS.surface} />
+              <Text style={[styles.primaryBtnText, { fontSize: 16 }]}>Post & Share on WhatsApp</Text>
+            </View>
           )}
         </TouchableOpacity>
         <Text style={[styles.hintMuted, { textAlign: "center", marginTop: 8 }]}>
           You can track this load in your Profile → My Posted Partial Loads.
         </Text>
       </ScrollView>
-
-      <PtlGroupDetailModal
-        visible={!!resultGroupId}
-        groupId={resultGroupId}
-        profile={profile}
-        onClose={() => setResultGroupId(null)}
-        onChanged={() => {}}
-        onJoinNew={() => setResultGroupId(null)}
-        banner={resultGroupId ? (resultMatched
-          ? { tone: "success", title: "Matched to an existing group", body: "We found a group going on this route — your load has been added." }
-          : { tone: "info",    title: "No existing group found",     body: "We've started a new group on this route. You'll be matched as soon as another shipper joins." })
-          : undefined
-        }
-      />
     </KeyboardAvoidingView>
   );
 }
