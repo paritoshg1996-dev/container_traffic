@@ -192,9 +192,11 @@ type PtlMember = {
   company?: string;
   origin_locality: string;
   origin_city?: string;
+  origin_state?: string;
   origin_pincode?: string;
   destination_locality?: string;
   destination_city?: string;
+  destination_state?: string;
   destination_pincode?: string;
   weight_kg: number;
   cargo_type: string;
@@ -3776,20 +3778,28 @@ function LoadMarketScreen({ profile, pendingFilter, onConsumePendingFilter }: { 
         <Text style={styles.marketCount} testID="loads-count">
           {feed.length} {feed.length === 1 ? "result" : "results"} {isFiltered ? "matched" : "available"}
         </Text>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-          {isFiltered && (
-            <TouchableOpacity testID="clear-filter-btn" onPress={onClearFilter} style={styles.clearChip}>
-              <Ionicons name="close" size={14} color={COLORS.textMuted} />
-              <Text style={styles.clearChipText}>Clear</Text>
-            </TouchableOpacity>
-          )}
-          <TouchableOpacity testID="find-space-btn" style={[styles.filterBtn, isFiltered && styles.filterBtnActive]} onPress={() => setShowFilter(true)}>
-            <Ionicons name="options-outline" size={16} color={isFiltered ? COLORS.surface : COLORS.primary} />
-            <Text style={[styles.filterBtnText, isFiltered && { color: COLORS.surface }]}>Filter</Text>
-            {isFiltered && <View style={styles.filterDot} />}
+        {isFiltered && (
+          <TouchableOpacity testID="clear-filter-btn" onPress={onClearFilter} style={styles.clearChip}>
+            <Ionicons name="close" size={14} color={COLORS.textMuted} />
+            <Text style={styles.clearChipText}>Clear</Text>
           </TouchableOpacity>
-        </View>
+        )}
       </View>
+      <View style={styles.searchBarWrap}>
+        <TouchableOpacity
+          testID="find-space-btn"
+          style={[styles.searchFullBtn, isFiltered && styles.searchFullBtnActive]}
+          onPress={() => setShowFilter(true)}
+          activeOpacity={0.85}
+        >
+          <Ionicons name="search" size={18} color={isFiltered ? COLORS.surface : COLORS.primary} />
+          <Text style={[styles.searchFullBtnText, isFiltered && { color: COLORS.surface }]}>
+            Search by Origin &amp; Destination
+          </Text>
+          {isFiltered && <View style={styles.filterDot} />}
+        </TouchableOpacity>
+      </View>
+
 
       {isBusy && feed.length === 0 ? (
         <View style={[styles.fill, styles.center]}><ActivityIndicator size="large" color={COLORS.primary} /></View>
@@ -3959,16 +3969,19 @@ function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhon
   return (
     <TouchableOpacity activeOpacity={0.92} onPress={() => setShowDetail(true)} testID={`load-card-${load.id}`}>
     <View style={[styles.card, marketCardStyles.truckCardOutline]}>
-      {/* At-a-glance type badge. Blue = Truck Space, matching the card's
-          border color and the app's Truck Space theme elsewhere. */}
-      <View style={[marketCardStyles.typeBadgeInline, marketCardStyles.typeBadgeTruck]}>
-        <Ionicons name="car-outline" size={11} color={COLORS.surface} />
+      {/* At-a-glance type badge, pinned top-right. Blue = Truck Space,
+          matching the card's border color and the app's Truck Space theme
+          elsewhere. The share button sits directly below it in the same
+          right-hand column, so both live in the corner instead of the
+          badge eating its own full-width row (keeps the card shorter). */}
+      <View style={[marketCardStyles.typeBadgeAbs, marketCardStyles.typeBadgeTruck]}>
+        <Ionicons name="car-outline" size={10} color={COLORS.surface} />
         <Text style={marketCardStyles.typeBadgeText}>TRUCK SPACE</Text>
       </View>
-      {/* Share-to-WhatsApp button pinned to top-right of the card. The
-          combined "share-social" icon makes it clear this *forwards* the
-          load details to a WhatsApp chat (it does NOT start a direct chat
-          with the poster). */}
+      {/* Share-to-WhatsApp button, below the badge, top-right of the card.
+          The combined "share-social" icon makes it clear this *forwards*
+          the load details to a WhatsApp chat (it does NOT start a direct
+          chat with the poster). */}
       <TouchableOpacity
         testID={`share-wa-${load.id}`}
         style={cardStyles.shareTopPill}
@@ -3981,7 +3994,7 @@ function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhon
 
       {/* LINE 1: Route */}
       <View style={styles.cardRouteRow}>
-        <View style={[styles.flex1, { paddingRight: 50 }]}>
+        <View style={[styles.flex1, { paddingRight: 84 }]}>
           <RouteEndpointBlock
             iconName="location" iconColor={COLORS.secondary}
             locality={load.origin_locality || ""} city={load.origin_city || ""} state={load.origin_state || ""} pincode={load.origin_pincode || ""}
@@ -4630,7 +4643,7 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
               <Ionicons name="location" size={16} color={COLORS.secondary} />
               <View style={{ flex: 1 }}>
                 <Text style={detailStyles.routeLocality}>{primary?.origin_locality || g.origin_display}</Text>
-                {primary?.origin_city && primary.origin_city !== primary?.origin_locality ? <Text style={detailStyles.routeCity}>{primary.origin_city}</Text> : null}
+                {primary?.origin_city && primary.origin_city !== primary?.origin_locality ? <Text style={detailStyles.routeCity}>{primary.origin_city}{primary?.origin_state ? `, ${stateAbbr(primary.origin_state)}` : ""}</Text> : null}
                 {primary?.origin_pincode ? <Text style={detailStyles.routePin}>{primary.origin_pincode}</Text> : null}
               </View>
             </View>
@@ -4639,7 +4652,7 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
               <Ionicons name="flag" size={16} color={COLORS.primary} />
               <View style={{ flex: 1 }}>
                 <Text style={detailStyles.routeLocality}>{primary?.destination_locality || g.destination_display}</Text>
-                {primary?.destination_city && primary.destination_city !== primary?.destination_locality ? <Text style={detailStyles.routeCity}>{primary.destination_city}</Text> : null}
+                {primary?.destination_city && primary.destination_city !== primary?.destination_locality ? <Text style={detailStyles.routeCity}>{primary.destination_city}{primary?.destination_state ? `, ${stateAbbr(primary.destination_state)}` : ""}</Text> : null}
                 {primary?.destination_pincode ? <Text style={detailStyles.routePin}>{primary.destination_pincode}</Text> : null}
               </View>
             </View>
@@ -5255,8 +5268,10 @@ const cardStyles = StyleSheet.create({
   shareWaPill: { backgroundColor: "#25D366", paddingVertical: 10, paddingHorizontal: 16, borderRadius: 100, flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "center" },
   shareWaPillText: { color: COLORS.surface, fontFamily: "Inter_600SemiBold", fontWeight: "600", fontSize: 14, letterSpacing: 0.2 },
   shareTopPill: {
+    // Sits directly beneath typeBadgeAbs in the same top-right column
+    // (badge top 10 + ~21px badge height + 6px gap).
     position: "absolute",
-    top: 10,
+    top: 37,
     right: 10,
     zIndex: 5,
     width: 30,
@@ -5468,12 +5483,13 @@ if (!dc.found) {
             {destErr ? <Text style={[styles.errorText, { marginTop: -8, marginBottom: 8 }]}>{destErr}</Text> : null}
 
             <View style={styles.row}>
-              <TouchableOpacity testID="fs-cancel-btn" style={[styles.outlineBtn, styles.flex1]} onPress={onClose} disabled={busy}>
-                <Text style={styles.outlineBtnText}>Cancel</Text>
-              </TouchableOpacity>
-              <View style={{ width: 12 }} />
               <TouchableOpacity testID="fs-apply-btn" style={[styles.primaryBtn, styles.flex1, { marginTop: 0 }]} onPress={submit} disabled={busy}>
-                {busy ? <ActivityIndicator color={COLORS.surface} /> : <Text style={styles.primaryBtnText}>Show Matching Trucks</Text>}
+                {busy ? <ActivityIndicator color={COLORS.surface} /> : (
+                  <>
+                    <Ionicons name="search" size={18} color={COLORS.surface} />
+                    <Text style={styles.primaryBtnText}>Find Results</Text>
+                  </>
+                )}
               </TouchableOpacity>
             </View>
           </SafeScrollView>
@@ -5558,25 +5574,28 @@ function PtlGroupCard({ group, profile, onPress, contactsMap }: { group: PtlGrou
 
   return (
     <TouchableOpacity testID={`ptl-group-card-${group.id}`} onPress={onPress} activeOpacity={0.92} style={[styles.card, marketCardStyles.cardOutline]}>
-      {/* At-a-glance type badge. Orange = Partial Load, matching the card's
-          border color and the app's Adjustment Load theme elsewhere. */}
-      <View style={[marketCardStyles.typeBadgeInline, marketCardStyles.typeBadgePtl]}>
-        <Ionicons name="cube-outline" size={11} color={COLORS.surface} />
+      {/* At-a-glance type badge, pinned top-right. Orange = Partial Load,
+          matching the card's border color and the app's Adjustment Load
+          theme elsewhere. Share pill sits directly below it, same
+          right-hand column as LoadCard, so the badge no longer eats its
+          own full-width row (keeps the card shorter). */}
+      <View style={[marketCardStyles.typeBadgeAbs, marketCardStyles.typeBadgePtl]}>
+        <Ionicons name="cube-outline" size={10} color={COLORS.surface} />
         <Text style={marketCardStyles.typeBadgeText}>PARTIAL LOAD</Text>
       </View>
-      {/* Share pill — top right, same position as LoadCard */}
+      {/* Share pill — below the badge, top right, same column as LoadCard */}
       <TouchableOpacity style={cardStyles.shareTopPill} onPress={shareOnWhatsApp} activeOpacity={0.85} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
         <Ionicons name="share-social" size={14} color="#25D366" />
       </TouchableOpacity>
 
       {/* LINE 1: Route — origin / destination stacked, same layout as Find Truck card */}
-      <View style={[styles.cardRouteRow, { paddingRight: 50 }]}>
+      <View style={[styles.cardRouteRow, { paddingRight: 84 }]}>
         <View style={styles.flex1}>
           <RouteEndpointBlock
             iconName="location" iconColor={COLORS.secondary}
             locality={member?.origin_locality || group.origin_display || ""}
             city={member?.origin_city || ""}
-            state=""
+            state={member?.origin_state || ""}
             pincode={member?.origin_pincode || ""}
           />
           <View style={{ height: 8 }} />
@@ -5584,7 +5603,7 @@ function PtlGroupCard({ group, profile, onPress, contactsMap }: { group: PtlGrou
             iconName="flag" iconColor={COLORS.primary}
             locality={member?.destination_locality || group.destination_display || ""}
             city={member?.destination_city || ""}
-            state=""
+            state={member?.destination_state || ""}
             pincode={member?.destination_pincode || ""}
           />
         </View>
@@ -5678,9 +5697,24 @@ const marketCardStyles = StyleSheet.create({
     borderRadius: 6,
     marginBottom: 10,
   },
+  // Pinned top-right, sharing the same corner "column" as shareTopPill
+  // (which sits directly below it). Keeping the badge out of normal flow
+  // removes what used to be its own full-width row, so cards are shorter.
+  typeBadgeAbs: {
+    position: "absolute",
+    top: 10,
+    right: 10,
+    zIndex: 5,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
   typeBadgeTruck: { backgroundColor: COLORS.primary },
   typeBadgePtl: { backgroundColor: COLORS.secondary },
-  typeBadgeText: { fontSize: 10, fontWeight: "800", color: COLORS.surface, letterSpacing: 0.4 },
+  typeBadgeText: { fontSize: 9, fontWeight: "800", color: COLORS.surface, letterSpacing: 0.3 },
 });
 
 function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editLoad }: {
@@ -7213,27 +7247,29 @@ function MyPostsScreen({ profile }: { profile: Profile }) {
 
   return (
     <View style={styles.fill}>
-      <View style={newStyles.myPostsSegmentWrap}>
-        <View style={styles.segment}>
-          <TouchableOpacity
-            style={[styles.segmentBtn, activeTab === "truckSpace" && styles.segmentBtnOn]}
-            onPress={() => setActiveTab("truckSpace")}
-            activeOpacity={0.8}
-          >
-            <Text style={[styles.segmentText, activeTab === "truckSpace" && styles.segmentTextOn]}>
-              Truck Space
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.segmentBtn, activeTab === "adjustment" && styles.segmentBtnOn]}
-            onPress={() => setActiveTab("adjustment")}
-            activeOpacity={0.8}
-          >
-            <Text style={[styles.segmentText, activeTab === "adjustment" && styles.segmentTextOn]}>
-              Partial Load
-            </Text>
-          </TouchableOpacity>
-        </View>
+      {/* Same size/component as the Find page's Truck Space / Partial Load
+          toggle (styles.modeToggleBar) for visual and interaction
+          consistency — here it acts as a single-select tab switch between
+          the two post lists rather than an independent multi-toggle. */}
+      <View style={styles.modeToggleBar} testID="myposts-mode-toggle">
+        <TouchableOpacity
+          testID="myposts-mode-truck"
+          style={[styles.modeToggleBtn, activeTab === "truckSpace" && [styles.modeToggleBtnActive, { backgroundColor: COLORS.primary }]]}
+          onPress={() => setActiveTab("truckSpace")}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="car-outline" size={14} color={activeTab === "truckSpace" ? COLORS.surface : COLORS.textMuted} />
+          <Text style={[styles.modeToggleText, activeTab === "truckSpace" && styles.modeToggleTextActive]}>Truck Space</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          testID="myposts-mode-ptl"
+          style={[styles.modeToggleBtn, activeTab === "adjustment" && [styles.modeToggleBtnActive, { backgroundColor: COLORS.secondary }]]}
+          onPress={() => setActiveTab("adjustment")}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="cube-outline" size={14} color={activeTab === "adjustment" ? COLORS.surface : COLORS.textMuted} />
+          <Text style={[styles.modeToggleText, activeTab === "adjustment" && styles.modeToggleTextActive]}>Partial Load</Text>
+        </TouchableOpacity>
       </View>
       {activeTab === "truckSpace" ? (
         <MyTruckSpacePostsList profile={profile} />
@@ -7350,6 +7386,10 @@ const styles = StyleSheet.create({
   filterBtn: { flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 8, paddingHorizontal: 14, borderRadius: 100, borderWidth: 1.5, borderColor: COLORS.primary },
   filterBtnActive: { backgroundColor: COLORS.primary },
   filterBtnText: { color: COLORS.primary, fontFamily: "Inter_600SemiBold", fontWeight: "600", fontSize: 13 },
+  searchBarWrap: { paddingHorizontal: 16, paddingBottom: 12 },
+  searchFullBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, width: "100%", paddingVertical: 8, borderRadius: 100, borderWidth: 1.5, borderColor: COLORS.primary, backgroundColor: COLORS.surface },
+  searchFullBtnActive: { backgroundColor: COLORS.primary },
+  searchFullBtnText: { color: COLORS.primary, fontFamily: "Inter_600SemiBold", fontWeight: "600", fontSize: 14 },
   card: { backgroundColor: COLORS.surface, borderRadius: 16, padding: 18, marginBottom: 14, borderWidth: 1, borderColor: COLORS.border, shadowColor: "#000", shadowOpacity: 0.04, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 1 },
   cardRouteRow: { flexDirection: "row", alignItems: "center" },
   routePin: { fontSize: 18, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.text },
