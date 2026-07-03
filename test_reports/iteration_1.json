@@ -27,5 +27,5 @@
   "seed_data_creation": "Test pytest run created loads with poster_name prefixed 'TEST_'; UI test created 1 load as 'Test Trucker'/9876543210/TestCo (Delhi->Mumbai, Bags+Pipes, Stackable, 8.5T/300cuft).",
   "retest_needed": false,
   "should_main_agent_self_test": true,
-  "context_for_next_testing_agent": "All MVP flows pass. EXPO_PUBLIC_BACKEND_URL=https://post-expiry-delete.preview.emergentagent.com. To test UI, register dialog handler BEFORE clicking submit-load-btn (the success Alert has 'View Market' button which auto-navigates only after dialog is accepted). Use mobile viewport 390x844. Pincode hints take ~1.5s to load due to external API."
+  "context_for_next_testing_agent": "All MVP flows pass. EXPO_PUBLIC_BACKEND_URL=https://state-abbrev-format.preview.emergentagent.com. To test UI, register dialog handler BEFORE clicking submit-load-btn (the success Alert has 'View Market' button which auto-navigates only after dialog is accepted). Use mobile viewport 390x844. Pincode hints take ~1.5s to load due to external API."
 }

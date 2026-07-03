@@ -29,6 +29,30 @@ Frontend: redesigned PtlGroupDetailModal (your-load / co-loader cards, big green
 Space or Partial Load detail screen. Posters see all incoming bids per post
 under a new "Bids Received" button on their My Posts cards.
 
+### Iter 6 — Bug fixes (Jan 2026)
+1. **Partial Load address second line missing state abbreviation**
+   - Backend: `PtlLoadPost` model + doc storage now include `origin_state` /
+     `destination_state`. `/ptl/loads/my`, `/ptl/groups`, `/ptl/groups/{id}`
+     return them in members payload so Partial Load card & detail render
+     `City, ST` identically to the Truck Space card.
+   - Frontend: `MyPtlLoadsList.groupFor` synthetic member now propagates
+     `origin_state` / `destination_state` from the PtlLoad row.
+   - **Note:** backend deployment (Render) must be redeployed for existing
+     users to benefit. Loads posted before the fix have no state in DB;
+     they will continue to miss the ST line.
+
+2. **Post-flow Find screen showed the just-created post & wrong type**
+   - The post-flow auto-filter now switches the Find toggles to the
+     **opposite** listing type (truck-space post → show Partial Loads;
+     partial-load post → show Truck Spaces) so the user only sees potential
+     matches, not their own new post. The posted listing id is also
+     excluded from the feed as a safety belt.
+   - Implementation: extended `ActiveFilter` with optional `postedKind` +
+     `postedId`; `LoadMarketScreen` reads these to flip toggles and
+     exclude the id. Both PostLoad screens now attach these on
+     `onPosted(filter)`.
+
+
 **Backend (`/app/backend/server.py`)**
 - New collection `bids` with unique compound index `(listing_id, bidder_phone)`.
 - `BidCreate` model: listing_id, listing_type ('load' | 'ptl'), bidder_phone,

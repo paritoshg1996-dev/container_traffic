@@ -1231,11 +1231,13 @@ class PtlLoadPost(BaseModel):
     poster_phone: str
     origin_locality: str
     origin_city: str
+    origin_state: Optional[str] = ""
     origin_pincode: Optional[str] = ""
     origin_latitude: Optional[float] = None
     origin_longitude: Optional[float] = None
     destination_locality: str
     destination_city: str
+    destination_state: Optional[str] = ""
     destination_pincode: Optional[str] = ""
     destination_latitude: Optional[float] = None
     destination_longitude: Optional[float] = None
@@ -1351,6 +1353,7 @@ async def post_ptl_load(payload: PtlLoadPost):
         "origin": {
             "locality": payload.origin_locality,
             "city": payload.origin_city,
+            "state": payload.origin_state or "",
             "pincode": payload.origin_pincode,
             "latitude": payload.origin_latitude,
             "longitude": payload.origin_longitude,
@@ -1358,6 +1361,7 @@ async def post_ptl_load(payload: PtlLoadPost):
         "destination": {
             "locality": payload.destination_locality,
             "city": payload.destination_city,
+            "state": payload.destination_state or "",
             "pincode": payload.destination_pincode,
             "latitude": payload.destination_latitude,
             "longitude": payload.destination_longitude,
@@ -1407,11 +1411,13 @@ async def get_my_ptl_loads(phone: str):
             **{k: v for k, v in l.items() if k not in ("origin", "destination")},
             "origin_locality": o.get("locality", ""),
             "origin_city": o.get("city", ""),
+            "origin_state": o.get("state", ""),
             "origin_pincode": o.get("pincode", ""),
             "origin_latitude": o.get("latitude"),
             "origin_longitude": o.get("longitude"),
             "destination_locality": d.get("locality", ""),
             "destination_city": d.get("city", ""),
+            "destination_state": d.get("state", ""),
             "destination_pincode": d.get("pincode", ""),
             "destination_latitude": d.get("latitude"),
             "destination_longitude": d.get("longitude"),
@@ -1520,9 +1526,11 @@ async def list_ptl_groups(
                     "company": l.get("poster_company", ""),
                     "origin_locality": o.get("locality", ""),
                     "origin_city": o.get("city", ""),
+                    "origin_state": o.get("state", ""),
                     "origin_pincode": o.get("pincode", ""),
                     "destination_locality": d.get("locality", ""),
                     "destination_city": d.get("city", ""),
+                    "destination_state": d.get("state", ""),
                     "destination_pincode": d.get("pincode", ""),
                     "weight_kg": l.get("weight_kg", 0),
                     "cargo_type": l.get("cargo_type", ""),
@@ -1569,9 +1577,11 @@ async def get_ptl_group(group_id: str, viewer_phone: Optional[str] = None):
             "company": l.get("poster_company", ""),
             "origin_locality": (l.get("origin") or {}).get("locality", ""),
             "origin_city": (l.get("origin") or {}).get("city", ""),
+            "origin_state": (l.get("origin") or {}).get("state", ""),
             "origin_pincode": (l.get("origin") or {}).get("pincode", ""),
             "destination_locality": (l.get("destination") or {}).get("locality", ""),
             "destination_city": (l.get("destination") or {}).get("city", ""),
+            "destination_state": (l.get("destination") or {}).get("state", ""),
             "destination_pincode": (l.get("destination") or {}).get("pincode", ""),
             "weight_kg": l.get("weight_kg", 0),
             "cargo_type": l.get("cargo_type", ""),

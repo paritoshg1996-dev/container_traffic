@@ -2143,10 +2143,12 @@ if (pricePerTon && parseInt(pricePerTon, 10) > 10000) return Alert.alert("Price 
           Alert.alert("Load Posted Successfully! 🎉", "Your load has been posted. WhatsApp is not installed on this device.");
         }
         const routeFilter = await buildRouteFilterFromPost(originPin, originInfo, destPin, destInfo);
-        reset(); onPosted(routeFilter);
+        const filterWithPost = routeFilter ? { ...routeFilter, postedKind: "truck" as const, postedId: created.id } : null;
+        reset(); onPosted(filterWithPost);
       } else {
         const routeFilter = await buildRouteFilterFromPost(originPin, originInfo, destPin, destInfo);
-        Alert.alert("Posted!", "Your load has been added to the market.", [{ text: "View Market", onPress: () => { reset(); onPosted(routeFilter); } }]);
+        const filterWithPost = routeFilter ? { ...routeFilter, postedKind: "truck" as const, postedId: created.id } : null;
+        Alert.alert("Posted!", "Your load has been added to the market.", [{ text: "View Market", onPress: () => { reset(); onPosted(filterWithPost); } }]);
       }
     } catch (e) {
       Alert.alert("Error", "Failed to post load. Please try again.");
@@ -3471,7 +3473,7 @@ function trackDistancesKm(start: { lat: number; lon: number }, end: { lat: numbe
   return { cross: Math.abs(xt), along: at };
 }
 
-type ActiveFilter = { origin: string; dest: string; originCity?: string; destCity?: string; weightKg: number; volumeCuft: number | null; originCoord: { lat: number; lon: number }; destCoord: { lat: number; lon: number } };
+type ActiveFilter = { origin: string; dest: string; originCity?: string; destCity?: string; weightKg: number; volumeCuft: number | null; originCoord: { lat: number; lon: number }; destCoord: { lat: number; lon: number }; postedKind?: "truck" | "ptl"; postedId?: string };
 type Distances = Record<string, { origin: number; dest: number; offRoute: boolean }>;
 
 // Builds an ActiveFilter (same shape the Find/Filter modal produces) from a
@@ -3594,6 +3596,10 @@ function LoadMarketScreen({ profile, pendingFilter, onConsumePendingFilter }: { 
   const [activeFilter, setActiveFilter] = useState<ActiveFilter | null>(null);
   const [filteredLoads, setFilteredLoads] = useState<Load[] | null>(null);
   const [distances, setDistances] = useState<Distances>({});
+  // When arriving here right after posting, exclude the just-posted listing
+  // from the auto-filtered results so the user only sees potential *matches*
+  // (opposite-kind listings), not their own new post.
+  const [excludePostedId, setExcludePostedId] = useState<string | null>(null);
   const contactsMap = useContactsMap(profile.phone);
 
   // PTL state
@@ -3711,14 +3717,28 @@ function LoadMarketScreen({ profile, pendingFilter, onConsumePendingFilter }: { 
     setActiveFilter(null);
     setFilteredLoads(null);
     setDistances({});
+    setExcludePostedId(null);
     fetchPtlGroups(null);
   };
   // Auto-apply the origin/destination filter carried over from a just-completed
   // Truck Space / Partial Load post, once loads have finished loading. This
   // fires whether the user was redirected to WhatsApp and came back, or
   // skipped the redirect entirely — either way they land here pre-filtered.
+  // The intent of this screen is to surface *possible matches* from the
+  // opposite listing type: after posting a truck space we show matching
+  // partial loads (potential cargo for that truck), and after posting a
+  // partial load we show matching truck spaces (potential trucks for that
+  // cargo). The just-posted listing itself is also excluded by id.
   useEffect(() => {
     if (pendingFilter && !loading) {
+      if (pendingFilter.postedKind === "truck") {
+        setShowTrucks(false);
+        setShowPartials(true);
+      } else if (pendingFilter.postedKind === "ptl") {
+        setShowTrucks(true);
+        setShowPartials(false);
+      }
+      setExcludePostedId(pendingFilter.postedId || null);
       onApplyFilter(pendingFilter);
       onConsumePendingFilter?.();
     }
@@ -3735,15 +3755,17 @@ function LoadMarketScreen({ profile, pendingFilter, onConsumePendingFilter }: { 
   // come first, followed by matching partial-load groups.
   type FeedItem = { kind: "truck"; key: string; load: Load } | { kind: "ptl"; key: string; group: PtlGroup };
   const feed = useMemo<FeedItem[]>(() => {
-    const truckItems: FeedItem[] = includeTrucks ? displayLoads.map((l) => ({ kind: "truck" as const, key: `t-${l.id}`, load: l })) : [];
-    const ptlItems: FeedItem[] = includePartials ? ptlGroups.map((g) => ({ kind: "ptl" as const, key: `p-${g.id}`, group: g })) : [];
+    const truckSrc = excludePostedId ? displayLoads.filter((l) => l.id !== excludePostedId) : displayLoads;
+    const ptlSrc = excludePostedId ? ptlGroups.filter((g) => g.id !== excludePostedId) : ptlGroups;
+    const truckItems: FeedItem[] = includeTrucks ? truckSrc.map((l) => ({ kind: "truck" as const, key: `t-${l.id}`, load: l })) : [];
+    const ptlItems: FeedItem[] = includePartials ? ptlSrc.map((g) => ({ kind: "ptl" as const, key: `p-${g.id}`, group: g })) : [];
     if (isFiltered) return [...truckItems, ...ptlItems];
     return [...truckItems, ...ptlItems].sort((a, b) => {
       const ta = a.kind === "truck" ? a.load.created_at : a.group.created_at;
       const tb = b.kind === "truck" ? b.load.created_at : b.group.created_at;
       return new Date(tb).getTime() - new Date(ta).getTime();
     });
-  }, [includeTrucks, includePartials, displayLoads, ptlGroups, isFiltered]);
+  }, [includeTrucks, includePartials, displayLoads, ptlGroups, isFiltered, excludePostedId]);
 
   const isBusy = loading || ptlLoading;
   const isRefreshing = refreshing || ptlRefreshing;
@@ -6243,8 +6265,9 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
         Alert.alert("Partial Load Posted! 🎉", "Your partial load has been posted. WhatsApp is not installed on this device.");
       }
       const routeFilter = await buildRouteFilterFromPost(originPin, originInfo, destPin, destInfo);
+      const filterWithPost = routeFilter ? { ...routeFilter, postedKind: "ptl" as const, postedId: data?.group_id } : null;
       reset();
-      onPosted?.(routeFilter);
+      onPosted?.(filterWithPost);
     } catch (e: any) {
       Alert.alert("Network error", e?.message || "Please try again.");
     } finally {
@@ -6817,9 +6840,11 @@ function MyPtlLoadsList({ profile }: { profile: Profile }) {
         company: item.poster_company,
         origin_locality: item.origin_locality,
         origin_city: item.origin_city,
+        origin_state: item.origin_state,
         origin_pincode: item.origin_pincode,
         destination_locality: item.destination_locality,
         destination_city: item.destination_city,
+        destination_state: item.destination_state,
         destination_pincode: item.destination_pincode,
         weight_kg: item.weight_kg,
         cargo_type: item.cargo_type,
