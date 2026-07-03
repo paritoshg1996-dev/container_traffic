@@ -3732,10 +3732,14 @@ function LoadMarketScreen({ profile, pendingFilter, onConsumePendingFilter }: { 
   useEffect(() => {
     if (pendingFilter && !loading) {
       if (pendingFilter.postedKind === "truck") {
+        // Truck-space poster is looking for cargo → only Partial Loads.
         setShowTrucks(false);
         setShowPartials(true);
       } else if (pendingFilter.postedKind === "ptl") {
-        setShowTrucks(true);
+        // Partial-load poster is looking for both a truck AND other
+        // partial loads (partials can pair up too), so leave both types
+        // on. Toggles both OFF is the "show everything" state.
+        setShowTrucks(false);
         setShowPartials(false);
       }
       setExcludePostedId(pendingFilter.postedId || null);

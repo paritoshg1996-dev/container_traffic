@@ -42,11 +42,14 @@ under a new "Bids Received" button on their My Posts cards.
      they will continue to miss the ST line.
 
 2. **Post-flow Find screen showed the just-created post & wrong type**
-   - The post-flow auto-filter now switches the Find toggles to the
-     **opposite** listing type (truck-space post → show Partial Loads;
-     partial-load post → show Truck Spaces) so the user only sees potential
-     matches, not their own new post. The posted listing id is also
-     excluded from the feed as a safety belt.
+   - The post-flow auto-filter now behaves per listing type:
+     * **Truck-space post** → Find toggles switch to show **only Partial
+       Loads** (the truck is looking for cargo).
+     * **Partial-load post** → Find shows **both Truck Spaces and other
+       Partial Loads** (a partial can pair with a truck OR with another
+       partial), so both toggles stay off (= show everything).
+     In both cases the posted listing id is excluded from the feed as a
+     safety belt so the user never sees their own new post.
    - Implementation: extended `ActiveFilter` with optional `postedKind` +
      `postedId`; `LoadMarketScreen` reads these to flip toggles and
      exclude the id. Both PostLoad screens now attach these on
