@@ -1900,7 +1900,7 @@ const handleInvite = async () => {
           </View>
           <View style={[styles.statBox, profileStyles.statBoxOutline, { borderColor: COLORS.secondary }]}>
             <Text style={[styles.statValue, { color: COLORS.secondary }]} testID="my-ptl-count">{myPtlLoads.length}</Text>
-            <Text style={styles.statLabel}>Adjustment Loads</Text>
+            <Text style={styles.statLabel}>Partial Loads</Text>
           </View>
         </View>
         {loading ? <ActivityIndicator color={COLORS.primary} style={{ marginTop: 24 }} /> : null}
@@ -5138,7 +5138,7 @@ function PosterProfileModal({ visible, load, contactName, contactsMap, viewerPho
             </View>
             <View style={[styles.statBox, profileStyles.statBoxOutline, { borderColor: COLORS.secondary }]}>
               <Text style={[styles.statValue, { color: COLORS.secondary }]}>{posterPtlLoads.length}</Text>
-              <Text style={styles.statLabel}>Adjustment Loads</Text>
+              <Text style={styles.statLabel}>Partial Loads</Text>
             </View>
           </View>
 
@@ -5160,7 +5160,7 @@ function PosterProfileModal({ visible, load, contactName, contactsMap, viewerPho
           {/* Adjustment (partial load) postings */}
           {!loading && posterPtlLoads.length > 0 && (
             <>
-              <Text style={[styles.sectionHeading, { marginTop: 8 }]}>Adjustment Postings</Text>
+              <Text style={[styles.sectionHeading, { marginTop: 8 }]}>Partial Load Postings</Text>
               {posterPtlLoads.map(item => (
                 <PtlGroupCard
                   key={item.id}
@@ -7034,10 +7034,14 @@ const newStyles = StyleSheet.create({
     gap: 14,
   },
   postTypeIconLeft: {
-    width: 68,
+    width: 96,
+    height: 96,
     alignItems: "center",
     justifyContent: "center",
-    opacity: 0.7,
+  },
+  postTypeIconImage: {
+    width: 96,
+    height: 96,
   },
   postTypeIconBadge: {
     width: 34,
@@ -7120,11 +7124,15 @@ function PostSelectionScreen({
       >
         <View style={[newStyles.postTypeCardInner, { backgroundColor: "#EBF2FF" }]}>
           <View style={newStyles.postTypeIconLeft}>
-            <Ionicons name="truck-outline" size={52} color="#A8C4F0" />
+            <Image
+              source={require("../assets/images/truck_space.png")}
+              style={newStyles.postTypeIconImage}
+              resizeMode="contain"
+            />
           </View>
           <View style={{ flex: 1 }}>
             <View style={[newStyles.postTypeIconBadge, { backgroundColor: COLORS.primary }]}>
-              <Ionicons name="truck-outline" size={17} color={COLORS.surface} />
+              <Ionicons name="car-outline" size={17} color={COLORS.surface} />
             </View>
             <Text style={newStyles.postTypeTitle}>Truck Space</Text>
             <View style={[newStyles.postTypeDivider, { backgroundColor: COLORS.primary }]} />
@@ -7136,7 +7144,7 @@ function PostSelectionScreen({
         </View>
       </TouchableOpacity>
 
-      {/* ── Adjustment Card ── */}
+      {/* ── Partial Load Card ── */}
       <TouchableOpacity
         testID="select-adjustment"
         activeOpacity={0.85}
@@ -7145,13 +7153,17 @@ function PostSelectionScreen({
       >
         <View style={[newStyles.postTypeCardInner, { backgroundColor: "#FFF3EB" }]}>
           <View style={newStyles.postTypeIconLeft}>
-            <Ionicons name="cube-outline" size={52} color="#F4B87E" />
+            <Image
+              source={require("../assets/images/ptl.png")}
+              style={newStyles.postTypeIconImage}
+              resizeMode="contain"
+            />
           </View>
           <View style={{ flex: 1 }}>
             <View style={[newStyles.postTypeIconBadge, { backgroundColor: COLORS.secondary }]}>
               <Ionicons name="cube-outline" size={17} color={COLORS.surface} />
             </View>
-            <Text style={newStyles.postTypeTitle}>Adjustment</Text>
+            <Text style={newStyles.postTypeTitle}>Partial Load</Text>
             <View style={[newStyles.postTypeDivider, { backgroundColor: COLORS.secondary }]} />
             <Text style={newStyles.postTypeDesc}>{"Post your load.\nWe'll find another load to make a full truck."}</Text>
           </View>
