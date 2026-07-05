@@ -1567,9 +1567,10 @@ async def get_ptl_group(group_id: str, viewer_phone: Optional[str] = None):
     ).to_list(length=20) if load_ids else []
     # Solo listings only — the poster's phone is exposed to the viewer once
     # they open the detail (there is no "pair" gate anymore since matching
-    # was retired).
-    viewer_in_group = any(ll["poster_phone"] == viewer for ll in loads) if viewer else False
-    phones_visible = viewer_in_group
+    # was retired). This matches the behaviour of the list endpoint
+    # (`GET /api/ptl/groups`), which already returns `phone` publicly, so the
+    # website and app can render the "Call" button consistently on the
+    # adjustment-load detail page.
     members: List[dict] = []
     for l in loads:
         members.append({
@@ -1588,7 +1589,7 @@ async def get_ptl_group(group_id: str, viewer_phone: Optional[str] = None):
             "cargo_type": l.get("cargo_type", ""),
             "cargo_category": l.get("cargo_category", ""),
             "confirmed": l.get("status") == "CONFIRMED",
-            "phone": l.get("poster_phone", "") if phones_visible else None,
+            "phone": l.get("poster_phone", ""),
             "is_me": (viewer and l.get("poster_phone") == viewer) or False,
             "truck_type": l.get("truck_type", ""),
             "loading_date": l.get("loading_date"),
@@ -1600,6 +1601,15 @@ async def get_ptl_group(group_id: str, viewer_phone: Optional[str] = None):
         })
     g_out = _strip_group_internals(g)
     g_out["members"] = members
+    # Surface the primary poster's contact on the group root as well, so
+    # clients that read `group.poster_phone` / `group.poster_name` directly
+    # (like the website's adjustment-load detail panel) can render the
+    # Call button without having to dig into `members[]`.
+    if loads:
+        primary_load = loads[0]
+        g_out.setdefault("poster_phone", primary_load.get("poster_phone", ""))
+        g_out.setdefault("poster_name", primary_load.get("poster_name", ""))
+        g_out.setdefault("poster_company", primary_load.get("poster_company", ""))
     return g_out
 
 
