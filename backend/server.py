@@ -1840,6 +1840,16 @@ async def withdraw_bid(listing_id: str, phone: str):
     return {"withdrawn": True}
 
 
+# ── Temporary: download the updated website HTML ───────────────────────────
+@api_router.get("/download/website")
+async def download_website():
+    from fastapi.responses import FileResponse
+    path = "/app/website.html"
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(path, media_type="text/html", filename="index.html")
+
+
 app.include_router(api_router)
 
 app.add_middleware(
