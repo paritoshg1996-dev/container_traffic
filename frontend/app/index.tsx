@@ -30,6 +30,59 @@ import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from "expo-spe
 
 const API = `https://ptl-market.onrender.com/api`;
 
+// ─── App-wide limits (previously hardcoded inline at each call site) ───────
+const MAX_LOAD_PHOTO_BYTES = 50 * 1024 * 1024;   // load/cargo photos (PostPtlLoadScreen)
+const MAX_DOC_PHOTO_BYTES = 5 * 1024 * 1024;     // verification doc photos
+const MAX_LOAD_PHOTOS = 3;
+const MAX_DIMENSION_LENGTH_FT = 40;
+const MAX_DIMENSION_BREADTH_FT = 8;
+const MAX_DIMENSION_HEIGHT_FT = 9;
+
+// ─── Shared API helper ──────────────────────────────────────────────────────
+// Centralizes the fetch → text → JSON-parse-with-fallback → error-shape
+// pattern that was previously repeated in every submit handler across the
+// app (PostLoadScreen, PostPtlLoadScreen, VerificationDocsScreen, etc).
+type ApiResult<T = any> = { ok: true; data: T } | { ok: false; error: string };
+async function apiRequest<T = any>(
+  path: string,
+  options?: { method?: string; body?: any }
+): Promise<ApiResult<T>> {
+  try {
+    const res = await fetch(`${API}${path}`, {
+      method: options?.method || (options?.body ? "POST" : "GET"),
+      headers: options?.body ? { "Content-Type": "application/json" } : undefined,
+      body: options?.body ? JSON.stringify(options.body) : undefined,
+    });
+    const text = await res.text();
+    let data: any = {};
+    try { data = text ? JSON.parse(text) : {}; } catch { data = { detail: text }; }
+    if (!res.ok) {
+      const error =
+        res.status === 404
+          ? "This feature isn't available on the server yet. Please ask the team to deploy the latest backend."
+          : (data?.detail || `Server returned HTTP ${res.status}.`);
+      return { ok: false, error };
+    }
+    return { ok: true, data };
+  } catch (e: any) {
+    return { ok: false, error: e?.message || "Network request failed. Please check your connection and try again." };
+  }
+}
+
+// ─── Shared origin/destination validation ──────────────────────────────────
+// A location is valid if either a 6-digit pincode was typed directly, or a
+// place was actually selected from the search results (has coordinates or
+// at least a city/locality/place name). Used by every "post a load" form.
+function isRouteInfoValid(pin: string, info: any, requireValidFlag: boolean = false): boolean {
+  if (/^\d{6}$/.test(pin)) return true;
+  if (!info) return false;
+  if (requireValidFlag && !info.valid) return false;
+  return (info.latitude != null && info.longitude != null) || !!(info.city || info.locality || info.placeName);
+}
+
+const TRUCK_CAPACITY_KG = 20000;
+const PTL_CARGO_TYPES = ["Bags", "Carton Box", "Drums", "Loose", "Others"];
+
 // Phone-auth storage keys
 const PROFILE_KEY = "profile";
 const PHONE_VERIFIED_KEY = "phoneVerified";
@@ -183,6 +236,7 @@ type PtlLoad = {
   dimension_height?: number | null;
   cargo_placement?: string;
   images?: string[];
+  verified?: boolean;
 };
 
 type PtlMember = {
@@ -210,6 +264,7 @@ type PtlMember = {
   dimension_height?: number | null;
   cargo_placement?: string;
   images?: string[];
+  verified?: boolean;
 };
 
 type AppNotification = {
@@ -254,16 +309,6 @@ type PtlGroup = {
   status: "FORMING" | "PAIRED" | "CONFIRMED" | "FULL" | "DISPATCHED";
   created_at: string;
   members?: PtlMember[];
-};
-
-const TRUCK_CAPACITY_KG = 20000;
-const PTL_CARGO_TYPES = ["Bags", "Carton Box", "Drums", "Loose", "Others"];
-const CARGO_TYPE_TO_CATEGORY: Record<string, string> = {
-  "Bags": "GENERAL",
-  "Carton Box": "GENERAL",
-  "Loose": "GENERAL",
-  "Others": "GENERAL",
-  "Drums": "GENERAL", // Drums prompts for HAZMAT confirmation in UI
 };
 
 function ptlFillColor(pct: number): string {
@@ -340,7 +385,7 @@ export default function Index() {
   const [phoneVerified, setPhoneVerified] = useState<PhoneVerified | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [tab, setTab] = useState<"myPosts" | "market">("market");
-  const [postFlow, setPostFlow] = useState<null | "selection" | "truckSpace" | "adjustment">(null);
+  const [postFlow, setPostFlow] = useState<null | "selection" | "truckSpace" | "adjustment">("selection");
   const [showProfile, setShowProfile] = useState(false);
   const [showEditProfile, setShowEditProfile] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -374,26 +419,6 @@ export default function Index() {
       setLoaded(true);
     })();
   }, []);
-	
-useEffect(() => {
-  if (!firebaseAuth) {
-    console.log("Firebase Auth module NOT loaded");
-    return;
-  }
-
-  try {
-    console.log("===== FIREBASE APP CONFIG =====");
-    console.log("App Name:", firebaseAuth().app.name);
-    console.log("App Options:", firebaseAuth().app.options);
-    console.log("App ID:", firebaseAuth().app.options.appId);
-    console.log("Project ID:", firebaseAuth().app.options.projectId);
-    console.log("Storage Bucket:", firebaseAuth().app.options.storageBucket);
-    console.log("Package:", "com.ptlmarket.trucktraffic");
-    console.log("================================");
-  } catch (e) {
-    console.log("Firebase config read failed:", e);
-  }
-}, []);
 
   const saveProfile = async (p: Profile) => {
     // Fetch latest verified status from backend before saving
@@ -482,20 +507,11 @@ useEffect(() => {
     );
   }
 
-  if (showProfile) {
-    return (
-      <ProfileScreen
-        profile={profile}
-        onClose={() => setShowProfile(false)}
-        onEdit={() => { setShowProfile(false); setShowEditProfile(true); }}
-      />
-    );
-  }
-
   const insets = useSafeAreaInsets();
 
   return (
     <SafeAreaView style={styles.fill} edges={["top"]}>
+      {!showProfile && (
       <View style={styles.header} testID="app-header">
         <View style={styles.headerLeft}>
           {(postFlow === "truckSpace" || postFlow === "adjustment") ? (
@@ -526,35 +542,43 @@ useEffect(() => {
           <Ionicons name="person-circle-outline" size={28} color={COLORS.primary} />
         </TouchableOpacity>
       </View>
+      )}
 
       <View style={{ flex: 1 }}>
-        {postFlow === "selection" && (
+        {showProfile && (
+          <ProfileScreen
+            profile={profile}
+            onClose={() => setShowProfile(false)}
+            onEdit={() => { setShowProfile(false); setShowEditProfile(true); }}
+          />
+        )}
+        {!showProfile && postFlow === "selection" && (
           <PostSelectionScreen
             onSelectTruckSpace={() => setPostFlow("truckSpace")}
             onSelectAdjustment={() => setPostFlow("adjustment")}
           />
         )}
-        {postFlow === "truckSpace" && (
+        {!showProfile && postFlow === "truckSpace" && (
           <PostLoadScreen
             profile={profile}
             onPosted={(filter) => { setPendingMarketFilter(filter ?? null); setPostFlow(null); setTab("market"); }}
           />
         )}
-        {postFlow === "adjustment" && (
+        {!showProfile && postFlow === "adjustment" && (
           <PostPtlLoadScreen
             profile={profile}
             onNotificationsRead={() => setUnreadCount(0)}
             onPosted={(filter) => { setPendingMarketFilter(filter ?? null); setPostFlow(null); setTab("market"); }}
           />
         )}
-        {!postFlow && tab === "market"  && (
+        {!showProfile && !postFlow && tab === "market"  && (
           <LoadMarketScreen
             profile={profile}
             pendingFilter={pendingMarketFilter}
             onConsumePendingFilter={() => setPendingMarketFilter(null)}
           />
         )}
-        {!postFlow && tab === "myPosts" && <MyPostsScreen profile={profile} />}
+        {!showProfile && !postFlow && tab === "myPosts" && <MyPostsScreen profile={profile} />}
       </View>
 
       {/* ── New bottom nav with floating FAB ── */}
@@ -562,26 +586,26 @@ useEffect(() => {
         <BottomNavBtn
           icon="clipboard-outline"
           label="My Posts"
-          active={!postFlow && tab === "myPosts"}
-          onPress={() => { setPostFlow(null); setTab("myPosts"); }}
+          active={!showProfile && !postFlow && tab === "myPosts"}
+          onPress={() => { setShowProfile(false); setPostFlow(null); setTab("myPosts"); }}
           testID="bottom-nav-myposts"
         />
         <View style={newStyles.fabContainer}>
           <TouchableOpacity
             testID="bottom-nav-post"
-            onPress={() => setPostFlow("selection")}
+            onPress={() => { setShowProfile(false); setPostFlow("selection"); }}
             style={newStyles.fabBtn}
             activeOpacity={0.8}
           >
             <Ionicons name="add" size={32} color={COLORS.surface} />
           </TouchableOpacity>
-          <Text style={[styles.bottomNavLabel, !!postFlow && styles.bottomNavLabelActive]}>Post</Text>
+          <Text style={[styles.bottomNavLabel, !showProfile && !!postFlow && styles.bottomNavLabelActive]}>Post</Text>
         </View>
         <BottomNavBtn
           icon="search-outline"
           label="Find"
-          active={!postFlow && tab === "market"}
-          onPress={() => { setPostFlow(null); setTab("market"); }}
+          active={!showProfile && !postFlow && tab === "market"}
+          onPress={() => { setShowProfile(false); setPostFlow(null); setTab("market"); }}
           testID="bottom-nav-market"
         />
       </View>
@@ -1166,13 +1190,13 @@ function EditLoadModal({ load, visible, onClose, onSaved }: { load: Load; visibl
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
 
   const pickImage = async () => {
-    if (images.length >= 3) { Alert.alert("Limit", "You can attach up to 3 photos."); return; }
+    if (images.length >= MAX_LOAD_PHOTOS) { Alert.alert("Limit", `You can attach up to ${MAX_LOAD_PHOTOS} photos.`); return; }
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) { Alert.alert("Permission needed", "Please grant photo library access to attach images."); return; }
-    const remaining = 3 - images.length;
+    const remaining = MAX_LOAD_PHOTOS - images.length;
     const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: false, allowsMultipleSelection: true, selectionLimit: remaining, quality: 0.7, base64: true });
     if (!res.canceled && res.assets && res.assets.length > 0) {
-      const MAX_SIZE_BYTES = 50 * 1024 * 1024; // 50MB
+      const MAX_SIZE_BYTES = MAX_LOAD_PHOTO_BYTES;
       const validAssets = res.assets.slice(0, remaining).filter((a: any) => {
         if (!a.base64) return false;
         const sizeBytes = (a.base64.length * 3) / 4;
@@ -1214,25 +1238,8 @@ function EditLoadModal({ load, visible, onClose, onSaved }: { load: Load; visibl
   const save = async () => {
     
 	  
-const originValid =
-  /^\d{6}$/.test(originPin) ||
-  (
-    originInfo?.valid &&
-    (
-      (originInfo?.latitude != null && originInfo?.longitude != null) ||
-      !!(originInfo?.city || originInfo?.locality || originInfo?.placeName)
-    )
-  );
-
-const destValid =
-  /^\d{6}$/.test(destPin) ||
-  (
-    destInfo?.valid &&
-    (
-      (destInfo?.latitude != null && destInfo?.longitude != null) ||
-      !!(destInfo?.city || destInfo?.locality || destInfo?.placeName)
-    )
-  );
+const originValid = isRouteInfoValid(originPin, originInfo, true);
+const destValid = isRouteInfoValid(destPin, destInfo, true);
 
 if (!originValid)
   return Alert.alert("Invalid Origin", "Select a valid origin.");
@@ -1250,9 +1257,9 @@ if (!destValid)
       const lengthVal = dimL ? parseInt(dimL, 10) : null;
       const breadthVal = dimB ? parseInt(dimB, 10) : null;
       const heightVal = dimH ? parseInt(dimH, 10) : null;
-      if (lengthVal !== null && lengthVal > 40) return Alert.alert("Invalid length", "Length cannot exceed 40 ft.");
-      if (breadthVal !== null && breadthVal > 8) return Alert.alert("Invalid breadth", "Breadth cannot exceed 8 ft.");
-      if (heightVal !== null && heightVal > 9) return Alert.alert("Invalid height", "Height cannot exceed 9 ft.");
+      if (lengthVal !== null && lengthVal > MAX_DIMENSION_LENGTH_FT) return Alert.alert("Invalid length", `Length cannot exceed ${MAX_DIMENSION_LENGTH_FT} ft.`);
+      if (breadthVal !== null && breadthVal > MAX_DIMENSION_BREADTH_FT) return Alert.alert("Invalid breadth", `Breadth cannot exceed ${MAX_DIMENSION_BREADTH_FT} ft.`);
+      if (heightVal !== null && heightVal > MAX_DIMENSION_HEIGHT_FT) return Alert.alert("Invalid height", `Height cannot exceed ${MAX_DIMENSION_HEIGHT_FT} ft.`);
       const priceVal = pricePerTon ? parseInt(pricePerTon, 10) : null;
       const payload = {
         origin_pincode: originPin, origin_locality: originInfo?.locality || "", origin_city: originInfo?.city || "", origin_state: originInfo?.state || "",
@@ -1605,7 +1612,7 @@ function VerificationDocsScreen({ phone, alreadySubmitted, onClose }: {
     });
     if (!res.canceled && res.assets?.[0]?.base64) {
       const a = res.assets[0];
-      const MAX = 5 * 1024 * 1024 * 4 / 3;
+      const MAX = MAX_DOC_PHOTO_BYTES * 4 / 3;
       if (a.base64!.length > MAX) {
         Alert.alert("File too large", "Please choose an image under 5 MB.");
         return;
@@ -1845,7 +1852,7 @@ const handleInvite = async () => {
   const initials = profile.name.split(" ").map((p) => p[0]).filter(Boolean).slice(0, 2).join("").toUpperCase();
 
   return (
-    <SafeAreaView style={styles.fill} edges={["top"]}>
+    <View style={styles.fill}>
       <View style={styles.header} testID="profile-header">
         <TouchableOpacity testID="profile-back-btn" onPress={onClose} style={styles.iconBtn}>
           <Ionicons name="arrow-back" size={24} color={COLORS.text} />
@@ -1883,7 +1890,17 @@ const handleInvite = async () => {
           ) : (
             <TouchableOpacity
               style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 10, backgroundColor: "#FFF4EE", borderRadius: 100, paddingVertical: 5, paddingHorizontal: 14, borderWidth: 1, borderColor: COLORS.secondary }}
-              onPress={() => setShowVerifyDocs(true)}
+              onPress={() => {
+                if (profile.verification_submitted) {
+                  Alert.alert(
+                    "Verification Under Review",
+                    "We've received your documents and our team is reviewing them. This usually takes up to 48 hours — we'll notify you as soon as your verified badge is ready. No further action is needed from you right now.",
+                    [{ text: "Got it" }],
+                  );
+                } else {
+                  setShowVerifyDocs(true);
+                }
+              }}
               activeOpacity={0.8}
             >
               <Ionicons name="shield-checkmark-outline" size={16} color={COLORS.secondary} />
@@ -1920,7 +1937,7 @@ const handleInvite = async () => {
           onSaved={() => { setEditLoad(null); fetchMy(); }}
         />
       )}
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -1981,13 +1998,13 @@ const onDateChange = (event: any, selected?: Date) => {
   const [loadingPost, setLoadingPost] = useState(false);
 
   const pickImage = async () => {
-    if (images.length >= 3) { Alert.alert("Limit", "You can attach up to 3 photos."); return; }
+    if (images.length >= MAX_LOAD_PHOTOS) { Alert.alert("Limit", `You can attach up to ${MAX_LOAD_PHOTOS} photos.`); return; }
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) { Alert.alert("Permission needed", "Please grant photo library access to attach images."); return; }
-    const remaining = 3 - images.length;
+    const remaining = MAX_LOAD_PHOTOS - images.length;
     const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: false, allowsMultipleSelection: true, selectionLimit: remaining, quality: 0.7, base64: true });
     if (!res.canceled && res.assets && res.assets.length > 0) {
-      const MAX_SIZE_BYTES = 50 * 1024 * 1024;
+      const MAX_SIZE_BYTES = MAX_LOAD_PHOTO_BYTES;
       const validAssets = res.assets.slice(0, remaining).filter((a: any) => {
         if (!a.base64) return false;
         const sizeBytes = (a.base64.length * 3) / 4;
@@ -2016,25 +2033,8 @@ const onDateChange = (event: any, selected?: Date) => {
 
   const submit = async (alsoShare: boolean) => {
 
-	  const originValid =
-  /^\d{6}$/.test(originPin) ||
-  (
-    originInfo?.valid &&
-    (
-      (originInfo?.latitude != null && originInfo?.longitude != null) ||
-      !!(originInfo?.city || originInfo?.locality || originInfo?.placeName)
-    )
-  );
-
-const destValid =
-  /^\d{6}$/.test(destPin) ||
-  (
-    destInfo?.valid &&
-    (
-      (destInfo?.latitude != null && destInfo?.longitude != null) ||
-      !!(destInfo?.city || destInfo?.locality || destInfo?.placeName)
-    )
-  );
+	  const originValid = isRouteInfoValid(originPin, originInfo, true);
+const destValid = isRouteInfoValid(destPin, destInfo, true);
 
 if (!originValid) {
   return Alert.alert(
@@ -2063,9 +2063,9 @@ if (pricePerTon && parseInt(pricePerTon, 10) > 10000) return Alert.alert("Price 
       const lengthVal = dimL ? parseInt(dimL, 10) : null;
       const breadthVal = dimB ? parseInt(dimB, 10) : null;
       const heightVal = dimH ? parseInt(dimH, 10) : null;
-      if (lengthVal !== null && lengthVal > 40) return Alert.alert("Invalid length", "Length cannot exceed 40 ft.");
-      if (breadthVal !== null && breadthVal > 8) return Alert.alert("Invalid breadth", "Breadth cannot exceed 8 ft.");
-      if (heightVal !== null && heightVal > 9) return Alert.alert("Invalid height", "Height cannot exceed 9 ft.");
+      if (lengthVal !== null && lengthVal > MAX_DIMENSION_LENGTH_FT) return Alert.alert("Invalid length", `Length cannot exceed ${MAX_DIMENSION_LENGTH_FT} ft.`);
+      if (breadthVal !== null && breadthVal > MAX_DIMENSION_BREADTH_FT) return Alert.alert("Invalid breadth", `Breadth cannot exceed ${MAX_DIMENSION_BREADTH_FT} ft.`);
+      if (heightVal !== null && heightVal > MAX_DIMENSION_HEIGHT_FT) return Alert.alert("Invalid height", `Height cannot exceed ${MAX_DIMENSION_HEIGHT_FT} ft.`);
       const priceVal = pricePerTon ? parseInt(pricePerTon, 10) : null;
       const payload = {
         origin_pincode: originPin, origin_locality: originInfo?.locality || "", origin_city: originInfo?.city || "", origin_state: originInfo?.state || "",
@@ -2789,15 +2789,6 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
 
 		  
 
-		  console.log(
-  "MAPPLS_RAW",
-  all.map((x: any) => ({
-    name: x.placeName,
-    type: x.type,
-    address: x.placeAddress,
-    pincode: x.addressTokens?.pincode,
-  }))
-);
         // Dev-only: log raw Mappls items (type + placeName) so any future
         // divergence vs the website can be diagnosed quickly. No filtering
         // happens here — this is purely observational. Stripped from
@@ -2928,9 +2919,6 @@ const pincode: string =
   };
 
   const pick = async (s: CitySuggestion) => {
-  console.log("PICKED", s);
-	 
-	  
 	 if (!s.pincode) {
   // Autosuggest never returns lat/lon — but placeAddress always contains
   // the pincode (e.g. "Mumbai, Maharashtra, 400053"). Extract it and use
@@ -4722,6 +4710,7 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
                 <View style={{ flex: 1 }}>
                   <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                     <Text style={[detailStyles.posterName, !isMine && { color: COLORS.primary, textDecorationLine: "underline" }]}>{primary.name}</Text>
+                    {primary.verified && <Ionicons name="checkmark-circle" size={14} color={COLORS.success} />}
                     {isMine && <Text style={styles.youTag}>· You</Text>}
                   </View>
                   {primary.company ? <Text style={detailStyles.posterCompany}>{primary.company}</Text> : null}
@@ -5381,25 +5370,8 @@ function FindSpaceModal({ visible, initial, onClose, onApply }: {
 	  setOriginErr("");
 setDestErr("");
 
-const originValid =
-  /^\d{6}$/.test(originPin) ||
-  (
-    originInfo?.valid &&
-    (
-      (originInfo?.latitude != null && originInfo?.longitude != null) ||
-      !!(originInfo?.city || originInfo?.locality || originInfo?.placeName)
-    )
-  );
-
-const destValid =
-  /^\d{6}$/.test(destPin) ||
-  (
-    destInfo?.valid &&
-    (
-      (destInfo?.latitude != null && destInfo?.longitude != null) ||
-      !!(destInfo?.city || destInfo?.locality || destInfo?.placeName)
-    )
-  );
+const originValid = isRouteInfoValid(originPin, originInfo, true);
+const destValid = isRouteInfoValid(destPin, destInfo, true);
 
 if (!originValid) {
   setOriginErr("Select a valid origin from the list");
@@ -5595,7 +5567,7 @@ function PtlGroupCard({ group, profile, onPress, contactsMap }: { group: PtlGrou
     cargo_types: group.cargo_categories || [], cargo_placement: "", weight_tons: (group.total_weight_kg || 0) / 1000,
     space_cuft: null, loading_date: group.created_at,
     poster_name: member.name || "Shipper", poster_phone: member.phone || "", poster_company: member.company || "",
-    created_at: group.created_at,
+    created_at: group.created_at, verified: member.verified,
   } as unknown as Load) : null;
 
   return (
@@ -5663,9 +5635,16 @@ function PtlGroupCard({ group, profile, onPress, contactsMap }: { group: PtlGrou
           <View style={cardStyles.contactSection}>
             <View style={cardStyles.posterNameRow}>
               <TouchableOpacity onPress={() => !isMine && member.phone && setShowPosterProfile(true)} activeOpacity={isMine ? 1 : 0.7}>
-                <Text style={[styles.posterName, !isMine && { color: COLORS.primary, textDecorationLine: "underline" }]} numberOfLines={1}>
-                  {member.name || "Shipper"}{isMine ? <Text style={styles.youTag}> · You</Text> : ""}
-                </Text>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                  <Text style={[styles.posterName, !isMine && { color: COLORS.primary, textDecorationLine: "underline" }]} numberOfLines={1}>
+                    {member.name || "Shipper"}{isMine ? <Text style={styles.youTag}> · You</Text> : ""}
+                  </Text>
+                  {member.verified && (
+                    <View style={cardStyles.verifiedBadge}>
+                      <Ionicons name="checkmark-circle" size={14} color={COLORS.success} />
+                    </View>
+                  )}
+                </View>
               </TouchableOpacity>
               {!isMine && member.phone && contactsMap?.get(member.phone) ? (
                 <View style={cardStyles.savedBadge} testID={`ptl-contact-saved-${group.id}`}>
@@ -5758,7 +5737,6 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
   const [destPin, setDestPin] = useState("");
   const [destInfo, setDestInfo] = useState<any>(null);
   const [cargoType, setCargoType] = useState("Bags");
-  const [cargoCategory, setCargoCategory] = useState("GENERAL");
   const [weightKg, setWeightKg] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -5791,7 +5769,6 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
         longitude: editLoad.destination_longitude,
       });
       setCargoType(editLoad.cargo_type || "Bags");
-      setCargoCategory(editLoad.cargo_category || "GENERAL");
       setWeightKg(editLoad.weight_kg ? String(Math.round(editLoad.weight_kg)) : "");
     }
   }, [visible, editLoad]);
@@ -5825,40 +5802,17 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
 
   const handleCargoSelect = (ct: string) => {
     setCargoType(ct);
-    if (ct === "Drums") {
-      Alert.alert(
-        "Hazardous cargo?",
-        "Do these drums contain hazardous material (chemicals, fuel, solvents)?",
-        [
-          { text: "No, general cargo", onPress: () => setCargoCategory("GENERAL") },
-          { text: "Yes, HAZMAT", style: "destructive", onPress: () => setCargoCategory("HAZMAT") },
-        ],
-        { cancelable: true },
-      );
-    } else {
-      setCargoCategory(CARGO_TYPE_TO_CATEGORY[ct] || "GENERAL");
-    }
   };
 
   const reset = () => {
     setOriginText(""); setOriginPin(""); setOriginInfo(null);
     setDestText(""); setDestPin(""); setDestInfo(null);
-    setCargoType("Bags"); setCargoCategory("GENERAL"); setWeightKg("");
+    setCargoType("Bags"); setWeightKg("");
   };
 
   const submit = async () => {
-    const originValid =
-      /^\d{6}$/.test(originPin) ||
-      (originInfo && (
-        (originInfo.latitude != null && originInfo.longitude != null) ||
-        !!(originInfo.city || originInfo.locality || originInfo.placeName)
-      ));
-    const destValid =
-      /^\d{6}$/.test(destPin) ||
-      (destInfo && (
-        (destInfo.latitude != null && destInfo.longitude != null) ||
-        !!(destInfo.city || destInfo.locality || destInfo.placeName)
-      ));
+    const originValid = isRouteInfoValid(originPin, originInfo);
+    const destValid = isRouteInfoValid(destPin, destInfo);
     if (!originValid) return Alert.alert("Origin", "Please select a valid origin from the list.");
     if (!destValid) return Alert.alert("Destination", "Please select a valid destination from the list.");
     const w = parseFloat(weightKg);
@@ -5872,10 +5826,8 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
           await fetch(`${API}/ptl/loads/${editLoad.id}?phone=${encodeURIComponent(profile.phone)}`, { method: "DELETE" });
         } catch {}
       }
-      const res = await fetch(`${API}/ptl/loads`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const result = await apiRequest("/ptl/loads", {
+        body: {
           poster_phone: profile.phone,
           origin_locality: originInfo?.locality || originText || originInfo?.placeName || "",
           origin_city: originInfo?.city || originInfo?.locality || originInfo?.placeName || originText || "",
@@ -5896,19 +5848,12 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
           destination_latitude: destInfo?.latitude ?? null,
           destination_longitude: destInfo?.longitude ?? null,
           cargo_type: cargoType,
-          cargo_category: cargoCategory,
+          cargo_category: cargoType,
           weight_kg: w,
-        }),
+        },
       });
-      const text = await res.text();
-      let data: any = {};
-      try { data = JSON.parse(text); } catch { data = { detail: text }; }
-      if (!res.ok) {
-        const reason =
-          res.status === 404
-            ? "The PTL endpoint isn't available on the server yet. Please ask the team to deploy the latest backend."
-            : (data?.detail || `Server returned HTTP ${res.status}.`);
-        Alert.alert("Could not post", reason);
+      if (!result.ok) {
+        Alert.alert("Could not post", result.error);
         return;
       }
       Alert.alert(
@@ -5916,7 +5861,7 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
         "Your partial load is now listed.",
       );
       reset();
-      onPosted(data);
+      onPosted(result.data);
     } catch (e: any) {
       Alert.alert("Network error", e?.message || "Please try again.");
     } finally {
@@ -5966,12 +5911,6 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
                 </TouchableOpacity>
               ))}
             </ScrollView>
-            {cargoCategory === "HAZMAT" && (
-              <View style={styles.ptlHazmatBanner}>
-                <Ionicons name="warning" size={16} color="#B91C1C" />
-                <Text style={styles.ptlHazmatText}>HAZMAT — will be grouped only with other HAZMAT loads</Text>
-              </View>
-            )}
 
             <Text style={[styles.label, { marginTop: 18 }]}>Weight (kg)</Text>
             <TextInput
@@ -6061,15 +6000,6 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
   const [busy, setBusy] = useState(false);
 
   const cargoType = cargoTypes[0] || "";
-  const cargoCategory = useMemo(() => {
-    const ct = (cargoType || "").startsWith("Others:") ? "Others" : cargoType;
-    if (ct === "Fresh Produce") return "PERISHABLE";
-    if (ct === "Drums") return _drumsCat;   // resolved below
-    return "GENERAL";
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cargoType]);
-  // For "Drums" we need to prompt HAZMAT/GENERAL. Keep that choice in a ref.
-  const [_drumsCat, setDrumsCat] = useState<"GENERAL" | "HAZMAT">("GENERAL");
 
   const onDateChange = (event: any, selected?: Date) => {
     if (Platform.OS !== "ios") setShowDatePicker(false);
@@ -6093,31 +6023,20 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
     setCargoTypes([key]);
     setCargoOther("");
     setShowCargoOtherInput(isOthers);
-    if (key === "Drums") {
-      Alert.alert(
-        "Hazardous cargo?",
-        "Do these drums contain hazardous material (chemicals, fuel, solvents)?",
-        [
-          { text: "No, general cargo", onPress: () => setDrumsCat("GENERAL") },
-          { text: "Yes, HAZMAT", style: "destructive", onPress: () => setDrumsCat("HAZMAT") },
-        ],
-        { cancelable: true },
-      );
-    }
   };
 
   const pickImage = async () => {
-    if (images.length >= 3) { Alert.alert("Limit", "You can attach up to 3 photos."); return; }
+    if (images.length >= MAX_LOAD_PHOTOS) { Alert.alert("Limit", `You can attach up to ${MAX_LOAD_PHOTOS} photos.`); return; }
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) { Alert.alert("Permission needed", "Please grant photo library access to attach images."); return; }
-    const remaining = 3 - images.length;
+    const remaining = MAX_LOAD_PHOTOS - images.length;
     const res = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: false, allowsMultipleSelection: true, selectionLimit: remaining,
       quality: 0.7, base64: true,
     });
     if (!res.canceled && res.assets && res.assets.length > 0) {
-      const MAX = 50 * 1024 * 1024;
+      const MAX = MAX_LOAD_PHOTO_BYTES;
       const valid = res.assets.slice(0, remaining).filter((a: any) => {
         if (!a.base64) return false;
         const bytes = (a.base64.length * 3) / 4;
@@ -6144,24 +6063,14 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
     setOriginText(""); setOriginPin(""); setOriginInfo(null);
     setDestText(""); setDestPin(""); setDestInfo(null);
     setDate(new Date()); setWeight(1.0); setWeightInput("");
-    setCargoTypes([]); setCargoOther(""); setShowCargoOtherInput(false); setDrumsCat("GENERAL");
+    setCargoTypes([]); setCargoOther(""); setShowCargoOtherInput(false);
     setDimL(""); setDimB(""); setDimH("");
     setTruckType(""); setPlacement(""); setImages([]);
   };
 
   const submit = async () => {
-    const originValid =
-      /^\d{6}$/.test(originPin) ||
-      (originInfo && (
-        (originInfo.latitude != null && originInfo.longitude != null) ||
-        !!(originInfo.city || originInfo.locality || originInfo.placeName)
-      ));
-    const destValid =
-      /^\d{6}$/.test(destPin) ||
-      (destInfo && (
-        (destInfo.latitude != null && destInfo.longitude != null) ||
-        !!(destInfo.city || destInfo.locality || destInfo.placeName)
-      ));
+    const originValid = isRouteInfoValid(originPin, originInfo);
+    const destValid = isRouteInfoValid(destPin, destInfo);
     if (!originValid) return Alert.alert("Origin", "Please select a valid origin from the list.");
     if (!destValid) return Alert.alert("Destination", "Please select a valid destination from the list.");
     if (!cargoType) return Alert.alert("Product type", "Please select a product type.");
@@ -6172,18 +6081,16 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
     const L = dimL ? parseInt(dimL, 10) : null;
     const B = dimB ? parseInt(dimB, 10) : null;
     const H = dimH ? parseInt(dimH, 10) : null;
-    if (L !== null && L > 40) return Alert.alert("Invalid length", "Length cannot exceed 40 ft.");
-    if (B !== null && B > 8) return Alert.alert("Invalid breadth", "Breadth cannot exceed 8 ft.");
-    if (H !== null && H > 9) return Alert.alert("Invalid height", "Height cannot exceed 9 ft.");
+    if (L !== null && L > MAX_DIMENSION_LENGTH_FT) return Alert.alert("Invalid length", `Length cannot exceed ${MAX_DIMENSION_LENGTH_FT} ft.`);
+    if (B !== null && B > MAX_DIMENSION_BREADTH_FT) return Alert.alert("Invalid breadth", `Breadth cannot exceed ${MAX_DIMENSION_BREADTH_FT} ft.`);
+    if (H !== null && H > MAX_DIMENSION_HEIGHT_FT) return Alert.alert("Invalid height", `Height cannot exceed ${MAX_DIMENSION_HEIGHT_FT} ft.`);
 
     setBusy(true);
     try {
       const cargoTypeFinal = cargoType.startsWith("Others:") && cargoOther.trim()
         ? `Others: ${cargoOther.trim()}` : cargoType;
-      const res = await fetch(`${API}/ptl/loads`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const result = await apiRequest("/ptl/loads", {
+        body: {
           poster_phone: profile.phone,
           origin_locality: originInfo?.locality || originText || originInfo?.placeName || "",
           origin_city: originInfo?.city || originInfo?.locality || originInfo?.placeName || originText || "",
@@ -6204,7 +6111,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
           destination_latitude: destInfo?.latitude ?? null,
           destination_longitude: destInfo?.longitude ?? null,
           cargo_type: cargoTypeFinal,
-          cargo_category: cargoCategory,
+          cargo_category: cargoTypeFinal,
           weight_kg: Math.round(weight * 1000),    // tons → kg
           truck_type: truckType,
           loading_date: date.toISOString().slice(0, 10),
@@ -6213,20 +6120,13 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
           dimension_height: H,
           cargo_placement: placement,
           images,
-        }),
+        },
       });
-      const text = await res.text();
-      let data: any = {};
-      try { data = JSON.parse(text); } catch { data = { detail: text }; }
-      if (!res.ok) {
-        const reason =
-          res.status === 404
-            ? "The PTL endpoint isn't available on the server yet. Please ask the team to deploy the latest backend."
-            : (data?.detail || `Server returned HTTP ${res.status}.`);
-        Alert.alert("Could not post", reason);
+      if (!result.ok) {
+        Alert.alert("Could not post", result.error);
         return;
       }
-
+      const data = result.data;
       // Build WhatsApp share message (mirrors the Truck Space "Post & Share" flow)
       const dateStr = date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
       const oStateName = sanitizeStateForDisplay(originInfo?.state || "", originPin);
@@ -6487,20 +6387,6 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
             />
           </View>
         )}
-        {cargoCategory !== "GENERAL" && cargoType ? (
-          <View style={[styles.ptlHazmatBanner, cargoCategory === "PERISHABLE" && { backgroundColor: "#DCFCE7" }]}>
-            <Ionicons
-              name={cargoCategory === "HAZMAT" ? "warning" : "snow-outline"}
-              size={16}
-              color={cargoCategory === "HAZMAT" ? "#B91C1C" : "#15803D"}
-            />
-            <Text style={[styles.ptlHazmatText, cargoCategory === "PERISHABLE" && { color: "#15803D" }]}>
-              {cargoCategory === "HAZMAT"
-                ? "HAZMAT — will only group with other HAZMAT loads"
-                : "PERISHABLE — will only group with other perishable loads"}
-            </Text>
-          </View>
-        ) : null}
 
         {/* ===== Optional fields (collapsible) ===== */}
         <Text style={styles.optionalHeading}>Add more details (optional)</Text>
@@ -6709,7 +6595,14 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
 // Build a PtlGroup-shaped object from a single raw PtlLoad so it can be
 // rendered with the same PtlGroupCard used everywhere else in the app
 // (Marketplace, My Posts, and poster profile screens).
-function ptlLoadToGroup(item: PtlLoad, posterName: string): PtlGroup {
+// `opts.phone` overrides item.poster_phone (used when building "my own"
+// posts, where the load itself may not carry the phone back) and
+// `opts.isMe` flags the member as the viewer's own post.
+function ptlLoadToGroup(
+  item: PtlLoad,
+  posterName: string,
+  opts?: { phone?: string; isMe?: boolean }
+): PtlGroup {
   return {
     id: item.id,
     corridor: "",
@@ -6720,23 +6613,27 @@ function ptlLoadToGroup(item: PtlLoad, posterName: string): PtlGroup {
     capacity_kg: TRUCK_CAPACITY_KG,
     capacity_remaining_kg: TRUCK_CAPACITY_KG - item.weight_kg,
     fill_pct: 0,
-    cargo_categories: item.cargo_category ? [item.cargo_category] : [],
+    cargo_categories: item.cargo_type ? [item.cargo_type] : [],
     status: "FORMING",
     created_at: item.posted_at,
     members: [{
       load_id: item.id,
-      phone: item.poster_phone,
+      phone: opts?.phone ?? item.poster_phone,
       name: posterName,
       company: item.poster_company,
       origin_locality: item.origin_locality,
       origin_city: item.origin_city,
+      origin_state: item.origin_state,
       origin_pincode: item.origin_pincode,
       destination_locality: item.destination_locality,
       destination_city: item.destination_city,
+      destination_state: item.destination_state,
       destination_pincode: item.destination_pincode,
       weight_kg: item.weight_kg,
       cargo_type: item.cargo_type,
       cargo_category: item.cargo_category,
+      verified: item.verified,
+      is_me: opts?.isMe,
       truck_type: item.truck_type,
       loading_date: item.loading_date,
       dimension_length: item.dimension_length,
@@ -6824,45 +6721,7 @@ function MyPtlLoadsList({ profile }: { profile: Profile }) {
   const groupFor = (item: PtlLoad): PtlGroup => {
     const real = item.group_id ? groupCache[item.group_id] : null;
     if (real) return real;
-    return {
-      id: item.id,
-      corridor: "",
-      origin_display: item.origin_locality || item.origin_city || "",
-      destination_display: item.destination_locality || item.destination_city || "",
-      load_ids: [item.id],
-      total_weight_kg: item.weight_kg,
-      capacity_kg: TRUCK_CAPACITY_KG,
-      capacity_remaining_kg: TRUCK_CAPACITY_KG - item.weight_kg,
-      fill_pct: 0,
-      cargo_categories: item.cargo_category ? [item.cargo_category] : [],
-      status: "FORMING",
-      created_at: item.posted_at,
-      members: [{
-        load_id: item.id,
-        phone: profile.phone,
-        name: profile.name,
-        company: item.poster_company,
-        origin_locality: item.origin_locality,
-        origin_city: item.origin_city,
-        origin_state: item.origin_state,
-        origin_pincode: item.origin_pincode,
-        destination_locality: item.destination_locality,
-        destination_city: item.destination_city,
-        destination_state: item.destination_state,
-        destination_pincode: item.destination_pincode,
-        weight_kg: item.weight_kg,
-        cargo_type: item.cargo_type,
-        cargo_category: item.cargo_category,
-        is_me: true,
-        truck_type: item.truck_type,
-        loading_date: item.loading_date,
-        dimension_length: item.dimension_length,
-        dimension_breadth: item.dimension_breadth,
-        dimension_height: item.dimension_height,
-        cargo_placement: item.cargo_placement,
-        images: item.images,
-      }],
-    };
+    return ptlLoadToGroup(item, profile.name, { phone: profile.phone, isMe: true });
   };
 
   const deleteLoad = (item: PtlLoad) => {
@@ -7043,32 +6902,24 @@ const newStyles = StyleSheet.create({
     width: 96,
     height: 96,
   },
-  postTypeIconBadge: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 8,
-  },
   postTypeTitle: {
-    fontSize: 20,
+    fontSize: 22,
     fontFamily: "Inter_700Bold",
     fontWeight: "700",
     color: COLORS.text,
     letterSpacing: -0.2,
   },
   postTypeDivider: {
-    width: 32,
-    height: 2.5,
+    width: 36,
+    height: 3,
     borderRadius: 2,
-    marginVertical: 7,
+    marginVertical: 9,
   },
   postTypeDesc: {
-    fontSize: 13,
+    fontSize: 14,
     fontFamily: "Inter_400Regular",
     color: COLORS.textMuted,
-    lineHeight: 19,
+    lineHeight: 20,
   },
   postTypeChevron: {
     width: 34,
@@ -7131,12 +6982,9 @@ function PostSelectionScreen({
             />
           </View>
           <View style={{ flex: 1 }}>
-            <View style={[newStyles.postTypeIconBadge, { backgroundColor: COLORS.primary }]}>
-              <Ionicons name="car-outline" size={17} color={COLORS.surface} />
-            </View>
             <Text style={newStyles.postTypeTitle}>Truck Space</Text>
             <View style={[newStyles.postTypeDivider, { backgroundColor: COLORS.primary }]} />
-            <Text style={newStyles.postTypeDesc}>{"Truck already available.\nFill your empty capacity."}</Text>
+            <Text style={newStyles.postTypeDesc}>{"Empty space in your truck? Find a partial load on your route to fill it."}</Text>
           </View>
           <View style={[newStyles.postTypeChevron, { backgroundColor: COLORS.primary }]}>
             <Ionicons name="chevron-forward" size={18} color={COLORS.surface} />
@@ -7160,12 +7008,9 @@ function PostSelectionScreen({
             />
           </View>
           <View style={{ flex: 1 }}>
-            <View style={[newStyles.postTypeIconBadge, { backgroundColor: COLORS.secondary }]}>
-              <Ionicons name="cube-outline" size={17} color={COLORS.surface} />
-            </View>
             <Text style={newStyles.postTypeTitle}>Partial Load</Text>
             <View style={[newStyles.postTypeDivider, { backgroundColor: COLORS.secondary }]} />
-            <Text style={newStyles.postTypeDesc}>{"Post your load.\nWe'll find another load to make a full truck."}</Text>
+            <Text style={newStyles.postTypeDesc}>{"Have a partial truck load? Find adjustment loads on your route to cut freight cost."}</Text>
           </View>
           <View style={[newStyles.postTypeChevron, { backgroundColor: COLORS.secondary }]}>
             <Ionicons name="chevron-forward" size={18} color={COLORS.surface} />
