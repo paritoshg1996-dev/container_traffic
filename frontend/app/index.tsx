@@ -2134,7 +2134,7 @@ if (pricePerTon && parseInt(pricePerTon, 10) > 10000) return Alert.alert("Price 
           (profile.company ? ` — ${profile.company}` : "") +
           `\n+91 ${profile.phone}\n\n` +
           `🔗 *More info:* ${postShareUrl}\n` +
-          `📲 *Playstore:* https://play.google.com/store/apps/details?id=com.ptlmarket.trucktraffic`;
+          `📲 *Playstore:* ${PLAYSTORE_SHORT_URL}`;
         const waUrl = `https://wa.me/?text=${encodeURIComponent(text)}`;
         const canOpen = await Linking.canOpenURL(waUrl).catch(() => false);
         if (canOpen) {
@@ -3923,6 +3923,22 @@ function loadSharePath(load: any): string {
   return "https://www.trucktraffic.in";
 }
 
+// Returns the short-link path for a Partial Load (adjustment-load) group.
+// Mirrors `loadSharePath` — prefers the server-assigned 6-char short_id and
+// falls back to the full `GRP-…` id for older groups.
+function groupSharePath(group: any): string {
+  const sid = group?.short_id || group?.group_short_id;
+  if (sid) return `https://www.trucktraffic.in/a/${sid}`;
+  const gid = group?.id || group?.group_id;
+  if (gid) return `https://www.trucktraffic.in/a/${gid}`;
+  return "https://www.trucktraffic.in";
+}
+
+// Shortened Play Store URL (302 redirect handled on trucktraffic.in server).
+// Set up a redirect on your web host: `/app` → the full Play Store URL:
+//   https://play.google.com/store/apps/details?id=com.ptlmarket.trucktraffic
+const PLAYSTORE_SHORT_URL = "https://trucktraffic.in/app";
+
 function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhone }: { load: Load; isMine: boolean; distance?: { origin: number; dest: number; offRoute: boolean }; contactName?: string; contactsMap?: Map<string, string>; viewerPhone?: string }) {
   const [showPosterProfile, setShowPosterProfile] = useState(false);
   const [showDetail, setShowDetail] = useState(false);
@@ -3972,7 +3988,7 @@ function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhon
       (load.poster_company ? ` — ${load.poster_company}` : "") +
       `\n+91 ${load.poster_phone}\n\n` +
       `🔗 *More info:* ${shareUrl}\n` +
-      `📲 *Playstore:* https://play.google.com/store/apps/details?id=com.ptlmarket.trucktraffic`;
+      `📲 *Playstore:* ${PLAYSTORE_SHORT_URL}`;
     try { await Linking.openURL(`https://wa.me/?text=${encodeURIComponent(text)}`); }
     catch { Alert.alert("Error", "WhatsApp could not be opened."); }
   };
@@ -4746,7 +4762,7 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
           `📞 ${load.poster_name}${load.poster_company ? ` — ${load.poster_company}` : ""}\n` +
           `+91 ${load.poster_phone}\n\n` +
           `🔗 *More info:* ${shareUrl}\n` +
-          `📲 *Playstore:* https://play.google.com/store/apps/details?id=com.ptlmarket.trucktraffic`;
+          `📲 *Playstore:* ${PLAYSTORE_SHORT_URL}`;
       } else if (ptlGroup) {
         const primary = (ptlGroup.members || [])[0];
         const weightT = ((primary?.weight_kg ?? ptlGroup.total_weight_kg ?? 0) / 1000).toFixed(1);
@@ -4765,8 +4781,8 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
           (cargo ? `📦 *Cargo:* ${cargo}\n` : "") +
           (loadingDateStr ? `📅 *Loading Date:* ${loadingDateStr}\n` : "") +
           `\n${contactLine}\n\n` +
-          `🔗 *More info:* https://www.trucktraffic.in/a/${ptlGroup.id}\n` +
-          `📲 *Playstore:* https://play.google.com/store/apps/details?id=com.ptlmarket.trucktraffic`;
+          `🔗 *More info:* ${groupSharePath(ptlGroup)}\n` +
+          `📲 *Playstore:* ${PLAYSTORE_SHORT_URL}`;
       }
       await Linking.openURL(`https://wa.me/?text=${encodeURIComponent(text)}`);
     } catch { Alert.alert("Error", "WhatsApp could not be opened."); }
@@ -5543,8 +5559,8 @@ function PtlGroupCard({ group, profile, onPress, contactsMap }: { group: PtlGrou
       (cargo ? `📦 *Cargo:* ${cargo}\n` : "") +
       (loadingDateStr ? `📅 *Loading Date:* ${loadingDateStr}\n` : "") +
       `\n${contactLine}\n\n` +
-      `🔗 *More info:* https://www.trucktraffic.in/a/${group.id}\n` +
-      `📲 *Playstore:* https://play.google.com/store/apps/details?id=com.ptlmarket.trucktraffic`;
+      `🔗 *More info:* ${groupSharePath(group)}\n` +
+      `📲 *Playstore:* ${PLAYSTORE_SHORT_URL}`;
     try { await Linking.openURL(`https://wa.me/?text=${encodeURIComponent(text)}`); }
     catch { Alert.alert("Error", "WhatsApp could not be opened."); }
   };
@@ -6158,8 +6174,10 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
         `📞 *Contact:* ${profile.name}` +
         (profile.company ? ` — ${profile.company}` : "") +
         `\n+91 ${profile.phone}\n\n` +
-        (data?.group_id ? `🔗 *More info:* https://www.trucktraffic.in/a/${data.group_id}\n` : `🔗 *Website:* https://www.trucktraffic.in\n`) +
-        `📲 *Playstore:* https://play.google.com/store/apps/details?id=com.ptlmarket.trucktraffic`;
+        (data?.group_id || data?.group_short_id
+          ? `🔗 *More info:* ${groupSharePath({ short_id: data?.group_short_id, id: data?.group_id })}\n`
+          : `🔗 *Website:* https://www.trucktraffic.in\n`) +
+        `📲 *Playstore:* ${PLAYSTORE_SHORT_URL}`;
 
       const waUrl = `https://wa.me/?text=${encodeURIComponent(waText)}`;
       const canOpen = await Linking.canOpenURL(waUrl).catch(() => false);

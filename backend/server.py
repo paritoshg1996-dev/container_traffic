@@ -40,6 +40,15 @@ async def _unique_short_id() -> str:
             return sid
     # Fallback: use 8 chars if 6-char space is somehow saturated
     return _gen_short_id(8)
+
+
+async def _unique_ptl_group_short_id() -> str:
+    """Generate a short_id that doesn't already exist in the ptl_groups collection."""
+    for _ in range(10):
+        sid = _gen_short_id()
+        if not await db.ptl_groups.find_one({"short_id": sid}, {"_id": 1}):
+            return sid
+    return _gen_short_id(8)
 load_dotenv(ROOT_DIR / '.env')
 
 # MongoDB connection
@@ -1303,8 +1312,10 @@ async def _create_solo_ptl_group(new_load: dict) -> str:
     dest_corridor = derive_corridor(new_load["destination"]["city"])
     now_iso = datetime.now(timezone.utc).isoformat()
     gid = f"GRP-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{new_load['poster_phone'][-4:]}-{_gen_short_id(4)}"
+    short_id = await _unique_ptl_group_short_id()
     group_doc = {
         "id": gid,
+        "short_id": short_id,
         "corridor": f"{origin_corridor}→{dest_corridor}",
         "origin_display": new_load["origin"]["locality"] or new_load["origin"]["city"],
         "destination_display": new_load["destination"]["locality"] or new_load["destination"]["city"],
@@ -1389,7 +1400,13 @@ async def post_ptl_load(payload: PtlLoadPost):
     # marketplace endpoints, deep-link paths and Bids Received flows keep
     # working unchanged).
     group_id = await _create_solo_ptl_group(doc)
-    return {"load_id": load_id, "group_id": group_id, "matched": False}
+    group_doc = await db.ptl_groups.find_one({"id": group_id}, {"_id": 0, "short_id": 1})
+    return {
+        "load_id": load_id,
+        "group_id": group_id,
+        "group_short_id": (group_doc or {}).get("short_id"),
+        "matched": False,
+    }
 
 
 # ── GET my PTL loads ───────────────────────────────────────────────────────
@@ -1556,7 +1573,12 @@ async def list_ptl_groups(
 # ── GET single group detail ────────────────────────────────────────────────
 @api_router.get("/ptl/groups/{group_id}")
 async def get_ptl_group(group_id: str, viewer_phone: Optional[str] = None):
-    g = await db.ptl_groups.find_one({"id": group_id}, {"_id": 0})
+    # Accept either the full `GRP-…` id or the 6-char short_id used by
+    # WhatsApp share links (`https://www.trucktraffic.in/a/{short_id}`).
+    g = await db.ptl_groups.find_one(
+        {"$or": [{"id": group_id}, {"short_id": group_id}]},
+        {"_id": 0},
+    )
     if not g:
         raise HTTPException(status_code=404, detail="Group not found")
     viewer = _norm_phone(viewer_phone) if viewer_phone else ""
@@ -1875,6 +1897,18 @@ async def startup():
         await db.ptl_groups.create_index([("corridor", 1), ("status", 1)], background=True)
         await db.ptl_groups.create_index([("status", 1), ("fill_pct", -1)], background=True)
         await db.ptl_groups.create_index("id", unique=True, background=True)
+        await db.ptl_groups.create_index("short_id", unique=True, sparse=True, background=True)
+        # Backfill short_id on existing groups (idempotent — only touches docs missing it)
+        try:
+            missing = db.ptl_groups.find(
+                {"$or": [{"short_id": None}, {"short_id": {"$exists": False}}]},
+                {"_id": 0, "id": 1},
+            )
+            async for g in missing:
+                sid = await _unique_ptl_group_short_id()
+                await db.ptl_groups.update_one({"id": g["id"]}, {"$set": {"short_id": sid}})
+        except Exception as e:
+            logger.warning(f"PTL group short_id backfill skipped: {e}")
         # TTL — auto-delete expired PTL loads (expires_at is a BSON Date)
         await db.ptl_loads.create_index([("expires_at", 1)], expireAfterSeconds=0, background=True)
         # Bids — one bid per (bidder, listing); lookup by listing and by poster
