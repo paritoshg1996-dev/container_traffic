@@ -1339,8 +1339,9 @@ async def post_ptl_load(payload: PtlLoadPost):
         raise HTTPException(status_code=400, detail="weight_kg must be > 0")
     if payload.weight_kg > TRUCK_CAPACITY_KG:
         raise HTTPException(status_code=400, detail=f"weight_kg cannot exceed {TRUCK_CAPACITY_KG} kg (one full truck)")
-    if payload.cargo_category not in CARGO_COMPATIBILITY:
-        raise HTTPException(status_code=400, detail=f"cargo_category must be one of {list(CARGO_COMPATIBILITY.keys())}")
+    # cargo_category is accepted as-is (raw cargo type e.g. "Bags", "Drums",
+    # "Pipes", "Carton Box", "Fresh Produce", "Others: <text>"). No
+    # recategorisation is performed.
 
     user = await db.users.find_one({"phone": phone}, {"_id": 0, "name": 1, "company": 1})
     now = datetime.now(timezone.utc)
