@@ -2133,8 +2133,8 @@ if (pricePerTon && parseInt(pricePerTon, 10) > 10000) return Alert.alert("Price 
           `📞 *Contact:* ${profile.name}` +
           (profile.company ? ` — ${profile.company}` : "") +
           `\n+91 ${profile.phone}\n\n` +
-          `🔗 *More info:* ${postShareUrl}\n` +
-          `📲 *Playstore:* ${PLAYSTORE_SHORT_URL}`;
+          `🔗 *More info:*\n${postShareUrl}\n\n` +
+          `📲 *Playstore:*\n${PLAYSTORE_SHORT_URL}`;
         const waUrl = `https://wa.me/?text=${encodeURIComponent(text)}`;
         const canOpen = await Linking.canOpenURL(waUrl).catch(() => false);
         if (canOpen) {
@@ -3939,6 +3939,47 @@ function groupSharePath(group: any): string {
 //   https://play.google.com/store/apps/details?id=com.ptlmarket.trucktraffic
 const PLAYSTORE_SHORT_URL = "https://trucktraffic.in/app";
 
+// Builds the WhatsApp share text for a Partial Load (adjustment-load) group.
+// Used by the Post & Share flow, the PTL group card, and the PTL detail page,
+// so all three surfaces produce the exact same message.
+function buildPtlShareText(primary: PtlMember | undefined, group: PtlGroup, shareUrl: string): string {
+  const weightT = ((primary?.weight_kg ?? group.total_weight_kg ?? 0) / 1000).toFixed(1);
+  const cargo = (primary?.cargo_type || (group.cargo_categories || []).join(", ") || "").replace(/^Others:\s*/, "");
+  const oStateName = sanitizeStateForDisplay(primary?.origin_state || "", primary?.origin_pincode || "");
+  const dStateName = sanitizeStateForDisplay(primary?.destination_state || "", primary?.destination_pincode || "");
+  const oCityClean = sanitizeCityForDisplay(primary?.origin_city || "", primary?.origin_pincode || "", oStateName);
+  const dCityClean = sanitizeCityForDisplay(primary?.destination_city || "", primary?.destination_pincode || "", dStateName);
+  const oLocClean = (primary?.origin_locality || primary?.origin_city || "").trim();
+  const dLocClean = (primary?.destination_locality || primary?.destination_city || "").trim();
+  const oAbbr = stateAbbr(oStateName);
+  const dAbbr = stateAbbr(dStateName);
+  const poArea = oLocClean || oCityClean || primary?.origin_pincode || "";
+  const poCity = oCityClean && oCityClean !== oLocClean ? `, ${oCityClean}` : "";
+  const poState = oAbbr ? `, ${oAbbr}` : "";
+  const pdArea = dLocClean || dCityClean || primary?.destination_pincode || "";
+  const pdCity = dCityClean && dCityClean !== dLocClean ? `, ${dCityClean}` : "";
+  const pdState = dAbbr ? `, ${dAbbr}` : "";
+  const postOriginLabel = poArea ? `📍 From: ${poArea}${poCity}${poState}${primary?.origin_pincode ? `, ${primary.origin_pincode}` : ""}` : `📍 Route: ${group.origin_display} → ${group.destination_display}`;
+  const postDestLabel   = poArea ? `📍 To: ${pdArea}${pdCity}${pdState}${primary?.destination_pincode ? `, ${primary.destination_pincode}` : ""}` : "";
+  const truckLabel = primary?.truck_type === "Open" ? "Open Truck" : primary?.truck_type === "Container" ? "Container Truck" : primary?.truck_type === "Trailer" ? "Trailer Truck" : primary?.truck_type;
+  const loadingDateStr = primary?.loading_date
+    ? (() => { try { return new Date(primary.loading_date as string).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }); } catch { return primary.loading_date as string; } })()
+    : null;
+  return (
+    `📦 *Partial Load Available - Truck Traffic*\n\n` +
+    `${postOriginLabel}${postDestLabel ? `\n${postDestLabel}` : ""}\n\n` +
+    (truckLabel ? `🚚 ${truckLabel}\n` : "") +
+    `⚖️ *Weight:* ${weightT} Tons\n` +
+    (cargo ? `📦 *Cargo:* ${cargo}\n` : "") +
+    (loadingDateStr ? `📅 *Loading:* ${loadingDateStr}\n` : "") +
+    `\n📞 *Contact:* ${primary?.name || ""}` +
+    (primary?.company ? ` — ${primary.company}` : "") +
+    `\n+91 ${primary?.phone || ""}\n\n` +
+    `🔗 *More info:*\n${shareUrl}\n\n` +
+    `📲 *Playstore:*\n${PLAYSTORE_SHORT_URL}`
+  );
+}
+
 function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhone }: { load: Load; isMine: boolean; distance?: { origin: number; dest: number; offRoute: boolean }; contactName?: string; contactsMap?: Map<string, string>; viewerPhone?: string }) {
   const [showPosterProfile, setShowPosterProfile] = useState(false);
   const [showDetail, setShowDetail] = useState(false);
@@ -3987,8 +4028,8 @@ function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhon
       `📞 *Contact:* ${load.poster_name}` +
       (load.poster_company ? ` — ${load.poster_company}` : "") +
       `\n+91 ${load.poster_phone}\n\n` +
-      `🔗 *More info:* ${shareUrl}\n` +
-      `📲 *Playstore:* ${PLAYSTORE_SHORT_URL}`;
+      `🔗 *More info:*\n${shareUrl}\n\n` +
+      `📲 *Playstore:*\n${PLAYSTORE_SHORT_URL}`;
     try { await Linking.openURL(`https://wa.me/?text=${encodeURIComponent(text)}`); }
     catch { Alert.alert("Error", "WhatsApp could not be opened."); }
   };
@@ -4748,41 +4789,40 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
     try {
       let text = "";
       if (load) {
+        // Same message format as the "Post & Share" button on the post-truck-space screen.
+        const dateStrShare = (() => { try { return new Date(load.loading_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }); } catch { return load.loading_date; } })();
         const oLocClean = (load.origin_locality || load.origin_city || "").trim();
         const dLocClean = (load.destination_locality || load.destination_city || "").trim();
-        const dateShareStr = (() => { try { return new Date(load.loading_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }); } catch { return load.loading_date; } })();
+        const oStateName = sanitizeStateForDisplay(load.origin_state || "", load.origin_pincode || "");
+        const dStateName = sanitizeStateForDisplay(load.destination_state || "", load.destination_pincode || "");
+        const oCityClean = sanitizeCityForDisplay(load.origin_city || "", load.origin_pincode || "", oStateName);
+        const dCityClean = sanitizeCityForDisplay(load.destination_city || "", load.destination_pincode || "", dStateName);
+        const oAbbr = stateAbbr(oStateName);
+        const dAbbr = stateAbbr(dStateName);
+        const truckLabelDetail = load.truck_type === "Open" ? "Open Truck" : load.truck_type === "Container" ? "Container Truck" : load.truck_type === "Trailer" ? "Trailer Truck" : load.truck_type;
+        const oArea = oLocClean || oCityClean || load.origin_pincode;
+        const dArea = dLocClean || dCityClean || load.destination_pincode;
+        const oCity = oCityClean && oCityClean !== oLocClean ? `, ${oCityClean}` : "";
+        const oState = oAbbr ? `, ${oAbbr}` : "";
+        const dCity = dCityClean && dCityClean !== dLocClean ? `, ${dCityClean}` : "";
+        const dState = dAbbr ? `, ${dAbbr}` : "";
+        const originLabel = `📍 From: ${oArea}${oCity}${oState}, ${load.origin_pincode}`;
+        const destLabel   = `📍 To: ${dArea}${dCity}${dState}, ${load.destination_pincode}`;
         const shareUrl = loadSharePath(load);
         text =
           `🚛 *Truck Space Available - Truck Traffic*\n\n` +
-          `📍 From: ${oLocClean}, ${load.origin_pincode}\n` +
-          `📍 To: ${dLocClean}, ${load.destination_pincode}\n\n` +
-          `🚚 ${load.truck_type || "Truck"}\n` +
-          `⚖️ *Weight Free:* ${load.weight_tons} Tons\n` +
-          `📅 *Loading:* ${dateShareStr}\n\n` +
-          `📞 ${load.poster_name}${load.poster_company ? ` — ${load.poster_company}` : ""}\n` +
-          `+91 ${load.poster_phone}\n\n` +
-          `🔗 *More info:* ${shareUrl}\n` +
-          `📲 *Playstore:* ${PLAYSTORE_SHORT_URL}`;
+          `${originLabel}\n${destLabel}\n\n` +
+          `🚚 ${truckLabelDetail}\n` +
+          `⚖️ *Weight:* ${load.weight_tons} Tons\n` +
+          `📅 *Loading:* ${dateStrShare}\n\n` +
+          `📞 *Contact:* ${load.poster_name}` +
+          (load.poster_company ? ` — ${load.poster_company}` : "") +
+          `\n+91 ${load.poster_phone}\n\n` +
+          `🔗 *More info:*\n${shareUrl}\n\n` +
+          `📲 *Playstore:*\n${PLAYSTORE_SHORT_URL}`;
       } else if (ptlGroup) {
         const primary = (ptlGroup.members || [])[0];
-        const weightT = ((primary?.weight_kg ?? ptlGroup.total_weight_kg ?? 0) / 1000).toFixed(1);
-        const cargo = (primary?.cargo_type || (ptlGroup.cargo_categories || []).join(", ") || "").replace(/^Others:\s*/, "");
-        const loadingDateStr = primary?.loading_date
-          ? (() => { try { return new Date(primary.loading_date as string).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }); } catch { return primary.loading_date as string; } })()
-          : null;
-        const contactLine = primary?.name
-          ? `📞 *Contact:* ${primary.name}${primary.company ? ` — ${primary.company}` : ""}\n+91 ${primary.phone || ""}`
-          : "";
-        text =
-          `📦 *Partial Load Looking to Combine - Truck Traffic*\n\n` +
-          `📍 Route: ${ptlGroup.origin_display} → ${ptlGroup.destination_display}\n\n` +
-          `A partial load is available on this route and is looking for another load to combine and fill a truck together.\n\n` +
-          `⚖️ *Weight:* ${weightT} T\n` +
-          (cargo ? `📦 *Cargo:* ${cargo}\n` : "") +
-          (loadingDateStr ? `📅 *Loading Date:* ${loadingDateStr}\n` : "") +
-          `\n${contactLine}\n\n` +
-          `🔗 *More info:* ${groupSharePath(ptlGroup)}\n` +
-          `📲 *Playstore:* ${PLAYSTORE_SHORT_URL}`;
+        text = buildPtlShareText(primary, ptlGroup, groupSharePath(ptlGroup));
       }
       await Linking.openURL(`https://wa.me/?text=${encodeURIComponent(text)}`);
     } catch { Alert.alert("Error", "WhatsApp could not be opened."); }
@@ -5542,25 +5582,8 @@ function PtlGroupCard({ group, profile, onPress, contactsMap }: { group: PtlGrou
   const [showPosterProfile, setShowPosterProfile] = useState(false);
 
   const shareOnWhatsApp = async () => {
-    const primary = member;
-    const weightT = ((primary?.weight_kg ?? group.total_weight_kg ?? 0) / 1000).toFixed(1);
-    const cargo = (primary?.cargo_type || (group.cargo_categories || []).join(", ") || "").replace(/^Others:\s*/, "");
-    const loadingDateStr = primary?.loading_date
-      ? (() => { try { return new Date(primary.loading_date as string).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }); } catch { return primary.loading_date as string; } })()
-      : null;
-    const contactLine = primary?.name
-      ? `📞 *Contact:* ${primary.name}${primary.company ? ` — ${primary.company}` : ""}\n+91 ${primary.phone || ""}`
-      : "";
-    const text =
-      `📦 *Partial Load Looking to Combine - Truck Traffic*\n\n` +
-      `📍 Route: ${group.origin_display} → ${group.destination_display}\n\n` +
-      `A partial load is available on this route and is looking for another load to combine and fill a truck together.\n\n` +
-      `⚖️ *Weight:* ${weightT} T\n` +
-      (cargo ? `📦 *Cargo:* ${cargo}\n` : "") +
-      (loadingDateStr ? `📅 *Loading Date:* ${loadingDateStr}\n` : "") +
-      `\n${contactLine}\n\n` +
-      `🔗 *More info:* ${groupSharePath(group)}\n` +
-      `📲 *Playstore:* ${PLAYSTORE_SHORT_URL}`;
+    // Same message format as the "Post & Share" button on the post-partial-load screen.
+    const text = buildPtlShareText(member, group, groupSharePath(group));
     try { await Linking.openURL(`https://wa.me/?text=${encodeURIComponent(text)}`); }
     catch { Alert.alert("Error", "WhatsApp could not be opened."); }
   };
@@ -6175,9 +6198,9 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
         (profile.company ? ` — ${profile.company}` : "") +
         `\n+91 ${profile.phone}\n\n` +
         (data?.group_id || data?.group_short_id
-          ? `🔗 *More info:* ${groupSharePath({ short_id: data?.group_short_id, id: data?.group_id })}\n`
-          : `🔗 *Website:* https://www.trucktraffic.in\n`) +
-        `📲 *Playstore:* ${PLAYSTORE_SHORT_URL}`;
+          ? `🔗 *More info:*\n${groupSharePath({ short_id: data?.group_short_id, id: data?.group_id })}\n\n`
+          : `🔗 *Website:*\nhttps://www.trucktraffic.in\n\n`) +
+        `📲 *Playstore:*\n${PLAYSTORE_SHORT_URL}`;
 
       const waUrl = `https://wa.me/?text=${encodeURIComponent(waText)}`;
       const canOpen = await Linking.canOpenURL(waUrl).catch(() => false);
