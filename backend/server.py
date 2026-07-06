@@ -13,10 +13,7 @@ import uuid
 from datetime import datetime, timezone, timedelta
 import math
 import re
-import requests
-import urllib3
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)  # postalpincode.in SSL cert expired
-
+import httpx
 import firebase_admin
 from firebase_admin import credentials as fb_credentials, auth as fb_auth
 
@@ -58,6 +55,17 @@ db = client[os.environ['DB_NAME']]
 
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
+
+# Shared async HTTP clients for outbound calls (Nominatim, postalpincode.in,
+# Mappls, TinyURL). Using httpx instead of `requests` matters here because
+# these calls happen inside `async def` route handlers — a blocking
+# `requests.get()` freezes the entire event loop for the call's duration
+# (up to its timeout), stalling every other concurrent request the process
+# is serving, not just the geocoding one. Two clients: one default (TLS
+# verified) and one with verification disabled, since postalpincode.in's
+# cert is expired but everything else should stay verified.
+http_client: httpx.AsyncClient = None
+http_client_insecure: httpx.AsyncClient = None
 
 logging.basicConfig(
     level=logging.INFO,
@@ -192,11 +200,9 @@ async def lookup_pincode(pincode: str):
     if not (pincode.isdigit() and len(pincode) == 6):
         raise HTTPException(status_code=400, detail="Pincode must be 6 digits")
     try:
-        resp = requests.get(
+        resp = await http_client_insecure.get(
             f"https://api.postalpincode.in/pincode/{pincode}",
-            timeout=8,
             headers={"User-Agent": "LoadLink/1.0"},
-            verify=False,  # postalpincode.in SSL cert expired
         )
         data = resp.json()
         if isinstance(data, list) and data and data[0].get("Status") == "Success":
@@ -253,11 +259,9 @@ async def search_city(name: str):
     if len(name) < 3:
         return []
     try:
-        resp = requests.get(
+        resp = await http_client_insecure.get(
             f"https://api.postalpincode.in/postoffice/{name}",
-            timeout=8,
             headers={"User-Agent": "LoadLink/1.0"},
-            verify=False,  # postalpincode.in SSL cert expired
         )
         data = resp.json()
         out: List[CitySuggestion] = []
@@ -291,8 +295,7 @@ class GeoInfo(BaseModel):
     found: bool = False
 
 
-@api_router.get("/geocode/{pincode}", response_model=GeoInfo)
-async def geocode_pincode(pincode: str):
+async def _geocode_pincode_core(pincode: str) -> "GeoInfo":
     """Resolve an Indian pincode to lat/lon. Cached in Mongo.
 
     Strategy:
@@ -300,10 +303,12 @@ async def geocode_pincode(pincode: str):
     2. Nominatim by postalcode (free, usually reliable)
     3. Nominatim by city name from postalpincode.in (fallback)
     All results cached permanently so each pincode is only ever looked up once.
-    """
-    if not (pincode.isdigit() and len(pincode) == 6):
-        raise HTTPException(status_code=400, detail="Pincode must be 6 digits")
 
+    Shared by the /geocode/{pincode} endpoint and by the server-side lat/lon
+    backfill in create_load / update_load, so a load posted or edited without
+    lat/lon still gets it filled in at write time instead of relying on the
+    client to fall back to this same lookup on every future search.
+    """
     cached = await db.pincode_geo.find_one({"pincode": pincode}, {"_id": 0})
     if cached and cached.get("found"):
         return GeoInfo(**cached)
@@ -312,10 +317,9 @@ async def geocode_pincode(pincode: str):
 
     # Step 1: Nominatim by postalcode
     try:
-        resp = requests.get(
+        resp = await http_client.get(
             "https://nominatim.openstreetmap.org/search",
             params={"postalcode": pincode, "country": "India", "format": "json", "limit": 1},
-            timeout=10,
             headers=nominatim_headers,
         )
         data = resp.json()
@@ -329,11 +333,9 @@ async def geocode_pincode(pincode: str):
 
     # Step 2: Look up city name from postalpincode.in, then geocode by city name
     try:
-        resp = requests.get(
+        resp = await http_client_insecure.get(
             f"https://api.postalpincode.in/pincode/{pincode}",
-            timeout=8,
             headers={"User-Agent": "LoadLink/1.0"},
-            verify=False,  # postalpincode.in SSL cert is expired
         )
         data = resp.json()
         if isinstance(data, list) and data and data[0].get("Status") == "Success":
@@ -343,10 +345,9 @@ async def geocode_pincode(pincode: str):
                 city_name = first.get("District") or first.get("Block") or first.get("Name") or ""
                 state_name = first.get("State") or ""
                 if city_name:
-                    geo_resp = requests.get(
+                    geo_resp = await http_client.get(
                         "https://nominatim.openstreetmap.org/search",
                         params={"q": f"{city_name}, {state_name}, India", "format": "json", "limit": 1, "countrycodes": "in"},
-                        timeout=10,
                         headers=nominatim_headers,
                     )
                     geo_data = geo_resp.json()
@@ -361,6 +362,14 @@ async def geocode_pincode(pincode: str):
     return GeoInfo(pincode=pincode, found=False)
 
 
+@api_router.get("/geocode/{pincode}", response_model=GeoInfo)
+async def geocode_pincode(pincode: str):
+    """Resolve an Indian pincode to lat/lon. See _geocode_pincode_core for strategy."""
+    if not (pincode.isdigit() and len(pincode) == 6):
+        raise HTTPException(status_code=400, detail="Pincode must be 6 digits")
+    return await _geocode_pincode_core(pincode)
+
+
 @api_router.get("/geocode-city/{city_name}")
 async def geocode_city(city_name: str):
     """Resolve an Indian city/locality name to lat/lon via Nominatim.
@@ -371,6 +380,16 @@ async def geocode_city(city_name: str):
     city_name = (city_name or "").strip()
     if not city_name:
         raise HTTPException(status_code=400, detail="city_name is required")
+    return await _geocode_city_core(city_name)
+
+
+async def _geocode_city_core(city_name: str) -> "GeoInfo":
+    """Core city-name->latlon resolution logic; shared by the /geocode-city
+    endpoint and by the server-side lat/lon backfill in create_load /
+    update_load (used when a load has no pincode, only a place/city name)."""
+    city_name = (city_name or "").strip()
+    if not city_name:
+        return GeoInfo(pincode="", found=False)
 
     cache_key = city_name.lower()
     cached = await db.city_geo.find_one({"city": cache_key}, {"_id": 0})
@@ -378,7 +397,7 @@ async def geocode_city(city_name: str):
         return GeoInfo(pincode="", lat=cached["lat"], lon=cached["lon"], found=True)
 
     try:
-        resp = requests.get(
+        resp = await http_client.get(
             "https://nominatim.openstreetmap.org/search",
             params={
                 "q": f"{city_name}, India",
@@ -386,7 +405,6 @@ async def geocode_city(city_name: str):
                 "limit": 1,
                 "countrycodes": "in",
             },
-            timeout=10,
             headers={"User-Agent": "LoadLink/1.0 (loadlink.app)"},
         )
         data = resp.json()
@@ -404,6 +422,40 @@ async def geocode_city(city_name: str):
     except Exception as e:
         logger.warning(f"City geocode failed for {city_name}: {e}")
         return GeoInfo(pincode="", found=False)
+
+
+async def _resolve_missing_coords(
+    pincode: str, place_name: str, city: str, full_address: str
+) -> tuple:
+    """Best-effort server-side lat/lon resolution for a load's origin or
+    destination, mirroring the same pincode → eLoc/city-name fallback chain
+    the client used to run on every search (see geocodePin/geocodeEloc in
+    the app). Called from create_load and update_load so a load's coords
+    get filled in once, at write time, instead of every load without stored
+    lat/lon forcing a client-side geocode round-trip on every future search.
+
+    Returns (lat, lon) or (None, None) if nothing could be resolved.
+    """
+    # Step 1: a valid 6-digit pincode, either the field itself or extracted
+    # from the full address string (same regex the client used).
+    candidate_pincode = pincode if (pincode and pincode.isdigit() and len(pincode) == 6) else None
+    if not candidate_pincode and full_address:
+        m = re.search(r'\b(\d{6})\b', full_address)
+        if m:
+            candidate_pincode = m.group(1)
+    if candidate_pincode:
+        info = await _geocode_pincode_core(candidate_pincode)
+        if info.found:
+            return info.lat, info.lon
+
+    # Step 2: city/place name fallback (CITY-type Mappls results with no pincode)
+    name = place_name or city
+    if name:
+        info = await _geocode_city_core(name)
+        if info.found:
+            return info.lat, info.lon
+
+    return None, None
 
 
 @api_router.get("/places")
@@ -432,10 +484,9 @@ async def places_search(
         # pod=CITY is unreliable for short queries — Mappls returns empty/invalid JSON
         if pod and len(query) >= 4:
             params["pod"] = pod
-        resp = requests.get(
+        resp = await http_client.get(
             "https://search.mappls.com/search/places/autosuggest/json",
             params=params,
-            timeout=8,
             headers={
                 "User-Agent": "TruckTraffic/1.0 (trucktraffic.in)",
                 "Referer": "https://ptl-market.onrender.com",
@@ -475,10 +526,9 @@ async def test_geocode(
     if pincode:
         try:
             # Step 1: Nominatim by postalcode
-            resp = requests.get(
+            resp = await http_client.get(
                 "https://nominatim.openstreetmap.org/search",
                 params={"postalcode": pincode, "country": "India", "format": "json", "limit": 1},
-                timeout=10,
                 headers={"User-Agent": "TruckTraffic/1.0 (trucktraffic.in)"},
             )
             data = resp.json()
@@ -488,11 +538,9 @@ async def test_geocode(
 
         try:
             # Step 2: postalpincode.in (with SSL bypass)
-            resp2 = requests.get(
+            resp2 = await http_client_insecure.get(
                 f"https://api.postalpincode.in/pincode/{pincode}",
-                timeout=8,
                 headers={"User-Agent": "LoadLink/1.0"},
-                verify=False,
             )
             results["postalpincode"] = resp2.json()
         except Exception as e:
@@ -500,10 +548,9 @@ async def test_geocode(
 
     if city:
         try:
-            resp3 = requests.get(
+            resp3 = await http_client.get(
                 "https://nominatim.openstreetmap.org/search",
                 params={"q": f"{city}, India", "format": "json", "limit": 1, "countrycodes": "in"},
-                timeout=10,
                 headers={"User-Agent": "TruckTraffic/1.0 (trucktraffic.in)"},
             )
             data3 = resp3.json()
@@ -564,10 +611,9 @@ async def test_mappls(
         params[k] = v
 
     try:
-        resp = requests.get(
+        resp = await http_client.get(
             "https://search.mappls.com/search/places/autosuggest/json",
             params=params,
-            timeout=8,
             headers={
                 "User-Agent": "TruckTraffic/1.0 (trucktraffic.in)",
                 "Referer": "https://ptl-market.onrender.com",
@@ -606,6 +652,23 @@ async def create_load(payload: LoadCreate):
     load = Load(**payload.dict())
     # Assign a unique short_id before inserting
     load.short_id = await _unique_short_id()
+
+    # Guarantee lat/lon are stored at post time, so search never has to fall
+    # back to client-side geocoding for a freshly-posted load (see
+    # _resolve_missing_coords).
+    if load.origin_latitude is None or load.origin_longitude is None:
+        lat, lon = await _resolve_missing_coords(
+            load.origin_pincode, load.origin_place_name, load.origin_city, load.origin_full_address
+        )
+        if lat is not None:
+            load.origin_latitude, load.origin_longitude = lat, lon
+    if load.destination_latitude is None or load.destination_longitude is None:
+        lat, lon = await _resolve_missing_coords(
+            load.destination_pincode, load.destination_place_name, load.destination_city, load.destination_full_address
+        )
+        if lat is not None:
+            load.destination_latitude, load.destination_longitude = lat, lon
+
     doc = load.dict()
     await db.loads.insert_one(doc)
     return load
@@ -631,9 +694,15 @@ async def list_loads(
     ids = [d["id"] for d in docs]
     counts: dict = {}
     if ids:
-        cursor2 = db.loads.find({"id": {"$in": ids}}, {"_id": 0, "id": 1, "images": 1})
+        # Compute image_count with Mongo's $size instead of pulling the
+        # full images array (each entry can be several MB) back over the
+        # wire just to call len() on it client-side.
+        cursor2 = db.loads.aggregate([
+            {"$match": {"id": {"$in": ids}}},
+            {"$project": {"_id": 0, "id": 1, "image_count": {"$size": {"$ifNull": ["$images", []]}}}},
+        ])
         async for d in cursor2:
-            counts[d["id"]] = len(d.get("images") or [])
+            counts[d["id"]] = d["image_count"]
     out = []
     for d in docs:
         d["image_count"] = counts.get(d["id"], 0)
@@ -653,11 +722,12 @@ async def get_load_by_short_id(short_id: str):
     doc = await db.loads.find_one({"short_id": short_id}, {"_id": 0, "images": 0})
     if not doc:
         raise HTTPException(status_code=404, detail="Load not found")
-    doc["image_count"] = await db.loads.count_documents({"short_id": short_id})
-    # image_count is approximate here; patch it properly
-    full = await db.loads.find_one({"short_id": short_id}, {"_id": 0, "id": 1, "images": 1})
-    if full:
-        doc["image_count"] = len(full.get("images") or [])
+    # $size avoids pulling the full images array back just to count it.
+    count_docs = await db.loads.aggregate([
+        {"$match": {"short_id": short_id}},
+        {"$project": {"_id": 0, "image_count": {"$size": {"$ifNull": ["$images", []]}}}},
+    ]).to_list(1)
+    doc["image_count"] = count_docs[0]["image_count"] if count_docs else 0
     return doc
 
 
@@ -709,6 +779,41 @@ async def update_load(load_id: str, payload: LoadUpdate):
     update = {k: v for k, v in payload.dict().items() if v is not None}
     if not update:
         raise HTTPException(status_code=400, detail="No fields to update")
+
+    # If origin/destination location fields changed but lat/lon weren't
+    # explicitly provided in this update, backfill them now — the same
+    # guarantee create_load makes, so an edited load doesn't fall back to
+    # client-side geocoding either.
+    origin_fields = ("origin_pincode", "origin_place_name", "origin_city", "origin_full_address")
+    dest_fields = ("destination_pincode", "destination_place_name", "destination_city", "destination_full_address")
+    needs_origin_backfill = any(k in update for k in origin_fields) and not (
+        "origin_latitude" in update and "origin_longitude" in update
+    )
+    needs_dest_backfill = any(k in update for k in dest_fields) and not (
+        "destination_latitude" in update and "destination_longitude" in update
+    )
+    if needs_origin_backfill or needs_dest_backfill:
+        existing = await db.loads.find_one({"id": load_id}, {"_id": 0})
+        if existing:
+            if needs_origin_backfill:
+                lat, lon = await _resolve_missing_coords(
+                    update.get("origin_pincode", existing.get("origin_pincode", "")),
+                    update.get("origin_place_name", existing.get("origin_place_name", "")),
+                    update.get("origin_city", existing.get("origin_city", "")),
+                    update.get("origin_full_address", existing.get("origin_full_address", "")),
+                )
+                if lat is not None:
+                    update["origin_latitude"], update["origin_longitude"] = lat, lon
+            if needs_dest_backfill:
+                lat, lon = await _resolve_missing_coords(
+                    update.get("destination_pincode", existing.get("destination_pincode", "")),
+                    update.get("destination_place_name", existing.get("destination_place_name", "")),
+                    update.get("destination_city", existing.get("destination_city", "")),
+                    update.get("destination_full_address", existing.get("destination_full_address", "")),
+                )
+                if lat is not None:
+                    update["destination_latitude"], update["destination_longitude"] = lat, lon
+
     res = await db.loads.update_one({"id": load_id}, {"$set": update})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Load not found")
@@ -1123,10 +1228,9 @@ async def shorten_url(payload: ShortenRequest):
     if cached and cached.get("short"):
         return ShortenResponse(**cached)
     try:
-        resp = requests.get(
+        resp = await http_client.get(
             "https://tinyurl.com/api-create.php",
             params={"url": long_url},
-            timeout=8,
             headers={"User-Agent": "LoadLink/1.0"},
         )
         text = (resp.text or "").strip()
@@ -1886,6 +1990,9 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup():
     """Ensure indexes exist on startup. Idempotent — safe to run every time."""
+    global http_client, http_client_insecure
+    http_client = httpx.AsyncClient(timeout=10.0)
+    http_client_insecure = httpx.AsyncClient(timeout=10.0, verify=False)
     try:
         await db.loads.create_index("short_id", unique=True, sparse=True, background=True)
         await db.loads.create_index("id", unique=True, background=True)
@@ -1922,4 +2029,6 @@ async def startup():
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
+    await http_client.aclose()
+    await http_client_insecure.aclose()
     client.close()
