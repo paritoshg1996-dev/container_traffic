@@ -25,18 +25,54 @@ import { rs, rf } from "../theme/responsive";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
+import * as ImageManipulator from "expo-image-manipulator";
 import * as Contacts from "expo-contacts";
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from "expo-speech-recognition";
 
 const API = `https://ptl-market.onrender.com/api`;
 
 // ─── App-wide limits (previously hardcoded inline at each call site) ───────
-const MAX_LOAD_PHOTO_BYTES = 50 * 1024 * 1024;   // load/cargo photos (PostPtlLoadScreen)
+const MAX_LOAD_PHOTO_BYTES = 5 * 1024 * 1024;    // load/cargo photos (PostPtlLoadScreen) — post-resize ceiling, was 50MB pre-resize
 const MAX_DOC_PHOTO_BYTES = 5 * 1024 * 1024;     // verification doc photos
 const MAX_LOAD_PHOTOS = 3;
+const MAX_LOAD_PHOTO_DIMENSION = 1280;           // longest edge, in px, after downsizing — plenty for a ~100px UI thumbnail
 const MAX_DIMENSION_LENGTH_FT = 40;
 const MAX_DIMENSION_BREADTH_FT = 8;
 const MAX_DIMENSION_HEIGHT_FT = 9;
+
+// ─── Shared image helper ────────────────────────────────────────────────────
+// Downsizes a picked photo to MAX_LOAD_PHOTO_DIMENSION on its longest edge
+// (only if it's actually larger — never upscales a small image) and
+// re-compresses it to JPEG, then returns the base64 payload. This replaces
+// relying on ImagePicker's `quality` option alone, which only affects JPEG
+// compression at the camera's original resolution (e.g. 4000×3000) — massive
+// overkill for a UI that renders these as ~100px thumbnails, and a real
+// memory/upload-time cost on typical mobile connections.
+async function resizeAndEncodeImage(
+  uri: string,
+  width?: number,
+  height?: number
+): Promise<{ base64: string; mimeType: string } | null> {
+  try {
+    const longestEdge = Math.max(width || 0, height || 0);
+    const actions: ImageManipulator.Action[] = [];
+    if (longestEdge > MAX_LOAD_PHOTO_DIMENSION && width && height) {
+      // Resize by whichever dimension is larger so we never upscale and
+      // always land at MAX_LOAD_PHOTO_DIMENSION on the long edge.
+      if (width >= height) actions.push({ resize: { width: MAX_LOAD_PHOTO_DIMENSION } });
+      else actions.push({ resize: { height: MAX_LOAD_PHOTO_DIMENSION } });
+    }
+    const result = await ImageManipulator.manipulateAsync(uri, actions, {
+      compress: 0.7,
+      format: ImageManipulator.SaveFormat.JPEG,
+      base64: true,
+    });
+    if (!result.base64) return null;
+    return { base64: result.base64, mimeType: "image/jpeg" };
+  } catch {
+    return null;
+  }
+}
 
 // ─── Shared API helper ──────────────────────────────────────────────────────
 // Centralizes the fetch → text → JSON-parse-with-fallback → error-shape
@@ -1217,28 +1253,26 @@ function EditLoadModal({ load, visible, onClose, onSaved }: { load: Load; visibl
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) { Alert.alert("Permission needed", "Please grant photo library access to attach images."); return; }
     const remaining = MAX_LOAD_PHOTOS - images.length;
-    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: false, allowsMultipleSelection: true, selectionLimit: remaining, quality: 0.7, base64: true });
+    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: false, allowsMultipleSelection: true, selectionLimit: remaining });
     if (!res.canceled && res.assets && res.assets.length > 0) {
-      const MAX_SIZE_BYTES = MAX_LOAD_PHOTO_BYTES;
-      const validAssets = res.assets.slice(0, remaining).filter((a: any) => {
-        if (!a.base64) return false;
-        const sizeBytes = (a.base64.length * 3) / 4;
-        if (sizeBytes > MAX_SIZE_BYTES) {
-          Alert.alert("File too large", `"${a.fileName || "Photo"}" exceeds the 50 MB limit. Please choose a smaller image.`);
-          return false;
-        }
-        return true;
-      });
-      if (validAssets.length === 0) return;
+      const picked = res.assets.slice(0, remaining);
       setUploadProgress(0);
-      const total = validAssets.length;
+      const total = picked.length;
       const newOnes: string[] = [];
       for (let i = 0; i < total; i++) {
-        const a = validAssets[i];
-        newOnes.push(`data:${a.mimeType || "image/jpeg"};base64,${a.base64}`);
+        const a = picked[i];
+        const resized = await resizeAndEncodeImage(a.uri, a.width, a.height);
+        if (resized) {
+          const sizeBytes = (resized.base64.length * 3) / 4;
+          if (sizeBytes > MAX_LOAD_PHOTO_BYTES) {
+            Alert.alert("File too large", `"${a.fileName || "Photo"}" is too large even after compression. Please choose a different image.`);
+          } else {
+            newOnes.push(`data:${resized.mimeType};base64,${resized.base64}`);
+          }
+        }
         setUploadProgress(Math.round(((i + 1) / total) * 100));
-        await new Promise(r => setTimeout(r, 80)); // brief tick for progress UI
       }
+      if (newOnes.length === 0) { setUploadProgress(null); return; }
       setImages((prev) => [...prev, ...newOnes].slice(0, 3));
       setTimeout(() => setUploadProgress(null), 600);
     }
@@ -1853,16 +1887,25 @@ const handleInvite = async () => {
   };
 
   const fetchMy = useCallback(async () => {
-    try {
-      const r = await fetch(`${API}/loads`);
-      const j: Load[] = await r.json();
-      setMyLoads(j.filter((l) => l.poster_phone === profile.phone));
-    } catch {}
-    try {
-      const pr = await fetch(`${API}/ptl/loads/my/${encodeURIComponent(profile.phone)}`);
-      const pj = await pr.json();
-      setMyPtlLoads(Array.isArray(pj) ? pj.filter((l: PtlLoad) => l.status !== "CANCELLED") : []);
-    } catch {}
+    // Both requests are server-filtered to this phone number (mirrors the
+    // /ptl/loads/my/:phone pattern) — no full-table fetch + client filter,
+    // and they run in parallel instead of one after another.
+    await Promise.all([
+      (async () => {
+        try {
+          const r = await fetch(`${API}/loads/my/${encodeURIComponent(profile.phone)}`);
+          const j = await r.json();
+          setMyLoads(Array.isArray(j) ? j : []);
+        } catch {}
+      })(),
+      (async () => {
+        try {
+          const pr = await fetch(`${API}/ptl/loads/my/${encodeURIComponent(profile.phone)}`);
+          const pj = await pr.json();
+          setMyPtlLoads(Array.isArray(pj) ? pj.filter((l: PtlLoad) => l.status !== "CANCELLED") : []);
+        } catch {}
+      })(),
+    ]);
     setLoading(false); setRefreshing(false);
   }, [profile.phone]);
 
@@ -2034,28 +2077,26 @@ const onDateChange = (event: any, selected?: Date) => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) { Alert.alert("Permission needed", "Please grant photo library access to attach images."); return; }
     const remaining = MAX_LOAD_PHOTOS - images.length;
-    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: false, allowsMultipleSelection: true, selectionLimit: remaining, quality: 0.7, base64: true });
+    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: false, allowsMultipleSelection: true, selectionLimit: remaining });
     if (!res.canceled && res.assets && res.assets.length > 0) {
-      const MAX_SIZE_BYTES = MAX_LOAD_PHOTO_BYTES;
-      const validAssets = res.assets.slice(0, remaining).filter((a: any) => {
-        if (!a.base64) return false;
-        const sizeBytes = (a.base64.length * 3) / 4;
-        if (sizeBytes > MAX_SIZE_BYTES) {
-          Alert.alert("File too large", `"${a.fileName || "Photo"}" exceeds the 50 MB limit. Please choose a smaller image.`);
-          return false;
-        }
-        return true;
-      });
-      if (validAssets.length === 0) return;
+      const picked = res.assets.slice(0, remaining);
       setUploadProgress(0);
-      const total = validAssets.length;
+      const total = picked.length;
       const newOnes: string[] = [];
       for (let i = 0; i < total; i++) {
-        const a = validAssets[i];
-        newOnes.push(`data:${a.mimeType || "image/jpeg"};base64,${a.base64}`);
+        const a = picked[i];
+        const resized = await resizeAndEncodeImage(a.uri, a.width, a.height);
+        if (resized) {
+          const sizeBytes = (resized.base64.length * 3) / 4;
+          if (sizeBytes > MAX_LOAD_PHOTO_BYTES) {
+            Alert.alert("File too large", `"${a.fileName || "Photo"}" is too large even after compression. Please choose a different image.`);
+          } else {
+            newOnes.push(`data:${resized.mimeType};base64,${resized.base64}`);
+          }
+        }
         setUploadProgress(Math.round(((i + 1) / total) * 100));
-        await new Promise(r => setTimeout(r, 80));
       }
+      if (newOnes.length === 0) { setUploadProgress(null); return; }
       setImages((prev) => [...prev, ...newOnes].slice(0, 3));
       setTimeout(() => setUploadProgress(null), 600);
     }
@@ -3701,38 +3742,91 @@ function LoadMarketScreen({ profile, pendingFilter, onConsumePendingFilter }: { 
 
 
 
+ type CoordResult = { lat: number; lon: number; found: boolean };
+
+ // A "descriptor" says how a load's coord should be resolved, without
+ // resolving it yet. Loads that already have stored lat/lon need no
+ // network call at all; loads sharing the same pincode/eLoc get the
+ // same dedupe key so they only trigger one lookup between them.
+ type CoordDescriptor =
+   | { kind: "coord"; coord: CoordResult }
+   | { kind: "pin"; key: string; pin: string }
+   | { kind: "eloc"; key: string; eLoc: string; fallbackName: string; fullAddress: string }
+   | { kind: "none" };
+
+ const originDescriptor = (load: Load): CoordDescriptor => {
+   if (load.origin_latitude != null && load.origin_longitude != null) {
+     return { kind: "coord", coord: { lat: load.origin_latitude, lon: load.origin_longitude, found: true } };
+   } else if (/^\d{6}$/.test(load.origin_pincode)) {
+     return { kind: "pin", key: `pin:${load.origin_pincode}`, pin: load.origin_pincode };
+   } else if (load.origin_eloc) {
+     return { kind: "eloc", key: `eloc:${load.origin_eloc}`, eLoc: load.origin_eloc, fallbackName: load.origin_place_name || load.origin_city || "", fullAddress: load.origin_full_address || "" };
+   }
+   return { kind: "none" };
+ };
+
+ const destDescriptor = (load: Load): CoordDescriptor => {
+   if (load.destination_latitude != null && load.destination_longitude != null) {
+     return { kind: "coord", coord: { lat: load.destination_latitude, lon: load.destination_longitude, found: true } };
+   } else if (/^\d{6}$/.test(load.destination_pincode)) {
+     return { kind: "pin", key: `pin:${load.destination_pincode}`, pin: load.destination_pincode };
+   } else if (load.destination_eloc) {
+     return { kind: "eloc", key: `eloc:${load.destination_eloc}`, eLoc: load.destination_eloc, fallbackName: load.destination_place_name || load.destination_city || "", fullAddress: load.destination_full_address || "" };
+   }
+   return { kind: "none" };
+ };
+
+ const resolveDescriptor = (d: CoordDescriptor): Promise<CoordResult> => {
+   if (d.kind === "pin") return geocodePin(d.pin);
+   if (d.kind === "eloc") return geocodeEloc(d.eLoc, d.fallbackName, d.fullAddress);
+   return Promise.resolve({ lat: 0, lon: 0, found: false });
+ };
+
+ const GEOCODE_CHUNK_SIZE = 20;
+
  const applyFilter = useCallback(async (f: ActiveFilter) => {
     const dist: Distances = {};
     const survivors: { load: Load; total: number }[] = [];
-    for (const load of allLoads) {
-      if (load.weight_tons * 1000 < f.weightKg) continue;
-      if (f.volumeCuft != null && load.space_cuft != null && load.space_cuft < f.volumeCuft) continue;
 
-      // Resolve origin coords: stored lat/lon (best) → pincode geocode → eLoc geocode
-      let lo: { lat: number; lon: number; found: boolean };
-      if (load.origin_latitude != null && load.origin_longitude != null) {
-        lo = { lat: load.origin_latitude, lon: load.origin_longitude, found: true };
-      } else if (/^\d{6}$/.test(load.origin_pincode)) {
-        lo = await geocodePin(load.origin_pincode);
-      } else if (load.origin_eloc) {
-        lo = await geocodeEloc(load.origin_eloc, load.origin_place_name || load.origin_city || "", load.origin_full_address || "");
-      } else {
-        continue;
-      }
-      if (!lo.found) continue;
+    // Only loads that already pass the cheap weight/volume checks need coords resolved.
+    const eligible = allLoads.filter((load) => {
+      if (load.weight_tons * 1000 < f.weightKg) return false;
+      if (f.volumeCuft != null && load.space_cuft != null && load.space_cuft < f.volumeCuft) return false;
+      return true;
+    });
 
-      // Resolve destination coords: stored lat/lon (best) → pincode geocode → eLoc geocode
-      let ld: { lat: number; lon: number; found: boolean };
-      if (load.destination_latitude != null && load.destination_longitude != null) {
-        ld = { lat: load.destination_latitude, lon: load.destination_longitude, found: true };
-      } else if (/^\d{6}$/.test(load.destination_pincode)) {
-        ld = await geocodePin(load.destination_pincode);
-      } else if (load.destination_eloc) {
-        ld = await geocodeEloc(load.destination_eloc, load.destination_place_name || load.destination_city || "", load.destination_full_address || "");
-      } else {
-        continue;
-      }
-      if (!ld.found) continue;
+    // Work out how each load's coords should be resolved, but don't fire
+    // any requests yet — this lets us dedupe first.
+    const originDescByLoadId: Record<string, CoordDescriptor> = {};
+    const destDescByLoadId: Record<string, CoordDescriptor> = {};
+    const uniqueLookups = new Map<string, CoordDescriptor>();
+    for (const load of eligible) {
+      const od = originDescriptor(load), dd = destDescriptor(load);
+      originDescByLoadId[load.id] = od;
+      destDescByLoadId[load.id] = dd;
+      if ((od.kind === "pin" || od.kind === "eloc") && !uniqueLookups.has(od.key)) uniqueLookups.set(od.key, od);
+      if ((dd.kind === "pin" || dd.kind === "eloc") && !uniqueLookups.has(dd.key)) uniqueLookups.set(dd.key, dd);
+    }
+
+    // Resolve each unique pin/eLoc exactly once — loads sharing an origin
+    // or destination (common on popular lanes) no longer trigger duplicate
+    // network calls — fanned out in fixed-size chunks rather than awaiting
+    // one at a time. Cached lookups (see geoCache) resolve instantly.
+    const resolvedByKey: Record<string, CoordResult> = {};
+    const uniqueEntries = Array.from(uniqueLookups.entries());
+    for (let i = 0; i < uniqueEntries.length; i += GEOCODE_CHUNK_SIZE) {
+      const chunk = uniqueEntries.slice(i, i + GEOCODE_CHUNK_SIZE);
+      const chunkResults = await Promise.all(chunk.map(async ([key, desc]) => ({ key, coord: await resolveDescriptor(desc) })));
+      for (const { key, coord } of chunkResults) resolvedByKey[key] = coord;
+    }
+
+    const coordFor = (d: CoordDescriptor): CoordResult =>
+      d.kind === "coord" ? d.coord : d.kind === "none" ? { lat: 0, lon: 0, found: false } : resolvedByKey[d.key];
+
+    for (const load of eligible) {
+      const lo = coordFor(originDescByLoadId[load.id]);
+      const ld = coordFor(destDescByLoadId[load.id]);
+      if (!lo.found || !ld.found) continue;
 
       const dOrigin = haversineKm(f.originCoord, lo), dDest = haversineKm(f.destCoord, ld);
       if (dOrigin <= 30 && dDest <= 30) { dist[load.id] = { origin: dOrigin, dest: dDest, offRoute: false }; survivors.push({ load, total: dOrigin + dDest }); continue; }
@@ -5104,11 +5198,11 @@ function PosterProfileModal({ visible, load, contactName, contactsMap, viewerPho
     setShowMutuals(false);
     (async () => {
       try {
-        // Poster's loads — still need to fetch these
-        const loadsRes = await fetch(`${API}/loads`);
-        const all: Load[] = await loadsRes.json();
-        const posterPosts = all.filter(l => l.poster_phone === load.poster_phone);
-        setPosterLoads(posterPosts);
+        // Poster's loads — server-filtered by phone (mirrors /ptl/loads/my/:phone)
+        // instead of fetching every load on the platform to find this one poster's.
+        const loadsRes = await fetch(`${API}/loads/my/${encodeURIComponent(load.poster_phone)}`);
+        const posterPosts: Load[] = await loadsRes.json();
+        setPosterLoads(Array.isArray(posterPosts) ? posterPosts : []);
 
         try {
           const ptlRes = await fetch(`${API}/ptl/loads/my/${encodeURIComponent(load.poster_phone)}`);
@@ -5992,25 +6086,25 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
     const res = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: false, allowsMultipleSelection: true, selectionLimit: remaining,
-      quality: 0.7, base64: true,
     });
     if (!res.canceled && res.assets && res.assets.length > 0) {
-      const MAX = MAX_LOAD_PHOTO_BYTES;
-      const valid = res.assets.slice(0, remaining).filter((a: any) => {
-        if (!a.base64) return false;
-        const bytes = (a.base64.length * 3) / 4;
-        if (bytes > MAX) { Alert.alert("File too large", `"${a.fileName || "Photo"}" exceeds the 50 MB limit.`); return false; }
-        return true;
-      });
-      if (!valid.length) return;
+      const picked = res.assets.slice(0, remaining);
       setUploadProgress(0);
       const newOnes: string[] = [];
-      for (let i = 0; i < valid.length; i++) {
-        const a = valid[i];
-        newOnes.push(`data:${a.mimeType || "image/jpeg"};base64,${a.base64}`);
-        setUploadProgress(Math.round(((i + 1) / valid.length) * 100));
-        await new Promise(r => setTimeout(r, 80));
+      for (let i = 0; i < picked.length; i++) {
+        const a = picked[i];
+        const resized = await resizeAndEncodeImage(a.uri, a.width, a.height);
+        if (resized) {
+          const bytes = (resized.base64.length * 3) / 4;
+          if (bytes > MAX_LOAD_PHOTO_BYTES) {
+            Alert.alert("File too large", `"${a.fileName || "Photo"}" is too large even after compression. Please choose a different image.`);
+          } else {
+            newOnes.push(`data:${resized.mimeType};base64,${resized.base64}`);
+          }
+        }
+        setUploadProgress(Math.round(((i + 1) / picked.length) * 100));
       }
+      if (newOnes.length === 0) { setUploadProgress(null); return; }
       setImages(prev => [...prev, ...newOnes].slice(0, 3));
       setTimeout(() => setUploadProgress(null), 600);
     }
@@ -6587,25 +6681,25 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
     const res = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: false, allowsMultipleSelection: true, selectionLimit: remaining,
-      quality: 0.7, base64: true,
     });
     if (!res.canceled && res.assets && res.assets.length > 0) {
-      const MAX = MAX_LOAD_PHOTO_BYTES;
-      const valid = res.assets.slice(0, remaining).filter((a: any) => {
-        if (!a.base64) return false;
-        const bytes = (a.base64.length * 3) / 4;
-        if (bytes > MAX) { Alert.alert("File too large", `"${a.fileName || "Photo"}" exceeds the 50 MB limit.`); return false; }
-        return true;
-      });
-      if (!valid.length) return;
+      const picked = res.assets.slice(0, remaining);
       setUploadProgress(0);
       const newOnes: string[] = [];
-      for (let i = 0; i < valid.length; i++) {
-        const a = valid[i];
-        newOnes.push(`data:${a.mimeType || "image/jpeg"};base64,${a.base64}`);
-        setUploadProgress(Math.round(((i + 1) / valid.length) * 100));
-        await new Promise(r => setTimeout(r, 80));
+      for (let i = 0; i < picked.length; i++) {
+        const a = picked[i];
+        const resized = await resizeAndEncodeImage(a.uri, a.width, a.height);
+        if (resized) {
+          const bytes = (resized.base64.length * 3) / 4;
+          if (bytes > MAX_LOAD_PHOTO_BYTES) {
+            Alert.alert("File too large", `"${a.fileName || "Photo"}" is too large even after compression. Please choose a different image.`);
+          } else {
+            newOnes.push(`data:${resized.mimeType};base64,${resized.base64}`);
+          }
+        }
+        setUploadProgress(Math.round(((i + 1) / picked.length) * 100));
       }
+      if (newOnes.length === 0) { setUploadProgress(null); return; }
       setImages(prev => [...prev, ...newOnes].slice(0, 3));
       setTimeout(() => setUploadProgress(null), 600);
     }
@@ -7598,12 +7692,13 @@ function MyTruckSpacePostsList({ profile }: { profile: Profile }) {
 
   const fetchMy = useCallback(async () => {
     try {
+      // Server-filtered by phone (mirrors /ptl/loads/my/:phone) instead of
+      // fetching every truck-space listing on the platform and filtering here.
       const [loadsRes, countsRes] = await Promise.all([
-        fetch(`${API}/loads`).then(r => r.json()),
+        fetch(`${API}/loads/my/${encodeURIComponent(profile.phone)}`).then(r => r.json()),
         fetch(`${API}/bids/counts/${encodeURIComponent(profile.phone)}`).then(r => r.json()).catch(() => ({})),
       ]);
-      const j: Load[] = Array.isArray(loadsRes) ? loadsRes : [];
-      setMyLoads(j.filter((l) => l.poster_phone === profile.phone));
+      setMyLoads(Array.isArray(loadsRes) ? loadsRes : []);
       setBidCounts(typeof countsRes === "object" && countsRes ? countsRes : {});
     } catch {} finally {
       setLoading(false); setRefreshing(false);
@@ -7723,12 +7818,14 @@ function MyPostsScreen({ profile }: { profile: Profile }) {
 
   const fetchAll = useCallback(async () => {
     try {
+      // Server-filtered by phone (mirrors /ptl/loads/my/:phone) instead of
+      // fetching every truck-space listing on the platform and filtering here.
       const [loadsRes, ptlRes, countsRes] = await Promise.all([
-        fetch(`${API}/loads`).then((r) => r.json()).catch(() => []),
+        fetch(`${API}/loads/my/${encodeURIComponent(profile.phone)}`).then((r) => r.json()).catch(() => []),
         fetch(`${API}/ptl/loads/my/${encodeURIComponent(profile.phone)}`).then((r) => r.json()).catch(() => []),
         fetch(`${API}/bids/counts/${encodeURIComponent(profile.phone)}`).then((r) => r.json()).catch(() => ({})),
       ]);
-      const myTruck: Load[] = (Array.isArray(loadsRes) ? loadsRes : []).filter((l: Load) => l.poster_phone === profile.phone);
+      const myTruck: Load[] = Array.isArray(loadsRes) ? loadsRes : [];
       let myPtl: PtlLoad[] = Array.isArray(ptlRes) ? ptlRes : [];
 
       // Postings whose loading date has passed are no longer relevant — delete
