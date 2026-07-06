@@ -711,6 +711,38 @@ async def list_loads(
     return out
 
 
+@api_router.get("/loads/my/{phone}")
+async def get_my_loads(phone: str):
+    """Return this poster's own Truck Space listings, server-filtered by phone
+    (mirrors /ptl/loads/my/{phone}). Used by the My Posts screen so it doesn't
+    have to fetch every truck-space listing on the platform and filter client-side.
+    Returns loads WITHOUT inline image data (same as the /loads list endpoint)."""
+    phone = _norm_phone(phone)
+    if len(phone) != 10:
+        raise HTTPException(status_code=400, detail="phone must be a 10-digit number")
+
+    cursor = db.loads.find(
+        {"poster_phone": phone}, {"_id": 0, "images": 0}
+    ).sort("created_at", -1).limit(200)
+    docs = await cursor.to_list(200)
+
+    ids = [d["id"] for d in docs]
+    counts: dict = {}
+    if ids:
+        cursor2 = db.loads.aggregate([
+            {"$match": {"id": {"$in": ids}}},
+            {"$project": {"_id": 0, "id": 1, "image_count": {"$size": {"$ifNull": ["$images", []]}}}},
+        ])
+        async for d in cursor2:
+            counts[d["id"]] = d["image_count"]
+    out = []
+    for d in docs:
+        d["image_count"] = counts.get(d["id"], 0)
+        d["images"] = []
+        out.append(d)
+    return out
+
+
 @api_router.get("/loads/s/{short_id}")
 async def get_load_by_short_id(short_id: str):
     """Resolve a short_id (6-char slug) to a full load. Used by the website
