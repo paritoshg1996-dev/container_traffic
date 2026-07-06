@@ -519,6 +519,8 @@ export default function Index() {
               name: data.name,
               phone: data.phone,
               company: data.company || "",
+              profile_verified: data.profile_verified ?? false,
+              verification_submitted: data.verification_submitted ?? false,
             };
             await AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(restored));
             setProfile(restored);
@@ -4783,7 +4785,7 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
               <Ionicons name="location" size={16} color={COLORS.secondary} />
               <View style={{ flex: 1 }}>
                 <Text style={detailStyles.routeLocality}>{l.origin_locality || cO}</Text>
-                {cO && cO !== l.origin_locality ? <Text style={detailStyles.routeCity}>{cO}{stO ? `, ${stateAbbr(stO)}` : ""}</Text> : null}
+                {(cO && cO !== l.origin_locality) || stO ? <Text style={detailStyles.routeCity}>{cO && cO !== l.origin_locality ? cO : ""}{stO ? `${cO && cO !== l.origin_locality ? ", " : ""}${stateAbbr(stO)}` : ""}</Text> : null}
                 <Text style={detailStyles.routePin}>{l.origin_pincode}</Text>
               </View>
             </View>
@@ -4792,7 +4794,7 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
               <Ionicons name="flag" size={16} color={COLORS.primary} />
               <View style={{ flex: 1 }}>
                 <Text style={detailStyles.routeLocality}>{l.destination_locality || cD}</Text>
-                {cD && cD !== l.destination_locality ? <Text style={detailStyles.routeCity}>{cD}{stD ? `, ${stateAbbr(stD)}` : ""}</Text> : null}
+                {(cD && cD !== l.destination_locality) || stD ? <Text style={detailStyles.routeCity}>{cD && cD !== l.destination_locality ? cD : ""}{stD ? `${cD && cD !== l.destination_locality ? ", " : ""}${stateAbbr(stD)}` : ""}</Text> : null}
                 <Text style={detailStyles.routePin}>{l.destination_pincode}</Text>
               </View>
             </View>
@@ -4870,7 +4872,7 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
               <Ionicons name="location" size={16} color={COLORS.secondary} />
               <View style={{ flex: 1 }}>
                 <Text style={detailStyles.routeLocality}>{primary?.origin_locality || g.origin_display}</Text>
-                {primary?.origin_city && primary.origin_city !== primary?.origin_locality ? <Text style={detailStyles.routeCity}>{primary.origin_city}{primary?.origin_state ? `, ${stateAbbr(primary.origin_state)}` : ""}</Text> : null}
+                {(primary?.origin_city && primary.origin_city !== primary?.origin_locality) || primary?.origin_state ? <Text style={detailStyles.routeCity}>{primary?.origin_city && primary.origin_city !== primary?.origin_locality ? primary.origin_city : ""}{primary?.origin_state ? `${primary?.origin_city && primary.origin_city !== primary?.origin_locality ? ", " : ""}${stateAbbr(primary.origin_state)}` : ""}</Text> : null}
                 {primary?.origin_pincode ? <Text style={detailStyles.routePin}>{primary.origin_pincode}</Text> : null}
               </View>
             </View>
@@ -4879,7 +4881,7 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
               <Ionicons name="flag" size={16} color={COLORS.primary} />
               <View style={{ flex: 1 }}>
                 <Text style={detailStyles.routeLocality}>{primary?.destination_locality || g.destination_display}</Text>
-                {primary?.destination_city && primary.destination_city !== primary?.destination_locality ? <Text style={detailStyles.routeCity}>{primary.destination_city}{primary?.destination_state ? `, ${stateAbbr(primary.destination_state)}` : ""}</Text> : null}
+                {(primary?.destination_city && primary.destination_city !== primary?.destination_locality) || primary?.destination_state ? <Text style={detailStyles.routeCity}>{primary?.destination_city && primary.destination_city !== primary?.destination_locality ? primary.destination_city : ""}{primary?.destination_state ? `${primary?.destination_city && primary.destination_city !== primary?.destination_locality ? ", " : ""}${stateAbbr(primary.destination_state)}` : ""}</Text> : null}
                 {primary?.destination_pincode ? <Text style={detailStyles.routePin}>{primary.destination_pincode}</Text> : null}
               </View>
             </View>
@@ -5983,6 +5985,7 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
       setOriginText(editLoad.origin_locality || editLoad.origin_city || "");
       setOriginPin(editLoad.origin_pincode || "");
       setOriginInfo({
+        valid: true,
         locality: editLoad.origin_locality,
         city: editLoad.origin_city,
         state: (editLoad as any).origin_state,
@@ -5996,6 +5999,7 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
       setDestText(editLoad.destination_locality || editLoad.destination_city || "");
       setDestPin(editLoad.destination_pincode || "");
       setDestInfo({
+        valid: true,
         locality: editLoad.destination_locality,
         city: editLoad.destination_city,
         state: (editLoad as any).destination_state,
@@ -7816,6 +7820,17 @@ function MyPostsScreen({ profile }: { profile: Profile }) {
   const [showDetail, setShowDetail] = useState(false);
   const [bidsForListing, setBidsForListing] = useState<{ id: string; label: string } | null>(null);
 
+  // Cache-first (stale-while-revalidate): the My Posts tab is fully unmounted
+  // and remounted every time the user navigates away and back (see the
+  // `tab === "myPosts" && <MyPostsScreen />` conditional render), which used
+  // to mean an empty list + spinner and a full network round-trip on every
+  // single visit. We now persist the last-fetched result per-phone in
+  // AsyncStorage and hydrate from it immediately on mount, so the list
+  // appears instantly while a fresh fetch happens silently underneath. If
+  // there's no cache yet (first-ever visit), we fall back to the normal
+  // loading spinner.
+  const cacheKey = `myposts_cache_${profile.phone}`;
+
   const fetchAll = useCallback(async () => {
     try {
       // Server-filtered by phone (mirrors /ptl/loads/my/:phone) instead of
@@ -7862,14 +7877,51 @@ function MyPostsScreen({ profile }: { profile: Profile }) {
         }),
       );
       setGroupCache(fetched);
+
+      // Persist for next time this screen mounts (see cache-hydration effect
+      // below). Best-effort — a failed write just means next visit falls
+      // back to a normal fetch, same as today.
+      AsyncStorage.setItem(
+        cacheKey,
+        JSON.stringify({
+          truckLoads: myTruck,
+          ptlLoads: myPtl,
+          bidCounts: typeof countsRes === "object" && countsRes ? countsRes : {},
+          groupCache: fetched,
+        }),
+      ).catch(() => {});
     } catch {
       // ignore
     } finally {
       setLoading(false); setRefreshing(false);
     }
-  }, [profile.phone]);
+  }, [profile.phone, cacheKey]);
 
-  useEffect(() => { fetchAll(); }, [fetchAll]);
+  // On mount, hydrate instantly from whatever we cached last time (if
+  // anything), then always kick off a real fetch in the background to make
+  // sure what's shown is current. This turns "every visit waits on the
+  // network" into "every visit after the first shows instantly, then
+  // quietly updates".
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(cacheKey);
+        if (raw && !cancelled) {
+          const cached = JSON.parse(raw);
+          if (Array.isArray(cached?.truckLoads)) setTruckLoads(cached.truckLoads);
+          if (Array.isArray(cached?.ptlLoads)) setPtlLoads(cached.ptlLoads);
+          if (cached?.bidCounts && typeof cached.bidCounts === "object") setBidCounts(cached.bidCounts);
+          if (cached?.groupCache && typeof cached.groupCache === "object") setGroupCache(cached.groupCache);
+          setLoading(false); // show cached content immediately instead of a spinner
+        }
+      } catch {
+        // no valid cache — normal loading spinner path below handles it
+      }
+      if (!cancelled) fetchAll();
+    })();
+    return () => { cancelled = true; };
+  }, [cacheKey, fetchAll]);
 
   // Build a PtlGroup-shaped object for each of my loads so it can be
   // rendered with the exact same card used in Marketplace → Find Partial Loads.
