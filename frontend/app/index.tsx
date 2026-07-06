@@ -2957,90 +2957,57 @@ const pincode: string =
     }
   };
 
-  const pick = async (s: CitySuggestion) => {
-	 if (!s.pincode) {
-  // Autosuggest never returns lat/lon — but placeAddress always contains
-  // the pincode (e.g. "Mumbai, Maharashtra, 400053"). Extract it and use
-  // geocodePin (Nominatim) to get coords. This is the only reliable path
-  // given that the Place Detail API does not return coords on our plan.
-  const addressPin = (s.fullAddress || "").match(/\b(\d{6})\b/)?.[1] || "";
+  const pick = (s: CitySuggestion) => {
+    if (!s.pincode) {
+      // Autosuggest never returns lat/lon — but placeAddress always contains
+      // the pincode (e.g. "Mumbai, Maharashtra, 400053"). Extract it; the
+      // coords themselves get resolved later via geocodePin when needed.
+      const addressPin = (s.fullAddress || "").match(/\b(\d{6})\b/)?.[1] || "";
+      const displayLocality = (s.placeName || s.locality || s.name || "").trim();
 
-  await saveRecentSearch(testIDPrefix, { ...s, pincode: addressPin });
+      // Update the parent screen and close the picker immediately — saving
+      // to recent searches is local housekeeping and must never block the UI.
+      onSelect(
+        displayLocality,
+        addressPin,
+        {
+          city: s.city || "",
+          locality: displayLocality,
+          state: s.state || "",
+          valid: true,
+          placeName: s.placeName || s.name || "",
+          fullAddress: s.fullAddress || "",
+          latitude: null,
+          longitude: null,
+          eLoc: s.eLoc || "",
+        }
+      );
+      onClose();
 
-  const displayLocality = (s.placeName || s.locality || s.name || "").trim();
-  onSelect(
-    displayLocality,
-    addressPin,
-    {
-      city: s.city || "",
-      locality: displayLocality,
-      state: s.state || "",
-      valid: true,
-      placeName: s.placeName || s.name || "",
-      fullAddress: s.fullAddress || "",
-      latitude: null,
-      longitude: null,
-      eLoc: s.eLoc || "",
-    }
-  );
-
-  onClose();
-  return;
-}
-    // Always fetch the authoritative city/state from the pincode endpoint
-    // so the UI shows the instantly-recognizable district name (e.g., Rewari,
-    // Thane), even if the search result's parsed city/state was incomplete.
-    let finalCity = s.city || "";
-    let finalState = s.state || "";
-    // Use s.placeName as the display locality — it is exactly the text shown
-    // in the dropdown row that the user saw and tapped. s.locality is derived
-    // from addressTokens and can differ from placeName. j.locality from the
-    // postal API is a post office name (e.g. "Sanpada", "KU Bazar") that the
-    // user never saw — we must never use it as the display label.
-    let finalLocality = (s.placeName || s.locality || s.name || "").trim();
-
-    // Hard guard: state must never equal the pincode (frequent Mappls quirk).
-    if (finalState && /^\d{6}$/.test(finalState.trim())) finalState = "";
-    if (finalCity  && /^\d{6}$/.test(finalCity.trim()))  finalCity  = "";
-    if (finalState && s.pincode && finalState.trim() === s.pincode) finalState = "";
-
-    try {
-      const r = await fetch(`${API}/pincode/${s.pincode}`);
-      const j = await r.json();
-      if (j && j.valid) {
-        // Postal API is authoritative for city and state only — never locality.
-        // j.locality is a post office admin name, not the area name the user knows.
-        if (j.city)  finalCity  = j.city;
-        if (j.state) finalState = j.state;
-        // Only fill locality from postal API if Mappls gave us nothing at all.
-        if (!finalLocality) finalLocality = j.locality || j.city || s.name;
-      }
-    } catch {}
-
-    // Guard: if city ended up identical to state (e.g., "Haryana"/"Haryana"),
-    // fall back to the locality from the original search.
-    if (finalCity && finalState && finalCity.trim().toLowerCase() === finalState.trim().toLowerCase()) {
-      const fallback = (s.locality || s.name || "").split(",")[0].trim();
-      if (fallback && fallback.toLowerCase() !== finalState.trim().toLowerCase()) {
-        finalCity = fallback;
-      }
+      saveRecentSearch(testIDPrefix, { ...s, pincode: addressPin }).catch(() => {});
+      return;
     }
 
-    // Repeat the state≠pincode guard AFTER all enrichment, just in case.
-    if (finalState && /^\d{6}$/.test(finalState.trim())) finalState = "";
-    if (finalCity  && /^\d{6}$/.test(finalCity.trim()))  finalCity  = "";
+    // Best-effort city/state/locality straight from the Mappls result — good
+    // enough to show immediately, so the picker closes with no perceptible
+    // delay after a tap.
+    const initialCity = (() => {
+      let c = s.city || "";
+      if (/^\d{6}$/.test(c.trim())) c = "";
+      return c;
+    })();
+    const initialState = (() => {
+      let st = s.state || "";
+      if (/^\d{6}$/.test(st.trim())) st = "";
+      if (st && s.pincode && st.trim() === s.pincode) st = "";
+      return st;
+    })();
+    const initialLocality = (s.placeName || s.locality || s.name || "").trim();
 
-    const enriched: CitySuggestion = {
-      ...s,
-      city: finalCity,
-      state: finalState,
-      locality: finalLocality,
-    };
-    await saveRecentSearch(testIDPrefix, enriched);
-    onSelect(finalLocality, enriched.pincode, {
-      city: finalCity,
-      locality: finalLocality,
-      state: finalState,
+    onSelect(initialLocality, s.pincode, {
+      city: initialCity,
+      locality: initialLocality,
+      state: initialState,
       valid: true,
       placeName: s.placeName || s.name || "",
       fullAddress: s.fullAddress || "",
@@ -3049,7 +3016,61 @@ const pincode: string =
       eLoc: s.eLoc || "",
     });
     onClose();
+
+    // Enrich with the authoritative city/state from the pincode endpoint in
+    // the background (so, e.g., "Rewari"/"Thane" show even when Mappls'
+    // own city field didn't resolve to it). This network call used to be
+    // awaited BEFORE onSelect/onClose, which is what caused the noticeable
+    // lag after tapping a result — now it only patches the result afterward,
+    // and only if it actually found something different.
+    (async () => {
+      let finalCity = initialCity;
+      let finalState = initialState;
+      let finalLocality = initialLocality;
+      try {
+        const r = await fetch(`${API}/pincode/${s.pincode}`);
+        const j = await r.json();
+        if (j && j.valid) {
+          // Postal API is authoritative for city and state only — never locality.
+          // j.locality is a post office admin name, not the area name the user saw.
+          if (j.city) finalCity = j.city;
+          if (j.state) finalState = j.state;
+          if (!finalLocality) finalLocality = j.locality || j.city || s.name;
+        }
+      } catch {}
+
+      // Guard: if city ended up identical to state (e.g., "Haryana"/"Haryana"),
+      // fall back to the locality from the original search.
+      if (finalCity && finalState && finalCity.trim().toLowerCase() === finalState.trim().toLowerCase()) {
+        const fallback = (s.locality || s.name || "").split(",")[0].trim();
+        if (fallback && fallback.toLowerCase() !== finalState.trim().toLowerCase()) {
+          finalCity = fallback;
+        }
+      }
+      if (finalState && /^\d{6}$/.test(finalState.trim())) finalState = "";
+      if (finalCity && /^\d{6}$/.test(finalCity.trim())) finalCity = "";
+
+      const enriched: CitySuggestion = { ...s, city: finalCity, state: finalState, locality: finalLocality };
+      saveRecentSearch(testIDPrefix, enriched).catch(() => {});
+
+      // Only patch the already-selected value if enrichment changed something —
+      // avoids a redundant, invisible re-render in the common case.
+      if (finalCity !== initialCity || finalState !== initialState || finalLocality !== initialLocality) {
+        onSelect(finalLocality, enriched.pincode, {
+          city: finalCity,
+          locality: finalLocality,
+          state: finalState,
+          valid: true,
+          placeName: s.placeName || s.name || "",
+          fullAddress: s.fullAddress || "",
+          latitude: s.latitude ?? null,
+          longitude: s.longitude ?? null,
+          eLoc: s.eLoc || "",
+        });
+      }
+    })();
   };
+
 
   const stopVoice = useCallback(() => { try { ExpoSpeechRecognitionModule.stop(); } catch {} setListening(false); }, []);
 
@@ -5299,6 +5320,10 @@ const cargoStyles = StyleSheet.create({
     backgroundColor: "#EEF2FA",
     borderColor: COLORS.primary,
   },
+  tileSelectedOrange: {
+    backgroundColor: "#FFF4EE",
+    borderColor: COLORS.secondary,
+  },
   tileImage: {
     width: 52,
     height: 52,
@@ -5316,6 +5341,11 @@ const cargoStyles = StyleSheet.create({
     fontFamily: "Inter_700Bold",
     fontWeight: "700",
   },
+  tileLabelSelectedOrange: {
+    color: COLORS.secondary,
+    fontFamily: "Inter_700Bold",
+    fontWeight: "700",
+  },
   checkDot: {
     position: "absolute",
     top: 6,
@@ -5324,6 +5354,17 @@ const cargoStyles = StyleSheet.create({
     height: 16,
     borderRadius: 8,
     backgroundColor: COLORS.primary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  checkDotOrange: {
+    position: "absolute",
+    top: 6,
+    right: 6,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: COLORS.secondary,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -5818,9 +5859,30 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
   const [destText, setDestText] = useState("");
   const [destPin, setDestPin] = useState("");
   const [destInfo, setDestInfo] = useState<any>(null);
-  const [cargoType, setCargoType] = useState("Bags");
-  const [weightKg, setWeightKg] = useState("");
+
+  const today = useMemo(() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; }, []);
+  const maxDate = useMemo(() => { const d = new Date(today); d.setDate(d.getDate() + 14); return d; }, [today]);
+  const [date, setDate] = useState<Date>(new Date());
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [weight, setWeight] = useState(1.0);
+  const [weightModalVisible, setWeightModalVisible] = useState(false);
+  const [weightInput, setWeightInput] = useState("");
+
+  const [cargoTypes, setCargoTypes] = useState<string[]>([]);
+  const [cargoOther, setCargoOther] = useState("");
+  const [showCargoOtherInput, setShowCargoOtherInput] = useState(false);
+
+  const [dimL, setDimL] = useState("");
+  const [dimB, setDimB] = useState("");
+  const [dimH, setDimH] = useState("");
+  const [truckType, setTruckType] = useState<string>("");
+  const [placement, setPlacement] = useState<string>("");
+  const [images, setImages] = useState<string[]>([]);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+
   const [busy, setBusy] = useState(false);
+
+  const cargoType = cargoTypes[0] || "";
 
   useEffect(() => {
     if (visible && editLoad) {
@@ -5850,10 +5912,27 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
         latitude: editLoad.destination_latitude,
         longitude: editLoad.destination_longitude,
       });
-      setCargoType(editLoad.cargo_type || "Bags");
-      setWeightKg(editLoad.weight_kg ? String(Math.round(editLoad.weight_kg)) : "");
+      const et = editLoad.cargo_type || "Bags";
+      setCargoTypes([et]);
+      setShowCargoOtherInput(et.startsWith("Others"));
+      if (et.startsWith("Others:")) setCargoOther(et.replace(/^Others:\s*/, ""));
+      setWeightKgToTons(editLoad.weight_kg);
+      setTruckType((editLoad as any).truck_type || "");
+      setPlacement((editLoad as any).cargo_placement || "");
+      setDimL((editLoad as any).dimension_length ? String((editLoad as any).dimension_length) : "");
+      setDimB((editLoad as any).dimension_breadth ? String((editLoad as any).dimension_breadth) : "");
+      setDimH((editLoad as any).dimension_height ? String((editLoad as any).dimension_height) : "");
+      setImages(Array.isArray((editLoad as any).images) ? (editLoad as any).images : []);
+      if ((editLoad as any).loading_date) {
+        const d = new Date((editLoad as any).loading_date);
+        if (!isNaN(d.getTime())) setDate(d);
+      }
     }
   }, [visible, editLoad]);
+
+  function setWeightKgToTons(kg?: number | null) {
+    if (kg) setWeight(parseFloat((kg / 1000).toFixed(1)));
+  }
 
   useEffect(() => {
     if (visible && prefillRoute && !editLoad) {
@@ -5882,14 +5961,69 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
     }
   }, [visible, prefillRoute]);
 
-  const handleCargoSelect = (ct: string) => {
-    setCargoType(ct);
+  const onDateChange = (event: any, selected?: Date) => {
+    if (Platform.OS !== "ios") setShowDatePicker(false);
+    if (event?.type === "dismissed") return;
+    if (selected) {
+      if (selected < today) setDate(today);
+      else if (selected > maxDate) setDate(maxDate);
+      else setDate(selected);
+    }
   };
+
+  const selectCargoType = (key: string) => {
+    const isOthers = key === "Others";
+    if (cargoTypes.includes(key)) {
+      setCargoTypes([]);
+      setCargoOther("");
+      setShowCargoOtherInput(false);
+      return;
+    }
+    setCargoTypes([key]);
+    setCargoOther("");
+    setShowCargoOtherInput(isOthers);
+  };
+
+  const pickImage = async () => {
+    if (images.length >= MAX_LOAD_PHOTOS) { Alert.alert("Limit", `You can attach up to ${MAX_LOAD_PHOTOS} photos.`); return; }
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) { Alert.alert("Permission needed", "Please grant photo library access to attach images."); return; }
+    const remaining = MAX_LOAD_PHOTOS - images.length;
+    const res = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: false, allowsMultipleSelection: true, selectionLimit: remaining,
+      quality: 0.7, base64: true,
+    });
+    if (!res.canceled && res.assets && res.assets.length > 0) {
+      const MAX = MAX_LOAD_PHOTO_BYTES;
+      const valid = res.assets.slice(0, remaining).filter((a: any) => {
+        if (!a.base64) return false;
+        const bytes = (a.base64.length * 3) / 4;
+        if (bytes > MAX) { Alert.alert("File too large", `"${a.fileName || "Photo"}" exceeds the 50 MB limit.`); return false; }
+        return true;
+      });
+      if (!valid.length) return;
+      setUploadProgress(0);
+      const newOnes: string[] = [];
+      for (let i = 0; i < valid.length; i++) {
+        const a = valid[i];
+        newOnes.push(`data:${a.mimeType || "image/jpeg"};base64,${a.base64}`);
+        setUploadProgress(Math.round(((i + 1) / valid.length) * 100));
+        await new Promise(r => setTimeout(r, 80));
+      }
+      setImages(prev => [...prev, ...newOnes].slice(0, 3));
+      setTimeout(() => setUploadProgress(null), 600);
+    }
+  };
+  const removeImage = (idx: number) => setImages((prev) => prev.filter((_, i) => i !== idx));
 
   const reset = () => {
     setOriginText(""); setOriginPin(""); setOriginInfo(null);
     setDestText(""); setDestPin(""); setDestInfo(null);
-    setCargoType("Bags"); setWeightKg("");
+    setDate(new Date()); setWeight(1.0); setWeightInput("");
+    setCargoTypes([]); setCargoOther(""); setShowCargoOtherInput(false);
+    setDimL(""); setDimB(""); setDimH("");
+    setTruckType(""); setPlacement(""); setImages([]);
   };
 
   const submit = async () => {
@@ -5897,9 +6031,16 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
     const destValid = isRouteInfoValid(destPin, destInfo);
     if (!originValid) return Alert.alert("Origin", "Please select a valid origin from the list.");
     if (!destValid) return Alert.alert("Destination", "Please select a valid destination from the list.");
-    const w = parseFloat(weightKg);
-    if (!w || w <= 0) return Alert.alert("Weight", "Please enter a valid weight in kg.");
-    if (w > TRUCK_CAPACITY_KG) return Alert.alert("Too heavy", `A single PTL load can't exceed ${TRUCK_CAPACITY_KG} kg. Use full-truck booking instead.`);
+    if (!cargoType) return Alert.alert("Product type", "Please select a product type.");
+    if (weight <= 0) return Alert.alert("Weight", "Please enter a valid weight in tons.");
+    if (weight > 20) return Alert.alert("Too heavy", "A single partial load can't exceed 20 tons. Use Post Space for a full truck.");
+
+    const L = dimL ? parseInt(dimL, 10) : null;
+    const B = dimB ? parseInt(dimB, 10) : null;
+    const H = dimH ? parseInt(dimH, 10) : null;
+    if (L !== null && L > MAX_DIMENSION_LENGTH_FT) return Alert.alert("Invalid length", `Length cannot exceed ${MAX_DIMENSION_LENGTH_FT} ft.`);
+    if (B !== null && B > MAX_DIMENSION_BREADTH_FT) return Alert.alert("Invalid breadth", `Breadth cannot exceed ${MAX_DIMENSION_BREADTH_FT} ft.`);
+    if (H !== null && H > MAX_DIMENSION_HEIGHT_FT) return Alert.alert("Invalid height", `Height cannot exceed ${MAX_DIMENSION_HEIGHT_FT} ft.`);
 
     setBusy(true);
     try {
@@ -5908,6 +6049,8 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
           await fetch(`${API}/ptl/loads/${editLoad.id}?phone=${encodeURIComponent(profile.phone)}`, { method: "DELETE" });
         } catch {}
       }
+      const cargoTypeFinal = cargoType.startsWith("Others:") && cargoOther.trim()
+        ? `Others: ${cargoOther.trim()}` : cargoType;
       const result = await apiRequest("/ptl/loads", {
         body: {
           poster_phone: profile.phone,
@@ -5929,9 +6072,16 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
           destination_eloc: destInfo?.eLoc || "",
           destination_latitude: destInfo?.latitude ?? null,
           destination_longitude: destInfo?.longitude ?? null,
-          cargo_type: cargoType,
-          cargo_category: cargoType,
-          weight_kg: w,
+          cargo_type: cargoTypeFinal,
+          cargo_category: cargoTypeFinal,
+          weight_kg: Math.round(weight * 1000),
+          truck_type: truckType,
+          loading_date: date.toISOString().slice(0, 10),
+          dimension_length: L,
+          dimension_breadth: B,
+          dimension_height: H,
+          cargo_placement: placement,
+          images,
         },
       });
       if (!result.ok) {
@@ -5953,77 +6103,397 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <View style={styles.ptlModalBackdrop}>
-        <View style={styles.ptlModalSheet} testID="post-ptl-modal">
-          <View style={styles.ptlModalHeader}>
-            <Text style={styles.ptlModalTitle}>{editLoad ? "Edit partial load" : "Post partial load"}</Text>
-            <TouchableOpacity onPress={onClose} testID="post-ptl-close">
-              <Ionicons name="close" size={26} color={COLORS.text} />
-            </TouchableOpacity>
-          </View>
-          <SafeScrollView contentContainerStyle={{ padding: 16, paddingBottom: 32 }} keyboardShouldPersistTaps="handled">
-            <SmartRouteInput
-              accentColor={COLORS.secondary}
-              label="Origin"
-              testIDPrefix="ptl-origin"
-              text={originText}
-              pin={originPin}
-              info={originInfo}
-              onChange={(t, p, i) => { setOriginText(t); setOriginPin(p); setOriginInfo(i); }}
-            />
-            <View style={{ height: 12 }} />
-            <SmartRouteInput
-              accentColor={COLORS.secondary}
-              label="Destination"
-              testIDPrefix="ptl-dest"
-              text={destText}
-              pin={destPin}
-              info={destInfo}
-              onChange={(t, p, i) => { setDestText(t); setDestPin(p); setDestInfo(i); }}
-            />
+      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.modalBackdrop}>
+        <View style={[styles.modalSheet, { maxHeight: "94%", borderColor: COLORS.secondary, borderWidth: 2 }]} testID="post-ptl-modal">
+          <View style={[styles.modalHandle, { backgroundColor: COLORS.secondary }]} />
+          <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+            <Text style={styles.modalTitle}>{editLoad ? "Edit partial load" : "Post partial load"}</Text>
 
-            <Text style={[styles.label, { marginTop: 18 }]}>Cargo type</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
-              {PTL_CARGO_TYPES.map((ct) => (
-                <TouchableOpacity
-                  key={ct}
-                  testID={`ptl-cargo-${ct}`}
-                  style={[styles.ptlCargoChip, cargoType === ct && styles.ptlCargoChipActive]}
-                  onPress={() => handleCargoSelect(ct)}
+            <SectionTitle icon="navigate-outline" title="Route" />
+            <View style={styles.routeInputsRow}>
+              <SmartRouteInput
+                accentColor={COLORS.secondary}
+                label="Origin"
+                testIDPrefix="ptl-origin"
+                text={originText}
+                pin={originPin}
+                info={originInfo}
+                onChange={(t, p, i) => { setOriginText(t); setOriginPin(p); setOriginInfo(i); }}
+              />
+              <View style={styles.routeArrowMid}><Ionicons name="arrow-forward" size={20} color={COLORS.secondary} /></View>
+              <SmartRouteInput
+                accentColor={COLORS.secondary}
+                label="Destination"
+                testIDPrefix="ptl-dest"
+                text={destText}
+                pin={destPin}
+                info={destInfo}
+                onChange={(t, p, i) => { setDestText(t); setDestPin(p); setDestInfo(i); }}
+              />
+            </View>
+
+            <SectionTitle icon="calendar-outline" title="Loading Date" />
+            <View style={[styles.stepperRow, styles.filledBorderOrange]}>
+              <TouchableOpacity
+                testID="ptl-date-minus"
+                style={styles.stepperBtn}
+                onPress={() => {
+                  setDate(prev => {
+                    const d = new Date(prev); d.setDate(d.getDate() - 1);
+                    return d < today ? today : d;
+                  });
+                }}
+              >
+                <Text style={styles.stepperBtnText}>-</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                testID="ptl-date-btn"
+                style={styles.stepperCenter}
+                activeOpacity={0.8}
+                onPress={() => setShowDatePicker(true)}
+              >
+                <Ionicons name="calendar" size={14} color={COLORS.primary} />
+                <Text
+                  style={styles.stepperDateText}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.6}
+                  allowFontScaling={false}
                 >
-                  <Text style={[styles.ptlCargoChipText, cargoType === ct && styles.ptlCargoChipTextActive]}>{ct}</Text>
+                  {date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                testID="ptl-date-plus"
+                style={styles.stepperBtn}
+                onPress={() => {
+                  setDate(prev => {
+                    const d = new Date(prev); d.setDate(d.getDate() + 1);
+                    return d > maxDate ? maxDate : d;
+                  });
+                }}
+              >
+                <Text style={styles.stepperBtnText}>+</Text>
+              </TouchableOpacity>
+            </View>
+            {showDatePicker && (
+              <DateTimePicker
+                value={date}
+                mode="date"
+                display={Platform.OS === "ios" ? "spinner" : "default"}
+                minimumDate={today}
+                maximumDate={maxDate}
+                onChange={onDateChange}
+              />
+            )}
+
+            <SectionTitle icon="scale-outline" title="Weight" />
+            <View style={[styles.stepperRow, weight > 0 && styles.filledBorderOrange]}>
+              <TouchableOpacity
+                testID="ptl-weight-minus"
+                style={styles.stepperBtn}
+                onPress={() => setWeight(w => Math.max(0.5, parseFloat((w - 0.5).toFixed(1))))}
+              >
+                <Text style={styles.stepperBtnText}>-</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                testID="ptl-weight-btn"
+                style={styles.stepperCenter}
+                activeOpacity={0.8}
+                onPress={() => { setWeightInput(String(weight)); setWeightModalVisible(true); }}
+              >
+                <Text style={styles.stepperValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6} allowFontScaling={false}>{weight.toFixed(1)}</Text>
+                <Text style={styles.stepperUnit} numberOfLines={1} allowFontScaling={false}>tons</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                testID="ptl-weight-plus"
+                style={styles.stepperBtn}
+                onPress={() => setWeight(w => Math.min(20, parseFloat((w + 0.5).toFixed(1))))}
+              >
+                <Text style={styles.stepperBtnText}>+</Text>
+              </TouchableOpacity>
+            </View>
+
+            <SectionTitle icon="cube-outline" title="Product Type" />
+            <View style={cargoStyles.grid} testID="ptl-cargo-grid">
+              {CARGO_TYPE_OPTIONS.map((opt) => {
+                const selected = cargoTypes.includes(opt.key);
+                return (
+                  <TouchableOpacity
+                    key={opt.key}
+                    testID={`ptl-cargo-${opt.key}`}
+                    style={[cargoStyles.tile, selected && cargoStyles.tileSelectedOrange]}
+                    onPress={() => selectCargoType(opt.key)}
+                    activeOpacity={0.75}
+                  >
+                    <Image source={opt.image} style={cargoStyles.tileImage} resizeMode="contain" />
+                    <Text style={[cargoStyles.tileLabel, selected && cargoStyles.tileLabelSelectedOrange]} numberOfLines={1}>{opt.label}</Text>
+                    {selected && <View style={cargoStyles.checkDotOrange}><Ionicons name="checkmark" size={9} color="#fff" /></View>}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            {showCargoOtherInput && (
+              <View style={cargoStyles.otherInputWrap}>
+                <TextInput
+                  style={cargoStyles.otherInput}
+                  value={cargoOther}
+                  onChangeText={(t) => {
+                    setCargoOther(t);
+                    setCargoTypes(t.trim() ? [`Others: ${t.trim()}`] : ["Others"]);
+                  }}
+                  placeholder="Describe cargo (e.g. Steel coils, Marble slabs…)"
+                  placeholderTextColor={COLORS.textSubtle}
+                  returnKeyType="done"
+                />
+              </View>
+            )}
+
+            <Text style={styles.optionalHeading}>Add more details (optional)</Text>
+
+            <CollapsibleSection
+              accentColor={COLORS.secondary}
+              accentBg="#FFF4EE"
+              icon="resize-outline"
+              title="Available Space"
+              summary={(dimL || dimB || dimH) ? `${dimL || "-"} x ${dimB || "-"} x ${dimH || "-"} ft` : ""}
+              testID="ptl-opt-space"
+            >
+              <View style={styles.dimRow} testID="ptl-dimension-row">
+                <View style={styles.dimItem}>
+                  <Text style={styles.dimLabel}>Length</Text>
+                  <View style={[styles.dimInputWrap, dimL && styles.filledBorderOrange]}>
+                    <TextInput
+                      testID="ptl-dim-length-input"
+                      style={styles.dimInputText}
+                      value={dimL}
+                      onChangeText={(t) => {
+                        const digits = t.replace(/\D/g, "");
+                        if (!digits) { setDimL(""); return; }
+                        if (parseInt(digits, 10) > 40) { setDimL(""); return; }
+                        setDimL(digits);
+                      }}
+                      keyboardType="number-pad"
+                      maxLength={3}
+                      placeholder="0"
+                      placeholderTextColor={COLORS.textSubtle}
+                    />
+                    <Text style={styles.dimSuffix}>ft</Text>
+                  </View>
+                  {dimL && parseInt(dimL, 10) > 40 ? <Text style={styles.errorText}>Max length: 40 ft</Text> : null}
+                </View>
+                <View style={styles.dimItem}>
+                  <Text style={styles.dimLabel}>Breadth</Text>
+                  <View style={[styles.dimInputWrap, dimB && styles.filledBorderOrange]}>
+                    <TextInput
+                      testID="ptl-dim-breadth-input"
+                      style={styles.dimInputText}
+                      value={dimB}
+                      onChangeText={(t) => {
+                        const digits = t.replace(/\D/g, "");
+                        if (!digits) { setDimB(""); return; }
+                        if (parseInt(digits, 10) > 8) { setDimB(""); return; }
+                        setDimB(digits);
+                      }}
+                      keyboardType="number-pad"
+                      maxLength={2}
+                      placeholder="0"
+                      placeholderTextColor={COLORS.textSubtle}
+                    />
+                    <Text style={styles.dimSuffix}>ft</Text>
+                  </View>
+                  {dimB && parseInt(dimB, 10) > 8 ? <Text style={styles.errorText}>Max breadth: 8 ft</Text> : null}
+                </View>
+                <View style={styles.dimItem}>
+                  <Text style={styles.dimLabel}>Height</Text>
+                  <View style={[styles.dimInputWrap, dimH && styles.filledBorderOrange]}>
+                    <TextInput
+                      testID="ptl-dim-height-input"
+                      style={styles.dimInputText}
+                      value={dimH}
+                      onChangeText={(t) => {
+                        const digits = t.replace(/\D/g, "");
+                        if (!digits) { setDimH(""); return; }
+                        if (parseInt(digits, 10) > 9) { setDimH(""); return; }
+                        setDimH(digits);
+                      }}
+                      keyboardType="number-pad"
+                      maxLength={2}
+                      placeholder="0"
+                      placeholderTextColor={COLORS.textSubtle}
+                    />
+                    <Text style={styles.dimSuffix}>ft</Text>
+                  </View>
+                  {dimH && parseInt(dimH, 10) > 9 ? <Text style={styles.errorText}>Max height: 9 ft</Text> : null}
+                </View>
+              </View>
+            </CollapsibleSection>
+
+            <CollapsibleSection
+              accentColor={COLORS.secondary}
+              accentBg="#FFF4EE"
+              icon="bus-outline"
+              title="Truck Preference"
+              summary={truckType}
+              testID="ptl-opt-truck"
+            >
+              <View style={styles.truckRow} testID="ptl-truck-row">
+                {TRUCK_TYPES.map((t) => {
+                  const on = truckType === t.name;
+                  return (
+                    <TouchableOpacity
+                      key={t.name}
+                      testID={`ptl-truck-${t.name}`}
+                      style={[styles.truckCard, on && styles.truckCardOn, on && styles.filledBorderOrange]}
+                      onPress={() => setTruckType(prev => prev === t.name ? "" : t.name)}
+                      activeOpacity={0.7}
+                    >
+                      <Image source={t.image} style={[styles.truckImg, on && styles.truckImgOn]} resizeMode="contain" />
+                      <Text style={[styles.truckLabel, on && styles.truckLabelOn]} numberOfLines={1} allowFontScaling={false}>{t.name}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </CollapsibleSection>
+
+            <CollapsibleSection
+              accentColor={COLORS.secondary}
+              accentBg="#FFF4EE"
+              icon="layers-outline"
+              title="Cargo Placement"
+              summary={placement}
+              testID="ptl-opt-placement"
+            >
+              <View style={styles.placementRow} testID="ptl-placement-segment">
+                {PLACEMENT_OPTIONS.map((p) => {
+                  const on = placement === p.key;
+                  return (
+                    <TouchableOpacity
+                      key={p.key}
+                      testID={`ptl-placement-${p.key.replace(" ", "-")}`}
+                      style={[
+                        styles.placementCardCompact,
+                        on && (p.key === "Stackable" ? styles.placementCardGreen : styles.placementCardRed),
+                      ]}
+                      onPress={() => setPlacement(prev => prev === p.key ? "" : p.key)}
+                      activeOpacity={0.7}
+                    >
+                      <Image source={p.image} style={styles.placementImgCompact} resizeMode="contain" />
+                      <Text
+                        style={[
+                          styles.placementLabelCompact,
+                          on && (p.key === "Stackable" ? styles.placementLabelGreen : styles.placementLabelRed),
+                        ]}
+                      >
+                        {p.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </CollapsibleSection>
+
+            <CollapsibleSection
+              accentColor={COLORS.secondary}
+              accentBg="#FFF4EE"
+              icon="image-outline"
+              title="Photos"
+              summary={images.length > 0 ? `${images.length} photo${images.length > 1 ? "s" : ""}` : ""}
+              testID="ptl-opt-photos"
+            >
+              <Text style={styles.label}>Attach up to 3 photos of the cargo (max 50 MB each)</Text>
+              {uploadProgress !== null && (
+                <View style={{ marginBottom: 10 }}>
+                  <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 4 }}>
+                    <Text style={{ fontSize: 12, color: COLORS.textMuted, fontFamily: "Inter_500Medium" }}>Uploading photos…</Text>
+                    <Text style={{ fontSize: 12, color: COLORS.primary, fontFamily: "Inter_700Bold" }}>{uploadProgress}%</Text>
+                  </View>
+                  <View style={{ height: 6, backgroundColor: COLORS.border, borderRadius: 3, overflow: "hidden" }}>
+                    <View style={{ height: 6, backgroundColor: COLORS.primary, borderRadius: 3, width: `${uploadProgress}%` as any }} />
+                  </View>
+                </View>
+              )}
+              <View style={styles.photoRow} testID="ptl-photos-row">
+                {[0, 1, 2].map((idx) => {
+                  const img = images[idx];
+                  if (img) {
+                    return (
+                      <View key={idx} style={styles.photoCell} testID={`ptl-photo-${idx}`}>
+                        <Image source={{ uri: img }} style={styles.photoImg} resizeMode="cover" />
+                        <TouchableOpacity testID={`ptl-photo-remove-${idx}`} onPress={() => removeImage(idx)} style={styles.photoRemoveBtn}>
+                          <Ionicons name="close" size={14} color={COLORS.surface} />
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  }
+                  return (
+                    <TouchableOpacity key={idx} testID={`ptl-photo-add-${idx}`} onPress={pickImage} style={[styles.photoCell, styles.photoEmpty]} activeOpacity={0.7}>
+                      <Ionicons name="add" size={28} color={COLORS.textMuted} />
+                      <Text style={styles.photoAddLabel}>Add</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </CollapsibleSection>
+
+            <View style={[styles.row, { marginTop: 16, gap: 10 }]}>
+              <TouchableOpacity style={[styles.outlineBtn, styles.flex1]} onPress={onClose} disabled={busy}>
+                <Text style={styles.outlineBtnText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                testID="ptl-submit-btn"
+                style={[styles.primaryBtn, styles.flex1, { marginTop: 0, backgroundColor: COLORS.secondary }, busy && { opacity: 0.6 }]}
+                onPress={submit}
+                disabled={busy}
+              >
+                {busy ? <ActivityIndicator color={COLORS.surface} /> : (
+                  <>
+                    <Text style={styles.primaryBtnText}>Save changes</Text>
+                    <Ionicons name="checkmark" size={18} color={COLORS.surface} />
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+            <View style={{ height: 20 }} />
+          </ScrollView>
+        </View>
+      </KeyboardAvoidingView>
+
+      <Modal visible={weightModalVisible} transparent animationType="fade" onRequestClose={() => setWeightModalVisible(false)}>
+        <TouchableOpacity style={wmStyles.backdrop} activeOpacity={1} onPress={() => setWeightModalVisible(false)}>
+          <TouchableOpacity style={wmStyles.sheet} activeOpacity={1}>
+            <Text style={wmStyles.title}>Enter Weight</Text>
+            <TextInput
+              style={wmStyles.input}
+              value={weightInput}
+              onChangeText={setWeightInput}
+              keyboardType="decimal-pad"
+              autoFocus
+              placeholder="e.g. 3.5"
+              placeholderTextColor={COLORS.textSubtle}
+            />
+            <View style={wmStyles.presets}>
+              {[1, 2, 3, 5, 8, 12, 18].map(n => (
+                <TouchableOpacity key={n} style={wmStyles.preset} onPress={() => setWeightInput(String(n))}>
+                  <Text style={wmStyles.presetText}>{n}T</Text>
                 </TouchableOpacity>
               ))}
-            </ScrollView>
-
-            <Text style={[styles.label, { marginTop: 18 }]}>Weight (kg)</Text>
-            <TextInput
-              testID="ptl-weight-input"
-              style={styles.input}
-              placeholder="e.g. 3500"
-              placeholderTextColor={COLORS.textSubtle}
-              keyboardType="number-pad"
-              value={weightKg}
-              onChangeText={(t) => setWeightKg(t.replace(/[^0-9]/g, "").slice(0, 5))}
-            />
-            <Text style={styles.hintMuted}>Max {TRUCK_CAPACITY_KG.toLocaleString()} kg per partial load</Text>
-
-            <TouchableOpacity
-              testID="ptl-submit-btn"
-              style={[styles.primaryBtn, busy && { opacity: 0.6 }]}
-              onPress={submit}
-              disabled={busy}
-            >
-              {busy ? <ActivityIndicator color={COLORS.surface} /> : (
-                <>
-                  <Text style={styles.primaryBtnText}>Save changes</Text>
-                  <Ionicons name="checkmark" size={18} color={COLORS.surface} />
-                </>
-              )}
+            </View>
+            <TouchableOpacity style={wmStyles.btn} onPress={() => {
+              const n = parseFloat(weightInput);
+              if (!isNaN(n) && n > 20) {
+                setWeightInput("");
+                Alert.alert("Weight limit exceeded", "A partial load can't exceed 20 tons. Use Post Space for a full truck.");
+                return;
+              }
+              if (!isNaN(n) && n > 0) setWeight(parseFloat(n.toFixed(1)));
+              setWeightModalVisible(false);
+            }}>
+              <Text style={wmStyles.btnText}>Set Weight</Text>
             </TouchableOpacity>
-          </SafeScrollView>
-        </View>
-      </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
     </Modal>
   );
 }
@@ -6449,13 +6919,13 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
               <TouchableOpacity
                 key={opt.key}
                 testID={`ptl-cargo-${opt.key}`}
-                style={[cargoStyles.tile, selected && cargoStyles.tileSelected]}
+                style={[cargoStyles.tile, selected && cargoStyles.tileSelectedOrange]}
                 onPress={() => selectCargoType(opt.key)}
                 activeOpacity={0.75}
               >
                 <Image source={opt.image} style={cargoStyles.tileImage} resizeMode="contain" />
-                <Text style={[cargoStyles.tileLabel, selected && cargoStyles.tileLabelSelected]} numberOfLines={1}>{opt.label}</Text>
-                {selected && <View style={cargoStyles.checkDot}><Ionicons name="checkmark" size={9} color="#fff" /></View>}
+                <Text style={[cargoStyles.tileLabel, selected && cargoStyles.tileLabelSelectedOrange]} numberOfLines={1}>{opt.label}</Text>
+                {selected && <View style={cargoStyles.checkDotOrange}><Ionicons name="checkmark" size={9} color="#fff" /></View>}
               </TouchableOpacity>
             );
           })}
@@ -7223,16 +7693,147 @@ function MyTruckSpacePostsList({ profile }: { profile: Profile }) {
   );
 }
 
-// ============== My Posts Screen (segmented: Truck Space | Adjustment) ==============
+// ============== My Posts Screen (single merged list, sorted by loading date) ==============
+type MyPostMergedItem =
+  | { kind: "truck"; key: string; date: number; load: Load }
+  | { kind: "ptl"; key: string; date: number; ptlLoad: PtlLoad };
+
 function MyPostsScreen({ profile }: { profile: Profile }) {
   // Same independent-toggle pattern as the Find page's Truck Space / Partial
   // Load chips: each starts unselected, tapping a chip selects only that
   // type, and tapping an already-selected chip deselects it again — when
-  // neither chip is actively selected, both lists show by default.
+  // neither chip is actively selected, both types show by default.
   const [showTruckSpace, setShowTruckSpace] = useState(false);
   const [showAdjustment, setShowAdjustment] = useState(false);
   const includeTruckSpace = showTruckSpace || !showAdjustment;
   const includeAdjustment = showAdjustment || !showTruckSpace;
+
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [truckLoads, setTruckLoads] = useState<Load[]>([]);
+  const [ptlLoads, setPtlLoads] = useState<PtlLoad[]>([]);
+  const [groupCache, setGroupCache] = useState<Record<string, PtlGroup>>({});
+  const [bidCounts, setBidCounts] = useState<Record<string, number>>({});
+
+  const [editLoad, setEditLoad] = useState<Load | null>(null);
+  const [editPtlLoad, setEditPtlLoad] = useState<PtlLoad | null>(null);
+  const [selectedGroup, setSelectedGroup] = useState<PtlGroup | null>(null);
+  const [showDetail, setShowDetail] = useState(false);
+  const [bidsForListing, setBidsForListing] = useState<{ id: string; label: string } | null>(null);
+
+  const fetchAll = useCallback(async () => {
+    try {
+      const [loadsRes, ptlRes, countsRes] = await Promise.all([
+        fetch(`${API}/loads`).then((r) => r.json()).catch(() => []),
+        fetch(`${API}/ptl/loads/my/${encodeURIComponent(profile.phone)}`).then((r) => r.json()).catch(() => []),
+        fetch(`${API}/bids/counts/${encodeURIComponent(profile.phone)}`).then((r) => r.json()).catch(() => ({})),
+      ]);
+      const myTruck: Load[] = (Array.isArray(loadsRes) ? loadsRes : []).filter((l: Load) => l.poster_phone === profile.phone);
+      let myPtl: PtlLoad[] = Array.isArray(ptlRes) ? ptlRes : [];
+
+      // Postings whose loading date has passed are no longer relevant — delete
+      // them outright (not just hide them client-side) so they don't linger
+      // in My Posts forever. Only auto-clean active postings (OPEN/MATCHED);
+      // CONFIRMED/CANCELLED loads are left alone since they're terminal states.
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const isExpired = (l: PtlLoad) => {
+        if (l.status !== "OPEN" && l.status !== "MATCHED") return false;
+        if (!l.loading_date) return false;
+        try { const d = new Date(l.loading_date); d.setHours(0, 0, 0, 0); return d < today; } catch { return false; }
+      };
+      const expired = myPtl.filter(isExpired);
+      if (expired.length > 0) {
+        await Promise.all(
+          expired.map((l) => fetch(`${API}/ptl/loads/${l.id}?phone=${encodeURIComponent(profile.phone)}`, { method: "DELETE" }).catch(() => {})),
+        );
+        const expiredIds = new Set(expired.map((l) => l.id));
+        myPtl = myPtl.filter((l) => !expiredIds.has(l.id));
+      }
+
+      setTruckLoads(myTruck);
+      setPtlLoads(myPtl);
+      setBidCounts(typeof countsRes === "object" && countsRes ? countsRes : {});
+
+      const gids = Array.from(new Set(myPtl.map((l) => l.group_id).filter(Boolean) as string[]));
+      const fetched: Record<string, PtlGroup> = {};
+      await Promise.all(
+        gids.map(async (gid) => {
+          try {
+            const gr = await fetch(`${API}/ptl/groups/${gid}?viewer_phone=${encodeURIComponent(profile.phone)}`);
+            if (gr.ok) fetched[gid] = await gr.json();
+          } catch {}
+        }),
+      );
+      setGroupCache(fetched);
+    } catch {
+      // ignore
+    } finally {
+      setLoading(false); setRefreshing(false);
+    }
+  }, [profile.phone]);
+
+  useEffect(() => { fetchAll(); }, [fetchAll]);
+
+  // Build a PtlGroup-shaped object for each of my loads so it can be
+  // rendered with the exact same card used in Marketplace → Find Partial Loads.
+  // Prefer the real fetched group (has all members/fill info); fall back to a
+  // single-member synthetic group when no group has formed yet.
+  const groupFor = (item: PtlLoad): PtlGroup => {
+    const real = item.group_id ? groupCache[item.group_id] : null;
+    if (real) return real;
+    return ptlLoadToGroup(item, profile.name, { phone: profile.phone, isMe: true });
+  };
+
+  const deleteTruckLoad = (load: Load) => {
+    Alert.alert("Delete Posting", "Are you sure you want to delete this posting? This cannot be undone.", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Delete", style: "destructive", onPress: async () => {
+        try {
+          await fetch(`${API}/loads/${load.id}`, { method: "DELETE" });
+          fetchAll();
+        } catch { Alert.alert("Error", "Failed to delete. Please try again."); }
+      }},
+    ]);
+  };
+
+  const deletePtlLoad = (item: PtlLoad) => {
+    Alert.alert(
+      "Delete Posting",
+      "Are you sure you want to delete this posting? This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              const r = await fetch(`${API}/ptl/loads/${item.id}?phone=${encodeURIComponent(profile.phone)}`, { method: "DELETE" });
+              if (!r.ok) {
+                const j = await r.json().catch(() => ({}));
+                return Alert.alert("Failed", j?.detail || "Could not delete.");
+              }
+              fetchAll();
+            } catch (e: any) {
+              Alert.alert("Network error", e?.message || "Try again");
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  // Entries without a valid loading date sort to the end rather than
+  // jumping to the front, so "closest loading first" stays meaningful.
+  const dateVal = (s?: string | null) => {
+    if (!s) return Infinity;
+    const t = new Date(s).getTime();
+    return isNaN(t) ? Infinity : t;
+  };
+
+  const merged: MyPostMergedItem[] = [
+    ...(includeTruckSpace ? truckLoads.map((l) => ({ kind: "truck" as const, key: `t-${l.id}`, date: dateVal(l.loading_date), load: l })) : []),
+    ...(includeAdjustment ? ptlLoads.map((l) => ({ kind: "ptl" as const, key: `p-${l.id}`, date: dateVal(l.loading_date), ptlLoad: l })) : []),
+  ].sort((a, b) => a.date - b.date);
 
   return (
     <View style={styles.fill}>
@@ -7260,20 +7861,130 @@ function MyPostsScreen({ profile }: { profile: Profile }) {
           <Text style={[styles.modeToggleText, showAdjustment && styles.modeToggleTextActive]}>Partial Load</Text>
         </TouchableOpacity>
       </View>
-      <View style={styles.flex1}>
-        {includeTruckSpace && (
-          <View style={styles.flex1}>
-            <MyTruckSpacePostsList profile={profile} />
+
+      <FlatList
+        testID="my-posts-list"
+        data={loading ? [] : merged}
+        keyExtractor={(it) => it.key}
+        contentContainerStyle={{ padding: 16, paddingBottom: 80 }}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchAll(); }} />}
+        ListHeaderComponent={loading ? <ActivityIndicator color={COLORS.primary} style={{ marginTop: 24 }} /> : null}
+        ListEmptyComponent={!loading ? (
+          <View style={styles.emptyWrap} testID="my-posts-empty">
+            <Ionicons name="albums-outline" size={42} color={COLORS.textSubtle} />
+            <Text style={styles.emptyTitle}>No posts yet</Text>
+            <Text style={styles.emptySub}>Tap Post to add your first truck space or partial load.</Text>
           </View>
-        )}
-        {includeAdjustment && (
-          <View style={styles.flex1}>
-            <SafeScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
-              <MyPtlLoadsList profile={profile} />
-            </SafeScrollView>
-          </View>
-        )}
-      </View>
+        ) : null}
+        renderItem={({ item }) => {
+          if (item.kind === "truck") {
+            const load = item.load;
+            const cnt = bidCounts[load.id] || 0;
+            const label = `${load.origin_locality || load.origin_city || "Origin"} → ${load.destination_locality || load.destination_city || "Destination"}`;
+            return (
+              <View>
+                <LoadCard load={load} isMine={true} />
+                <TouchableOpacity
+                  testID={`bids-received-${load.id}`}
+                  style={profileStyles.bidsBtn}
+                  activeOpacity={0.85}
+                  onPress={() => setBidsForListing({ id: load.id, label })}
+                >
+                  <Ionicons name="cash-outline" size={15} color={COLORS.surface} />
+                  <Text style={profileStyles.bidsBtnText}>Bids Received</Text>
+                  <View style={profileStyles.bidsCountPill}>
+                    <Text style={profileStyles.bidsCountText}>{cnt}</Text>
+                  </View>
+                </TouchableOpacity>
+                <View style={profileStyles.actionRow}>
+                  <TouchableOpacity style={profileStyles.editBtn} onPress={() => setEditLoad(load)} testID={`edit-load-${load.id}`}>
+                    <Ionicons name="create-outline" size={15} color={COLORS.primary} />
+                    <Text style={profileStyles.editBtnText}>Edit</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={profileStyles.deleteBtn} onPress={() => deleteTruckLoad(load)} testID={`delete-load-${load.id}`}>
+                    <Ionicons name="trash-outline" size={15} color={COLORS.danger} />
+                    <Text style={profileStyles.deleteBtnText}>Delete</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            );
+          }
+          const ptlItem = item.ptlLoad;
+          const g = groupFor(ptlItem);
+          const editable = ptlItem.status === "OPEN" || ptlItem.status === "MATCHED";
+          const cnt = bidCounts[ptlItem.id] || 0;
+          const label = `${ptlItem.origin_locality || ptlItem.origin_city || "Origin"} → ${ptlItem.destination_locality || ptlItem.destination_city || "Destination"}`;
+          return (
+            <View>
+              <PtlGroupCard
+                group={g}
+                profile={profile}
+                onPress={() => { setSelectedGroup(g); setShowDetail(true); }}
+              />
+              <TouchableOpacity
+                testID={`bids-received-${ptlItem.id}`}
+                style={profileStyles.bidsBtn}
+                activeOpacity={0.85}
+                onPress={() => setBidsForListing({ id: ptlItem.id, label })}
+              >
+                <Ionicons name="cash-outline" size={15} color={COLORS.surface} />
+                <Text style={profileStyles.bidsBtnText}>Bids Received</Text>
+                <View style={profileStyles.bidsCountPill}>
+                  <Text style={profileStyles.bidsCountText}>{cnt}</Text>
+                </View>
+              </TouchableOpacity>
+              {editable && (
+                <View style={profileStyles.actionRow}>
+                  <TouchableOpacity style={profileStyles.editBtn} onPress={() => setEditPtlLoad(ptlItem)} testID={`edit-ptl-${ptlItem.id}`}>
+                    <Ionicons name="create-outline" size={15} color={COLORS.primary} />
+                    <Text style={profileStyles.editBtnText}>Edit</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={profileStyles.deleteBtn} onPress={() => deletePtlLoad(ptlItem)} testID={`delete-ptl-${ptlItem.id}`}>
+                    <Ionicons name="trash-outline" size={15} color={COLORS.danger} />
+                    <Text style={profileStyles.deleteBtnText}>Delete</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+            </View>
+          );
+        }}
+      />
+
+      {editLoad && (
+        <EditLoadModal
+          load={editLoad}
+          visible={!!editLoad}
+          onClose={() => setEditLoad(null)}
+          onSaved={() => { setEditLoad(null); fetchAll(); }}
+        />
+      )}
+      {editPtlLoad && (
+        <PostPtlModal
+          visible={!!editPtlLoad}
+          profile={profile}
+          editLoad={editPtlLoad}
+          onClose={() => setEditPtlLoad(null)}
+          onPosted={() => { setEditPtlLoad(null); fetchAll(); }}
+        />
+      )}
+      {selectedGroup && (
+        <ListingDetailModal
+          visible={showDetail}
+          ptlGroup={selectedGroup}
+          viewerPhone={profile.phone}
+          viewerName={profile.name}
+          onClose={() => { setShowDetail(false); setSelectedGroup(null); }}
+        />
+      )}
+      {bidsForListing && (
+        <BidsReceivedModal
+          visible={!!bidsForListing}
+          listingId={bidsForListing.id}
+          viewerPhone={profile.phone}
+          postRouteLabel={bidsForListing.label}
+          onClose={() => setBidsForListing(null)}
+        />
+      )}
     </View>
   );
 }
@@ -7783,7 +8494,7 @@ ptlModalSheet: { backgroundColor: COLORS.bg, borderTopLeftRadius: 20, borderTopR
 ptlModalHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", padding: 16, borderBottomWidth: 1, borderBottomColor: COLORS.border },
 ptlModalTitle: { fontSize: 18, fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.text },
 ptlCargoChip: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 100, backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border },
-ptlCargoChipActive: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
+ptlCargoChipActive: { backgroundColor: COLORS.secondary, borderColor: COLORS.secondary },
 ptlCargoChipText: { fontSize: 13, fontFamily: "Inter_600SemiBold", fontWeight: "600", color: COLORS.text },
 ptlCargoChipTextActive: { color: COLORS.surface },
 ptlHazmatBanner: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "#FEE2E2", borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, marginTop: 10 },
