@@ -420,6 +420,24 @@ export default function Index() {
     })();
   }, []);
 
+  const handleInvite = async () => {
+    const msg = `🚛 *Join me on Truck Traffic!*\n\nThe app for smarter truck matching across India:\n📦 *Partial Loads* — got a part-load? Combine it with another partial load to fill a truck together.\n🚚 *Truck Space* — got space left? Find partial loads to fill it up.\n\n📲 Download: ${PLAYSTORE_SHORT_URL}\n🌐 Website: https://www.trucktraffic.in\n\nLet\'s connect on the platform!`;
+    try {
+      await Linking.openURL(`https://wa.me/?text=${encodeURIComponent(msg)}`);
+    } catch {
+      Alert.alert("Error", "WhatsApp could not be opened.");
+    }
+  };
+
+  const updateProfile = (updates: Partial<Profile>) => {
+    setProfile((prev) => {
+      if (!prev) return prev;
+      const next = { ...prev, ...updates };
+      AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+  };
+
   const saveProfile = async (p: Profile) => {
     // Fetch latest verified status from backend before saving
     let enriched = { ...p };
@@ -538,6 +556,10 @@ export default function Index() {
             </View>
           )}
         </View>
+        <TouchableOpacity testID="app-header-invite-btn" onPress={handleInvite} style={[styles.iconBtn, { backgroundColor: "#E8F8EE", borderRadius: 8, paddingHorizontal: 8, flexDirection: "row", alignItems: "center", gap: 4, marginRight: 8 }]}>
+          <Ionicons name="logo-whatsapp" size={16} color="#25D366" />
+          <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", fontWeight: "700", color: "#25D366" }}>Invite</Text>
+        </TouchableOpacity>
         <TouchableOpacity testID="open-profile-btn" onPress={() => setShowProfile(true)} style={styles.iconBtn}>
           <Ionicons name="person-circle-outline" size={28} color={COLORS.primary} />
         </TouchableOpacity>
@@ -550,6 +572,7 @@ export default function Index() {
             profile={profile}
             onClose={() => setShowProfile(false)}
             onEdit={() => { setShowProfile(false); setShowEditProfile(true); }}
+            onProfileUpdate={updateProfile}
           />
         )}
         {!showProfile && postFlow === "selection" && (
@@ -1297,14 +1320,16 @@ if (!destValid)
             <SectionTitle icon="navigate-outline" title="Route" />
             <View style={styles.routeInputsRow}>
               <SmartRouteInput label="Origin" testIDPrefix="edit-origin" text={originText} pin={originPin} info={originInfo}
+                accentColor={COLORS.primary}
                 onChange={(t, p, i) => { setOriginText(t); setOriginPin(p); setOriginInfo(i); }} />
               <View style={styles.routeArrowMid}><Ionicons name="arrow-forward" size={20} color={COLORS.secondary} /></View>
               <SmartRouteInput label="Destination" testIDPrefix="edit-dest" text={destText} pin={destPin} info={destInfo}
+                accentColor={COLORS.primary}
                 onChange={(t, p, i) => { setDestText(t); setDestPin(p); setDestInfo(i); }} />
             </View>
 
             <SectionTitle icon="calendar-outline" title="Loading Date" />
-            <View style={[styles.stepperRow, styles.filledBorder]}>
+            <View style={[styles.stepperRow, styles.filledBorderBlue]}>
               <TouchableOpacity
                 testID="edit-loading-date-minus"
                 style={styles.stepperBtn}
@@ -1359,7 +1384,7 @@ if (!destValid)
             )}
 
             <SectionTitle icon="scale-outline" title="Available Load Capacity" />
-            <View style={[styles.stepperRow, weight > 0 && styles.filledBorder]}>
+            <View style={[styles.stepperRow, weight > 0 && styles.filledBorderBlue]}>
               <TouchableOpacity style={styles.stepperBtn} onPress={() => setWeight(w => Math.max(0.5, parseFloat((w - 0.5).toFixed(1))))}>
                 <Text style={styles.stepperBtnText}>-</Text>
               </TouchableOpacity>
@@ -1377,7 +1402,7 @@ if (!destValid)
               {TRUCK_TYPES.map((t) => {
                 const on = truckType === t.name;
                 return (
-                  <TouchableOpacity key={t.name} onPress={() => setTruckType(t.name)} style={[styles.truckCard, on && styles.truckCardOn, on && styles.filledBorder]} activeOpacity={0.7}>
+                  <TouchableOpacity key={t.name} onPress={() => setTruckType(t.name)} style={[styles.truckCard, on && styles.truckCardOn, on && styles.filledBorderBlue]} activeOpacity={0.7}>
                     <Image source={t.image} style={styles.truckImg} resizeMode="contain" />
                     <Text style={[styles.truckLabel, on && styles.truckLabelOn]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>{t.name}</Text>
                   </TouchableOpacity>
@@ -1388,6 +1413,7 @@ if (!destValid)
             <Text style={styles.optionalHeading}>Add more details (optional)</Text>
 
             <CollapsibleSection
+              accentColor={COLORS.primary}
               icon="resize-outline"
               title="Available Space"
               summary={(dimL || dimB || dimH) ? `${dimL || "-"} x ${dimB || "-"} x ${dimH || "-"} ft` : ""}
@@ -1396,7 +1422,7 @@ if (!destValid)
               <View style={styles.dimRow}>
                 <View style={styles.dimItem}>
                   <Text style={styles.dimLabel}>Length</Text>
-                  <View style={[styles.dimInputWrap, dimL && styles.filledBorder]}>
+                  <View style={[styles.dimInputWrap, dimL && styles.filledBorderBlue]}>
                     <TextInput
                       testID="edit-dim-length-input"
                       style={styles.dimInputText}
@@ -1418,7 +1444,7 @@ if (!destValid)
                 </View>
                 <View style={styles.dimItem}>
                   <Text style={styles.dimLabel}>Breadth</Text>
-                  <View style={[styles.dimInputWrap, dimB && styles.filledBorder]}>
+                  <View style={[styles.dimInputWrap, dimB && styles.filledBorderBlue]}>
                     <TextInput
                       testID="edit-dim-breadth-input"
                       style={styles.dimInputText}
@@ -1440,7 +1466,7 @@ if (!destValid)
                 </View>
                 <View style={styles.dimItem}>
                   <Text style={styles.dimLabel}>Height</Text>
-                  <View style={[styles.dimInputWrap, dimH && styles.filledBorder]}>
+                  <View style={[styles.dimInputWrap, dimH && styles.filledBorderBlue]}>
                     <TextInput
                       testID="edit-dim-height-input"
                       style={styles.dimInputText}
@@ -1464,12 +1490,13 @@ if (!destValid)
             </CollapsibleSection>
 
             <CollapsibleSection
+              accentColor={COLORS.primary}
               icon="pricetag-outline"
               title="Pricing"
               summary={pricePerTon ? `₹${pricePerTon} / ton` : ""}
               testID="edit-opt-pricing"
             >
-              <View style={[styles.priceRow, pricePerTon && styles.filledBorder]}>
+              <View style={[styles.priceRow, pricePerTon && styles.filledBorderBlue]}>
                 <Text style={styles.priceSymbol}>₹</Text>
                 <TextInput
                   testID="edit-price-per-ton-input"
@@ -1485,6 +1512,7 @@ if (!destValid)
             </CollapsibleSection>
 
             <CollapsibleSection
+              accentColor={COLORS.primary}
               icon="layers-outline"
               title="Cargo Placement"
               summary={placement}
@@ -1509,6 +1537,7 @@ if (!destValid)
             </CollapsibleSection>
 
             <CollapsibleSection
+              accentColor={COLORS.primary}
               icon="image-outline"
               title="Photos"
               summary={imagesLoaded ? (images.length > 0 ? `${images.length} photo${images.length > 1 ? "s" : ""}` : "") : "Loading…"}
@@ -1588,10 +1617,11 @@ if (!destValid)
 
 // ============== VerificationDocsScreen ==============
 // ============== VerificationDocsScreen ==============
-function VerificationDocsScreen({ phone, alreadySubmitted, onClose }: {
+function VerificationDocsScreen({ phone, alreadySubmitted, onClose, onSubmitted }: {
   phone: string;
   alreadySubmitted: boolean;
   onClose: () => void;
+  onSubmitted?: () => void;
 }) {
   const [pan, setPan] = useState("");
   const [aadhar, setAadhar] = useState("");
@@ -1673,6 +1703,7 @@ function VerificationDocsScreen({ phone, alreadySubmitted, onClose }: {
       const data = await res.json();
       if (!res.ok) return Alert.alert("Error", data.detail || "Submission failed");
       setSubmitted(true);
+      onSubmitted?.();
       Alert.alert("Submitted ✅", "Your documents have been submitted. You will be verified within 24–48 hours.");
     } catch {
       Alert.alert("Error", "Could not submit. Please try again.");
@@ -1804,7 +1835,7 @@ function VerificationDocsScreen({ phone, alreadySubmitted, onClose }: {
 }
 
 // ============== Profile Screen ==============
-function ProfileScreen({ profile, onClose, onEdit }: { profile: Profile; onClose: () => void; onEdit: () => void }) {
+function ProfileScreen({ profile, onClose, onEdit, onProfileUpdate }: { profile: Profile; onClose: () => void; onEdit: () => void; onProfileUpdate?: (updates: Partial<Profile>) => void }) {
   const [myLoads, setMyLoads] = useState<Load[]>([]);
   const [myPtlLoads, setMyPtlLoads] = useState<PtlLoad[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1813,7 +1844,7 @@ function ProfileScreen({ profile, onClose, onEdit }: { profile: Profile; onClose
   const [showVerifyDocs, setShowVerifyDocs] = useState(false);
 
 const handleInvite = async () => {
-    const msg = `🚛 *Join me on Truck Traffic!*\n\nFind truck space & post loads instantly across India.\n\n📲 Download: https://play.google.com/store/apps/details?id=com.ptlmarket.trucktraffic\n🌐 Website: https://www.trucktraffic.in\n\nLet\'s connect on the platform!`;
+    const msg = `🚛 *Join me on Truck Traffic!*\n\nThe app for smarter truck matching across India:\n📦 *Partial Loads* — got a part-load? Combine it with another partial load to fill a truck together.\n🚚 *Truck Space* — got space left? Find partial loads to fill it up.\n\n📲 Download: ${PLAYSTORE_SHORT_URL}\n🌐 Website: https://www.trucktraffic.in\n\nLet\'s connect on the platform!`;
     try {
       await Linking.openURL(`https://wa.me/?text=${encodeURIComponent(msg)}`);
     } catch {
@@ -1927,6 +1958,7 @@ const handleInvite = async () => {
           phone={profile.phone}
           alreadySubmitted={!!profile.verification_submitted}
           onClose={() => setShowVerifyDocs(false)}
+          onSubmitted={() => onProfileUpdate?.({ verification_submitted: true })}
         />
       )}
       {editLoad && (
@@ -2173,6 +2205,7 @@ return (
         <SectionTitle icon="navigate-outline" title="Route" />
         <View style={styles.routeInputsRow}>
           <SmartRouteInput
+            accentColor={COLORS.primary}
             label="Origin"
             testIDPrefix="origin"
             text={originText}
@@ -2188,6 +2221,7 @@ return (
             <Ionicons name="arrow-forward" size={20} color={COLORS.secondary} />
           </View>
           <SmartRouteInput
+            accentColor={COLORS.primary}
             label="Destination"
             testIDPrefix="dest"
             text={destText}
@@ -2202,7 +2236,7 @@ return (
         </View>
 
         <SectionTitle icon="calendar-outline" title="Loading Date" />
-        <View style={[styles.stepperRow, styles.filledBorder]}>
+        <View style={[styles.stepperRow, styles.filledBorderBlue]}>
           <TouchableOpacity
             testID="loading-date-minus"
             style={styles.stepperBtn}
@@ -2257,7 +2291,7 @@ return (
         )}
 
         <SectionTitle icon="scale-outline" title="Available Load Capacity" />
-        <View style={[styles.stepperRow, weight > 0 && styles.filledBorder]}>
+        <View style={[styles.stepperRow, weight > 0 && styles.filledBorderBlue]}>
           <TouchableOpacity
             style={styles.stepperBtn}
             onPress={() => setWeight(w => Math.max(0.5, parseFloat((w - 0.5).toFixed(1))))}
@@ -2322,7 +2356,7 @@ return (
           {TRUCK_TYPES.map((t) => {
             const on = truckType === t.name;
             return (
-              <TouchableOpacity key={t.name} testID={`truck-type-${t.name.replace(/\s+/g, "-")}`} onPress={() => setTruckType(t.name)} style={[styles.truckCard, on && styles.truckCardOn, on && styles.filledBorder]} activeOpacity={0.7}>
+              <TouchableOpacity key={t.name} testID={`truck-type-${t.name.replace(/\s+/g, "-")}`} onPress={() => setTruckType(t.name)} style={[styles.truckCard, on && styles.truckCardOn, on && styles.filledBorderBlue]} activeOpacity={0.7}>
                 <Image source={t.image} style={[styles.truckImg, on && styles.truckImgOn]} resizeMode="contain" />
                 <Text style={[styles.truckLabel, on && styles.truckLabelOn]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} allowFontScaling={false}>{t.name}</Text>
               </TouchableOpacity>
@@ -2334,6 +2368,7 @@ return (
         <Text style={styles.optionalHeading}>Add more details (optional)</Text>
 
         <CollapsibleSection
+          accentColor={COLORS.primary}
           icon="resize-outline"
           title="Available Space"
           summary={(dimL || dimB || dimH) ? `${dimL || "-"} x ${dimB || "-"} x ${dimH || "-"} ft` : ""}
@@ -2342,7 +2377,7 @@ return (
           <View style={styles.dimRow} testID="dimension-row">
             <View style={styles.dimItem}>
               <Text style={styles.dimLabel}>Length</Text>
-              <View style={[styles.dimInputWrap, dimL && styles.filledBorder]}>
+              <View style={[styles.dimInputWrap, dimL && styles.filledBorderBlue]}>
                 <TextInput
                   testID="dim-length-input"
                   style={styles.dimInputText}
@@ -2364,7 +2399,7 @@ return (
             </View>
             <View style={styles.dimItem}>
               <Text style={styles.dimLabel}>Breadth</Text>
-              <View style={[styles.dimInputWrap, dimB && styles.filledBorder]}>
+              <View style={[styles.dimInputWrap, dimB && styles.filledBorderBlue]}>
                 <TextInput
                   testID="dim-breadth-input"
                   style={styles.dimInputText}
@@ -2386,7 +2421,7 @@ return (
             </View>
             <View style={styles.dimItem}>
               <Text style={styles.dimLabel}>Height</Text>
-              <View style={[styles.dimInputWrap, dimH && styles.filledBorder]}>
+              <View style={[styles.dimInputWrap, dimH && styles.filledBorderBlue]}>
                 <TextInput
                   testID="dim-height-input"
                   style={styles.dimInputText}
@@ -2410,12 +2445,13 @@ return (
         </CollapsibleSection>
 
         <CollapsibleSection
+          accentColor={COLORS.primary}
           icon="pricetag-outline"
           title="Pricing"
           summary={pricePerTon ? `₹${pricePerTon} / ton` : ""}
           testID="opt-pricing"
         >
-          <View style={[styles.priceRow, pricePerTon && styles.filledBorder]}>
+          <View style={[styles.priceRow, pricePerTon && styles.filledBorderBlue]}>
             <Text style={styles.priceSymbol}>₹</Text>
             <TextInput
               testID="price-per-ton-input"
@@ -2443,6 +2479,7 @@ return (
         </CollapsibleSection>
 
         <CollapsibleSection
+          accentColor={COLORS.primary}
           icon="cube-outline"
           title="Cargo in Truck"
           summary={cargoTypes.length > 0 ? cargoTypes.map(c => c.startsWith("Others:") ? c.slice(8).trim() : c).join(", ") : ""}
@@ -2507,6 +2544,7 @@ return (
         </CollapsibleSection>
 
         <CollapsibleSection
+          accentColor={COLORS.primary}
           icon="layers-outline"
           title="Cargo Placement"
           summary={placement}
@@ -2542,6 +2580,7 @@ return (
         </CollapsibleSection>
 
         <CollapsibleSection
+          accentColor={COLORS.primary}
           icon="image-outline"
           title="Photos"
           summary={images.length > 0 ? `${images.length} photo${images.length > 1 ? "s" : ""}` : ""}
@@ -2604,21 +2643,21 @@ return (
 }
 
 // ============== CollapsibleSection ==============
-function CollapsibleSection({ icon, title, summary, children, testID }: { icon: any; title: string; summary?: string; children: React.ReactNode; testID?: string }) {
+function CollapsibleSection({ icon, title, summary, children, testID, accentColor = COLORS.success, accentBg = "#F1F8F1" }: { icon: any; title: string; summary?: string; children: React.ReactNode; testID?: string; accentColor?: string; accentBg?: string }) {
   const [open, setOpen] = useState(false);
   const filled = !!(summary && summary.trim().length > 0);
   return (
     <View style={styles.collapseWrap} testID={testID}>
       <TouchableOpacity
         testID={testID ? `${testID}-toggle` : undefined}
-        style={[styles.collapseHeader, filled && styles.collapseHeaderFilled, open && styles.collapseHeaderOpen]}
+        style={[styles.collapseHeader, filled && { borderStyle: "solid", borderColor: accentColor, backgroundColor: accentBg }, open && styles.collapseHeaderOpen]}
         onPress={() => setOpen(o => !o)}
         activeOpacity={0.7}
       >
-        <Ionicons name={icon} size={16} color={filled ? COLORS.success : COLORS.primary} />
-        <Text style={[styles.collapseTitle, filled && { color: COLORS.success }]}>{title}</Text>
+        <Ionicons name={icon} size={16} color={filled ? accentColor : COLORS.primary} />
+        <Text style={[styles.collapseTitle, filled && { color: accentColor }]}>{title}</Text>
         {filled ? (
-          <Text style={styles.collapseSummary} numberOfLines={1}>{summary}</Text>
+          <Text style={[styles.collapseSummary, { color: accentColor }]} numberOfLines={1}>{summary}</Text>
         ) : (
           <Text style={styles.collapseAdd}>Tap to add</Text>
         )}
@@ -3214,9 +3253,9 @@ const srm = StyleSheet.create({
 });
 
 // ============== SmartRouteInput (Post Load - tap-to-open modal) ==============
-function SmartRouteInput({ label, testIDPrefix, text, pin, info, onChange }: {
+function SmartRouteInput({ label, testIDPrefix, text, pin, info, onChange, accentColor = COLORS.success }: {
   label: string; testIDPrefix: string; text: string; pin: string; info: RouteInfo;
-  onChange: (text: string, pin: string, info: RouteInfo) => void;
+  onChange: (text: string, pin: string, info: RouteInfo) => void; accentColor?: string;
 }) {
   const [modalOpen, setModalOpen] = useState(false);
 
@@ -3234,7 +3273,7 @@ function SmartRouteInput({ label, testIDPrefix, text, pin, info, onChange }: {
       <Text style={sriStyles.label}>{label}</Text>
       <TouchableOpacity
         testID={`${testIDPrefix}-tap-card`}
-        style={[sriStyles.card, hasValue && sriStyles.cardFilled]}
+        style={[sriStyles.card, hasValue && { borderColor: accentColor, borderWidth: 1.5 }]}
         onPress={() => setModalOpen(true)}
         activeOpacity={0.75}
       >
@@ -4309,6 +4348,7 @@ function BidFormModal({
           <ScrollView contentContainerStyle={{ paddingBottom: 20 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
             <View style={styles.routeInputsRow}>
               <SmartRouteInput
+                accentColor={COLORS.primary}
                 label="Your Origin"
                 testIDPrefix="bid-origin"
                 text={originText}
@@ -4320,6 +4360,7 @@ function BidFormModal({
                 <Ionicons name="arrow-forward" size={20} color={COLORS.secondary} />
               </View>
               <SmartRouteInput
+                accentColor={COLORS.primary}
                 label="Your Destination"
                 testIDPrefix="bid-dest"
                 text={destText}
@@ -4985,12 +5026,12 @@ function FindPtlModal({ visible, initial, onClose, onApply }: {
             <Text style={[styles.modalSubtitle, { marginBottom: 16 }]}>Find groups that match your route and have space for your cargo.</Text>
             <SectionTitle icon="navigate-outline" title="Route" />
             <View style={styles.routeInputsRow}>
-              <SmartRouteInput label="Origin" testIDPrefix="ptl-filter-origin" text={originText} pin={originPin} info={originInfo} onChange={(t, p, i) => { setOriginText(t); setOriginPin(p); setOriginInfo(i); }} />
+              <SmartRouteInput label="Origin" testIDPrefix="ptl-filter-origin" text={originText} pin={originPin} info={originInfo} onChange={(t, p, i) => { setOriginText(t); setOriginPin(p); setOriginInfo(i); }} accentColor={COLORS.secondary} />
               <View style={styles.routeArrowMid}><Ionicons name="arrow-forward" size={20} color={COLORS.secondary} /></View>
-              <SmartRouteInput label="Destination" testIDPrefix="ptl-filter-dest" text={destText} pin={destPin} info={destInfo} onChange={(t, p, i) => { setDestText(t); setDestPin(p); setDestInfo(i); }} />
+              <SmartRouteInput label="Destination" testIDPrefix="ptl-filter-dest" text={destText} pin={destPin} info={destInfo} onChange={(t, p, i) => { setDestText(t); setDestPin(p); setDestInfo(i); }} accentColor={COLORS.secondary} />
             </View>
             <Field label="My Cargo Weight (kg)">
-              <TextInput style={[styles.input, weightKg && styles.filledBorder]} placeholder="e.g., 3500" placeholderTextColor={COLORS.textSubtle} value={weightKg} onChangeText={(t) => setWeightKg(t.replace(/[^0-9.]/g, ""))} keyboardType="decimal-pad" />
+              <TextInput style={[styles.input, weightKg && styles.filledBorderOrange]} placeholder="e.g., 3500" placeholderTextColor={COLORS.textSubtle} value={weightKg} onChangeText={(t) => setWeightKg(t.replace(/[^0-9.]/g, ""))} keyboardType="decimal-pad" />
             </Field>
             <View style={styles.row}>
               <TouchableOpacity style={[styles.outlineBtn, styles.flex1]} onPress={onClose}><Text style={styles.outlineBtnText}>Cancel</Text></TouchableOpacity>
@@ -5514,6 +5555,7 @@ if (!dc.found) {
             <SectionTitle icon="navigate-outline" title="Route" />
             <View style={styles.routeInputsRow}>
               <SmartRouteInput
+                accentColor={COLORS.primary}
                 label="My Origin"
                 testIDPrefix="fs-origin"
                 text={originText}
@@ -5525,6 +5567,7 @@ if (!dc.found) {
                 <Ionicons name="arrow-forward" size={20} color={COLORS.secondary} />
               </View>
               <SmartRouteInput
+                accentColor={COLORS.primary}
                 label="My Destination"
                 testIDPrefix="fs-dest"
                 text={destText}
@@ -5920,6 +5963,7 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
           </View>
           <SafeScrollView contentContainerStyle={{ padding: 16, paddingBottom: 32 }} keyboardShouldPersistTaps="handled">
             <SmartRouteInput
+              accentColor={COLORS.secondary}
               label="Origin"
               testIDPrefix="ptl-origin"
               text={originText}
@@ -5929,6 +5973,7 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
             />
             <View style={{ height: 12 }} />
             <SmartRouteInput
+              accentColor={COLORS.secondary}
               label="Destination"
               testIDPrefix="ptl-dest"
               text={destText}
@@ -6253,6 +6298,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
         <SectionTitle icon="navigate-outline" title="Route" />
         <View style={styles.routeInputsRow}>
           <SmartRouteInput
+            accentColor={COLORS.secondary}
             label="Origin"
             testIDPrefix="ptl-post-origin"
             text={originText}
@@ -6264,6 +6310,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
             <Ionicons name="arrow-forward" size={20} color={COLORS.secondary} />
           </View>
           <SmartRouteInput
+            accentColor={COLORS.secondary}
             label="Destination"
             testIDPrefix="ptl-post-dest"
             text={destText}
@@ -6275,7 +6322,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
 
         {/* 2. Loading Date — same stepper as Post Space */}
         <SectionTitle icon="calendar-outline" title="Loading Date" />
-        <View style={[styles.stepperRow, styles.filledBorder]}>
+        <View style={[styles.stepperRow, styles.filledBorderOrange]}>
           <TouchableOpacity
             testID="ptl-date-minus"
             style={styles.stepperBtn}
@@ -6331,7 +6378,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
 
         {/* 3. Weight in Tons — same stepper + modal as Post Space */}
         <SectionTitle icon="scale-outline" title="Weight" />
-        <View style={[styles.stepperRow, weight > 0 && styles.filledBorder]}>
+        <View style={[styles.stepperRow, weight > 0 && styles.filledBorderOrange]}>
           <TouchableOpacity
             testID="ptl-weight-minus"
             style={styles.stepperBtn}
@@ -6433,6 +6480,8 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
         <Text style={styles.optionalHeading}>Add more details (optional)</Text>
 
         <CollapsibleSection
+          accentColor={COLORS.secondary}
+          accentBg="#FFF4EE"
           icon="resize-outline"
           title="Available Space"
           summary={(dimL || dimB || dimH) ? `${dimL || "-"} x ${dimB || "-"} x ${dimH || "-"} ft` : ""}
@@ -6441,7 +6490,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
           <View style={styles.dimRow} testID="ptl-dimension-row">
             <View style={styles.dimItem}>
               <Text style={styles.dimLabel}>Length</Text>
-              <View style={[styles.dimInputWrap, dimL && styles.filledBorder]}>
+              <View style={[styles.dimInputWrap, dimL && styles.filledBorderOrange]}>
                 <TextInput
                   testID="ptl-dim-length-input"
                   style={styles.dimInputText}
@@ -6463,7 +6512,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
             </View>
             <View style={styles.dimItem}>
               <Text style={styles.dimLabel}>Breadth</Text>
-              <View style={[styles.dimInputWrap, dimB && styles.filledBorder]}>
+              <View style={[styles.dimInputWrap, dimB && styles.filledBorderOrange]}>
                 <TextInput
                   testID="ptl-dim-breadth-input"
                   style={styles.dimInputText}
@@ -6485,7 +6534,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
             </View>
             <View style={styles.dimItem}>
               <Text style={styles.dimLabel}>Height</Text>
-              <View style={[styles.dimInputWrap, dimH && styles.filledBorder]}>
+              <View style={[styles.dimInputWrap, dimH && styles.filledBorderOrange]}>
                 <TextInput
                   testID="ptl-dim-height-input"
                   style={styles.dimInputText}
@@ -6509,6 +6558,8 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
         </CollapsibleSection>
 
         <CollapsibleSection
+          accentColor={COLORS.secondary}
+          accentBg="#FFF4EE"
           icon="bus-outline"
           title="Truck Preference"
           summary={truckType}
@@ -6521,7 +6572,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
                 <TouchableOpacity
                   key={t.name}
                   testID={`ptl-truck-${t.name}`}
-                  style={[styles.truckCard, on && styles.truckCardOn, on && styles.filledBorder]}
+                  style={[styles.truckCard, on && styles.truckCardOn, on && styles.filledBorderOrange]}
                   onPress={() => setTruckType(prev => prev === t.name ? "" : t.name)}
                   activeOpacity={0.7}
                 >
@@ -6534,6 +6585,8 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
         </CollapsibleSection>
 
         <CollapsibleSection
+          accentColor={COLORS.secondary}
+          accentBg="#FFF4EE"
           icon="layers-outline"
           title="Cargo Placement"
           summary={placement}
@@ -6569,6 +6622,8 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
         </CollapsibleSection>
 
         <CollapsibleSection
+          accentColor={COLORS.secondary}
+          accentBg="#FFF4EE"
           icon="image-outline"
           title="Photos"
           summary={images.length > 0 ? `${images.length} photo${images.length > 1 ? "s" : ""}` : ""}
@@ -7170,41 +7225,55 @@ function MyTruckSpacePostsList({ profile }: { profile: Profile }) {
 
 // ============== My Posts Screen (segmented: Truck Space | Adjustment) ==============
 function MyPostsScreen({ profile }: { profile: Profile }) {
-  const [activeTab, setActiveTab] = useState<"truckSpace" | "adjustment">("truckSpace");
+  // Same independent-toggle pattern as the Find page's Truck Space / Partial
+  // Load chips: each starts unselected, tapping a chip selects only that
+  // type, and tapping an already-selected chip deselects it again — when
+  // neither chip is actively selected, both lists show by default.
+  const [showTruckSpace, setShowTruckSpace] = useState(false);
+  const [showAdjustment, setShowAdjustment] = useState(false);
+  const includeTruckSpace = showTruckSpace || !showAdjustment;
+  const includeAdjustment = showAdjustment || !showTruckSpace;
 
   return (
     <View style={styles.fill}>
       {/* Same size/component as the Find page's Truck Space / Partial Load
           toggle (styles.modeToggleBar) for visual and interaction
-          consistency — here it acts as a single-select tab switch between
-          the two post lists rather than an independent multi-toggle. */}
+          consistency — independent deselectable chips, not a single-select
+          tab switch. */}
       <View style={styles.modeToggleBar} testID="myposts-mode-toggle">
         <TouchableOpacity
           testID="myposts-mode-truck"
-          style={[styles.modeToggleBtn, activeTab === "truckSpace" && [styles.modeToggleBtnActive, { backgroundColor: COLORS.primary }]]}
-          onPress={() => setActiveTab("truckSpace")}
+          style={[styles.modeToggleBtn, showTruckSpace && [styles.modeToggleBtnActive, { backgroundColor: COLORS.primary }]]}
+          onPress={() => setShowTruckSpace((v) => !v)}
           activeOpacity={0.8}
         >
-          <Ionicons name="car-outline" size={14} color={activeTab === "truckSpace" ? COLORS.surface : COLORS.textMuted} />
-          <Text style={[styles.modeToggleText, activeTab === "truckSpace" && styles.modeToggleTextActive]}>Truck Space</Text>
+          <Ionicons name="car-outline" size={14} color={showTruckSpace ? COLORS.surface : COLORS.textMuted} />
+          <Text style={[styles.modeToggleText, showTruckSpace && styles.modeToggleTextActive]}>Truck Space</Text>
         </TouchableOpacity>
         <TouchableOpacity
           testID="myposts-mode-ptl"
-          style={[styles.modeToggleBtn, activeTab === "adjustment" && [styles.modeToggleBtnActive, { backgroundColor: COLORS.secondary }]]}
-          onPress={() => setActiveTab("adjustment")}
+          style={[styles.modeToggleBtn, showAdjustment && [styles.modeToggleBtnActive, { backgroundColor: COLORS.secondary }]]}
+          onPress={() => setShowAdjustment((v) => !v)}
           activeOpacity={0.8}
         >
-          <Ionicons name="cube-outline" size={14} color={activeTab === "adjustment" ? COLORS.surface : COLORS.textMuted} />
-          <Text style={[styles.modeToggleText, activeTab === "adjustment" && styles.modeToggleTextActive]}>Partial Load</Text>
+          <Ionicons name="cube-outline" size={14} color={showAdjustment ? COLORS.surface : COLORS.textMuted} />
+          <Text style={[styles.modeToggleText, showAdjustment && styles.modeToggleTextActive]}>Partial Load</Text>
         </TouchableOpacity>
       </View>
-      {activeTab === "truckSpace" ? (
-        <MyTruckSpacePostsList profile={profile} />
-      ) : (
-        <SafeScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
-          <MyPtlLoadsList profile={profile} />
-        </SafeScrollView>
-      )}
+      <View style={styles.flex1}>
+        {includeTruckSpace && (
+          <View style={styles.flex1}>
+            <MyTruckSpacePostsList profile={profile} />
+          </View>
+        )}
+        {includeAdjustment && (
+          <View style={styles.flex1}>
+            <SafeScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+              <MyPtlLoadsList profile={profile} />
+            </SafeScrollView>
+          </View>
+        )}
+      </View>
     </View>
   );
 }
@@ -7382,6 +7451,8 @@ const styles = StyleSheet.create({
   modalSubtitle: { fontSize: 14, color: COLORS.textMuted, marginBottom: 20, lineHeight: 20, letterSpacing: 0.1 },
   inputError: { borderColor: COLORS.danger },
   filledBorder: { borderColor: COLORS.success, borderWidth: 1.5 },
+  filledBorderBlue: { borderColor: COLORS.primary, borderWidth: 1.5 },
+  filledBorderOrange: { borderColor: COLORS.secondary, borderWidth: 1.5 },
   optionalHeading: { fontSize: rf(12), fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.textMuted, textTransform: "uppercase", letterSpacing: 0.6, marginTop: rs(20), marginBottom: rs(10) },
   collapseWrap: { marginBottom: rs(10) },
   collapseHeader: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: rs(12), paddingVertical: rs(12), borderRadius: 14, borderWidth: 1, borderStyle: "dashed", borderColor: COLORS.border, backgroundColor: COLORS.surface },
