@@ -1493,6 +1493,27 @@ async def post_ptl_load(payload: PtlLoadPost):
     user = await db.users.find_one({"phone": phone}, {"_id": 0, "name": 1, "company": 1})
     now = datetime.now(timezone.utc)
     load_id = f"PTL-{now.strftime('%Y%m%d%H%M%S')}-{phone[-4:]}-{_gen_short_id(4)}"
+
+    # Guarantee lat/lon are stored at post time, same as /loads (truck-space)
+    # does via _resolve_missing_coords — otherwise a listing posted without
+    # coordinates (e.g. certain city selections) can never have a bid
+    # deviation computed against it later, since _deviation_km needs both
+    # sides to have coordinates.
+    origin_lat, origin_lon = payload.origin_latitude, payload.origin_longitude
+    if origin_lat is None or origin_lon is None:
+        lat, lon = await _resolve_missing_coords(
+            payload.origin_pincode or "", payload.origin_locality, payload.origin_city, ""
+        )
+        if lat is not None:
+            origin_lat, origin_lon = lat, lon
+    dest_lat, dest_lon = payload.destination_latitude, payload.destination_longitude
+    if dest_lat is None or dest_lon is None:
+        lat, lon = await _resolve_missing_coords(
+            payload.destination_pincode or "", payload.destination_locality, payload.destination_city, ""
+        )
+        if lat is not None:
+            dest_lat, dest_lon = lat, lon
+
     doc = {
         "id": load_id,
         "poster_phone": phone,
@@ -1503,16 +1524,16 @@ async def post_ptl_load(payload: PtlLoadPost):
             "city": payload.origin_city,
             "state": payload.origin_state or "",
             "pincode": payload.origin_pincode,
-            "latitude": payload.origin_latitude,
-            "longitude": payload.origin_longitude,
+            "latitude": origin_lat,
+            "longitude": origin_lon,
         },
         "destination": {
             "locality": payload.destination_locality,
             "city": payload.destination_city,
             "state": payload.destination_state or "",
             "pincode": payload.destination_pincode,
-            "latitude": payload.destination_latitude,
-            "longitude": payload.destination_longitude,
+            "latitude": dest_lat,
+            "longitude": dest_lon,
         },
         "cargo_type": payload.cargo_type,
         "cargo_category": payload.cargo_category,
