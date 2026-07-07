@@ -4720,6 +4720,7 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
   const [viewerStart, setViewerStart] = useState<number | null>(null);
   const [showBidForm, setShowBidForm] = useState(false);
   const [myBid, setMyBid] = useState<Bid | null>(null);
+  const [showPosterProfile, setShowPosterProfile] = useState(false);
   const [showPtlPosterProfile, setShowPtlPosterProfile] = useState(false);
 
   // For bidding, we need the bid target = the post the user is looking at.
@@ -4836,20 +4837,23 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
         )}
         <View style={detailStyles.section}>
           <Text style={detailStyles.sectionTitle}>Posted By</Text>
-          <View style={detailStyles.posterBlock}>
-            <View style={detailStyles.avatarCircle}>
-              <Text style={detailStyles.avatarText}>{(l.poster_name || "?").split(" ").map((p: string) => p[0]).filter(Boolean).slice(0, 2).join("").toUpperCase()}</Text>
-            </View>
-            <View style={{ flex: 1 }}>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                <Text style={detailStyles.posterName}>{l.poster_name}</Text>
-                {l.verified && <Ionicons name="checkmark-circle" size={14} color={COLORS.success} />}
+          <TouchableOpacity activeOpacity={isMine ? 1 : 0.8} onPress={() => !isMine && l.poster_phone && setShowPosterProfile(true)}>
+            <View style={detailStyles.posterBlock}>
+              <View style={detailStyles.avatarCircle}>
+                <Text style={detailStyles.avatarText}>{(l.poster_name || "?").split(" ").map((p: string) => p[0]).filter(Boolean).slice(0, 2).join("").toUpperCase()}</Text>
               </View>
-              {l.poster_company ? <Text style={detailStyles.posterCompany}>{l.poster_company}</Text> : null}
-              {contactName ? <Text style={{ fontSize: 11, color: COLORS.primary, fontFamily: "Inter_500Medium", marginTop: 2 }}>Saved as "{contactName}"</Text> : null}
+              <View style={{ flex: 1 }}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                  <Text style={[detailStyles.posterName, !isMine && { color: COLORS.primary, textDecorationLine: "underline" }]}>{l.poster_name}</Text>
+                  {l.verified && <Ionicons name="checkmark-circle" size={14} color={COLORS.success} />}
+                  {isMine && <Text style={styles.youTag}>· You</Text>}
+                </View>
+                {l.poster_company ? <Text style={detailStyles.posterCompany}>{l.poster_company}</Text> : null}
+                {contactName ? <Text style={{ fontSize: 11, color: COLORS.primary, fontFamily: "Inter_500Medium", marginTop: 2 }}>Saved as "{contactName}"</Text> : null}
+              </View>
+              {!isMine && <TouchableOpacity style={styles.callBtn} onPress={callPoster}><Ionicons name="call" size={16} color={COLORS.surface} /><Text style={styles.callBtnText}>Call</Text></TouchableOpacity>}
             </View>
-            {!isMine && <TouchableOpacity style={styles.callBtn} onPress={callPoster}><Ionicons name="call" size={16} color={COLORS.surface} /><Text style={styles.callBtnText}>Call</Text></TouchableOpacity>}
-          </View>
+          </TouchableOpacity>
         </View>
       </>
     );
@@ -5046,6 +5050,15 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
             }}
           />
         ) : null}
+        {load && showPosterProfile && (
+          <PosterProfileModal
+            visible={showPosterProfile}
+            load={load}
+            viewerPhone={viewerPhone}
+            contactName={contactName}
+            onClose={() => setShowPosterProfile(false)}
+          />
+        )}
         {ptlPosterForModal && showPtlPosterProfile && (
           <PosterProfileModal
             visible={showPtlPosterProfile}
