@@ -300,6 +300,7 @@ type PtlMember = {
   dimension_height?: number | null;
   cargo_placement?: string;
   images?: string[];
+  image_count?: number;
   verified?: boolean;
 };
 
@@ -7820,6 +7821,24 @@ function MyPostsScreen({ profile }: { profile: Profile }) {
   const [showDetail, setShowDetail] = useState(false);
   const [bidsForListing, setBidsForListing] = useState<{ id: string; label: string } | null>(null);
 
+  // Opens the detail modal for a listing. The list itself only holds the
+  // "light" group (no photo bytes, just image_count — see fetchAll below),
+  // so we fetch the real, full group (with images) here, on demand, only
+  // for the one listing the user actually wants to view.
+  const openListingDetail = useCallback(async (gid: string) => {
+    // Show what we already have (no photos yet) immediately so the modal
+    // doesn't sit blank while the network call resolves, then swap in the
+    // full version (with real images) once it arrives.
+    setSelectedGroup(groupCache[gid] || null);
+    setShowDetail(true);
+    try {
+      const gr = await fetch(`${API}/ptl/groups/${gid}?viewer_phone=${encodeURIComponent(profile.phone)}`);
+      if (gr.ok) setSelectedGroup(await gr.json());
+    } catch {
+      // keep showing the light version already set above
+    }
+  }, [profile.phone, groupCache]);
+
   // Cache-first (stale-while-revalidate): the My Posts tab is fully unmounted
   // and remounted every time the user navigates away and back (see the
   // `tab === "myPosts" && <MyPostsScreen />` conditional render), which used
@@ -7871,7 +7890,14 @@ function MyPostsScreen({ profile }: { profile: Profile }) {
       await Promise.all(
         gids.map(async (gid) => {
           try {
-            const gr = await fetch(`${API}/ptl/groups/${gid}?viewer_phone=${encodeURIComponent(profile.phone)}`);
+            // light=1: skip inline base64 photos for the list view (each can
+            // be several MB) — we only need image_count here to show the
+            // photo badge. Full photos are fetched on demand only when the
+            // user actually opens a listing's detail (see onPress below).
+            // This is also what made caching ineffective before: without
+            // `light`, this same multi-MB payload was being written to and
+            // read back from AsyncStorage on every mount.
+            const gr = await fetch(`${API}/ptl/groups/${gid}?viewer_phone=${encodeURIComponent(profile.phone)}&light=1`);
             if (gr.ok) fetched[gid] = await gr.json();
           } catch {}
         }),
@@ -8068,7 +8094,7 @@ function MyPostsScreen({ profile }: { profile: Profile }) {
               <PtlGroupCard
                 group={g}
                 profile={profile}
-                onPress={() => { setSelectedGroup(g); setShowDetail(true); }}
+                onPress={() => { openListingDetail(g.id); }}
               />
               <TouchableOpacity
                 testID={`bids-received-${ptlItem.id}`}
