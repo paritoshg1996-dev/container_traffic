@@ -4408,17 +4408,20 @@ function BidFormModal({
   }, [visible, existingBid]);
 
   const submit = async () => {
-    if (!/^\d{6}$/.test(originPin)) return Alert.alert("Origin", "Select a valid origin");
-    if (!/^\d{6}$/.test(destPin)) return Alert.alert("Destination", "Select a valid destination");
+    if (!isRouteInfoValid(originPin, originInfo, true)) return Alert.alert("Origin", "Select a valid origin");
+    if (!isRouteInfoValid(destPin, destInfo, true)) return Alert.alert("Destination", "Select a valid destination");
     const w = parseFloat(weight);
     if (!w || w <= 0) return Alert.alert("Weight", "Enter a valid weight in tons");
     if (!cargoType) return Alert.alert("Cargo type", "Select a cargo type");
     setSubmitting(true);
     try {
-      // Best-effort geocode for both endpoints to compute deviation server-side
+      // Best-effort geocode for both endpoints to compute deviation server-side.
+      // Only geocode by pincode when one was actually selected — a city-only
+      // selection (no pincode) already carries lat/lon on `originInfo` /
+      // `destInfo` from the place picker itself.
       const [og, dg] = await Promise.all([
-        fetch(`${API}/geocode/${originPin}`).then(r => r.json()).catch(() => null),
-        fetch(`${API}/geocode/${destPin}`).then(r => r.json()).catch(() => null),
+        /^\d{6}$/.test(originPin) ? fetch(`${API}/geocode/${originPin}`).then(r => r.json()).catch(() => null) : Promise.resolve(null),
+        /^\d{6}$/.test(destPin) ? fetch(`${API}/geocode/${destPin}`).then(r => r.json()).catch(() => null) : Promise.resolve(null),
       ]);
       const body = {
         listing_id: listingId,
@@ -4427,13 +4430,13 @@ function BidFormModal({
         origin_pincode: originPin,
         origin_city: originInfo?.city || "",
         origin_locality: originInfo?.locality || "",
-        origin_latitude: og?.found ? og.lat : null,
-        origin_longitude: og?.found ? og.lon : null,
+        origin_latitude: og?.found ? og.lat : (originInfo?.latitude ?? null),
+        origin_longitude: og?.found ? og.lon : (originInfo?.longitude ?? null),
         destination_pincode: destPin,
         destination_city: destInfo?.city || "",
         destination_locality: destInfo?.locality || "",
-        destination_latitude: dg?.found ? dg.lat : null,
-        destination_longitude: dg?.found ? dg.lon : null,
+        destination_latitude: dg?.found ? dg.lat : (destInfo?.latitude ?? null),
+        destination_longitude: dg?.found ? dg.lon : (destInfo?.longitude ?? null),
         weight_tons: w,
         cargo_type: cargoType,
       };
