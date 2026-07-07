@@ -1680,7 +1680,7 @@ async def list_ptl_groups(
         if load_ids:
             loads = await db.ptl_loads.find(
                 {"id": {"$in": load_ids}, "status": {"$ne": "CANCELLED"}},
-                {"_id": 0, "poster_name": 1, "poster_company": 1, "poster_phone": 1,
+                {"_id": 0, "id": 1, "poster_name": 1, "poster_company": 1, "poster_phone": 1,
                  "origin": 1, "destination": 1, "weight_kg": 1, "cargo_type": 1,
                  "cargo_category": 1, "status": 1, "truck_type": 1, "loading_date": 1,
                  "dimension_length": 1, "dimension_breadth": 1, "dimension_height": 1,
@@ -1691,6 +1691,7 @@ async def list_ptl_groups(
                 d = l.get("destination") or {}
                 poster_phone = l.get("poster_phone", "")
                 members.append({
+                    "load_id": l.get("id"),
                     "name": l.get("poster_name", ""),
                     "company": l.get("poster_company", ""),
                     "origin_locality": o.get("locality", ""),
