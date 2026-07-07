@@ -1553,9 +1553,23 @@ async def get_my_ptl_loads(phone: str):
         raise HTTPException(status_code=400, detail="phone must be a 10-digit number")
     cursor = db.ptl_loads.find(
         {"poster_phone": phone, "status": {"$ne": "CANCELLED"}},
-        {"_id": 0, "expires_at": 0},
+        # Exclude inline base64 images (same reasoning as /loads/my/{phone}):
+        # each photo can be several MB, and the My Posts list only needs a
+        # count to render the photo badge, not the bytes themselves.
+        {"_id": 0, "expires_at": 0, "images": 0},
     ).sort("posted_at", -1).limit(50)
     loads = await cursor.to_list(length=50)
+
+    ids = [l["id"] for l in loads]
+    counts: dict = {}
+    if ids:
+        cursor2 = db.ptl_loads.aggregate([
+            {"$match": {"id": {"$in": ids}}},
+            {"$project": {"_id": 0, "id": 1, "image_count": {"$size": {"$ifNull": ["$images", []]}}}},
+        ])
+        async for d in cursor2:
+            counts[d["id"]] = d["image_count"]
+
     # Flatten origin/destination so the frontend type matches PtlLoad
     out = []
     for l in loads:
@@ -1575,6 +1589,7 @@ async def get_my_ptl_loads(phone: str):
             "destination_pincode": d.get("pincode", ""),
             "destination_latitude": d.get("latitude"),
             "destination_longitude": d.get("longitude"),
+            "image_count": counts.get(l["id"], 0),
         })
     return out
 
@@ -1708,7 +1723,13 @@ async def list_ptl_groups(
 
 # ── GET single group detail ────────────────────────────────────────────────
 @api_router.get("/ptl/groups/{group_id}")
-async def get_ptl_group(group_id: str, viewer_phone: Optional[str] = None):
+async def get_ptl_group(group_id: str, viewer_phone: Optional[str] = None, light: bool = False):
+    # `light=true` is used by screens (like My Posts) that batch-fetch many
+    # groups just to render a list/badge and don't need actual photo bytes —
+    # only whether photos exist. It excludes inline base64 `images` and
+    # returns `image_count` instead. Default (light unset) is unchanged so
+    # existing callers like the marketplace detail view / WhatsApp share
+    # links keep getting full images.
     # Accept either the full `GRP-…` id or the 6-char short_id used by
     # WhatsApp share links (`https://www.trucktraffic.in/a/{short_id}`).
     g = await db.ptl_groups.find_one(
@@ -1721,8 +1742,17 @@ async def get_ptl_group(group_id: str, viewer_phone: Optional[str] = None):
     load_ids = g.get("load_ids", [])
     loads = await db.ptl_loads.find(
         {"id": {"$in": load_ids}, "status": {"$ne": "CANCELLED"}},
-        {"_id": 0},
+        {"_id": 0, "images": 0} if light else {"_id": 0},
     ).to_list(length=20) if load_ids else []
+
+    image_counts: dict = {}
+    if light and load_ids:
+        cursor2 = db.ptl_loads.aggregate([
+            {"$match": {"id": {"$in": load_ids}, "status": {"$ne": "CANCELLED"}}},
+            {"$project": {"_id": 0, "id": 1, "image_count": {"$size": {"$ifNull": ["$images", []]}}}},
+        ])
+        async for d in cursor2:
+            image_counts[d["id"]] = d["image_count"]
     # Solo listings only — the poster's phone is exposed to the viewer once
     # they open the detail (there is no "pair" gate anymore since matching
     # was retired). This matches the behaviour of the list endpoint
@@ -1755,7 +1785,8 @@ async def get_ptl_group(group_id: str, viewer_phone: Optional[str] = None):
             "dimension_breadth": l.get("dimension_breadth"),
             "dimension_height": l.get("dimension_height"),
             "cargo_placement": l.get("cargo_placement", ""),
-            "images": l.get("images") or [],
+            "images": [] if light else (l.get("images") or []),
+            "image_count": image_counts.get(l.get("id"), len(l.get("images") or [])),
         })
     g_out = _strip_group_internals(g)
     g_out["members"] = members
