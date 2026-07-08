@@ -528,7 +528,7 @@ async def map_key():
 async def static_map(
     lat: float = Query(...),
     lng: float = Query(...),
-    zoom: int = Query(default=15),
+    zoom: int = Query(default=13),
     size: str = Query(default="400x260"),
 ):
     """Server-side proxy for Mappls' Still Map Image API.
