@@ -536,6 +536,10 @@ async def static_map(
             },
         )
         if resp.status_code != 200 or not resp.content:
+            logger.warning(
+                f"Static map non-200 from Mappls: status={resp.status_code} "
+                f"body={resp.text[:500]!r}"
+            )
             raise HTTPException(status_code=502, detail="Static map unavailable")
         return Response(
             content=resp.content,
