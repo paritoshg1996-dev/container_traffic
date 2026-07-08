@@ -506,6 +506,23 @@ async def places_search(
         return {"suggestedLocations": [], "userAddedLocations": []}
 
 
+@api_router.get("/mapkey")
+async def map_key():
+    """Returns the Mappls key used to init the client-side Interactive Map JS
+    SDK (used by the map-confirm modal in index.html).
+
+    Note: this key is inherently public once used client-side — it appears
+    in a <script src> tag in the page source no matter how it's delivered.
+    Serving it from an endpoint just avoids hardcoding/rotation pain; the
+    actual protection is restricting this key to your domain(s) in the
+    Mappls console (Console → your app → allowed domains).
+    """
+    MAPPLS_KEY = os.environ.get("MAPPLS_KEY", "")
+    if not MAPPLS_KEY:
+        raise HTTPException(status_code=500, detail="MAPPLS_KEY not configured")
+    return {"key": MAPPLS_KEY}
+
+
 @api_router.get("/staticmap")
 async def static_map(
     lat: float = Query(...),
