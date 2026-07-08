@@ -508,27 +508,20 @@ async def places_search(
 
 @api_router.get("/mapkey")
 async def map_key():
-    """Returns the Mappls Static Key for the *trucktraffic-website* app, used
-    to init the client-side Interactive Map JS SDK (map-confirm modal in
-    index.html).
-
-    This is intentionally a SEPARATE credential from MAPPLS_KEY: MAPPLS_KEY
-    is the REST API key tied to a different Mappls app (used server-side for
-    Autosuggest/Geocode), while the JS Map SDK requires its own app-specific
-    Static Key — they are not interchangeable even when both apps show the
-    same assets as "Active". Set MAPPLS_MAP_SDK_KEY in Render's environment
-    variables to the Static Key from Mappls Console → Applications →
-    trucktraffic-website → Credentials.
+    """Returns the Mappls Static Key used to init the client-side Interactive
+    Map JS SDK (map-confirm modal in index.html). This is the same static
+    key as MAPPLS_KEY — confirmed to match the "trucktraffic-website" app's
+    credentials in the Mappls console.
 
     Note: this key is inherently public once used client-side — it appears
     in a <script src> tag in the page source no matter how it's delivered.
     The actual protection is domain-whitelisting this key in Mappls Console
     → trucktraffic-website → Whitelisting (restrict to trucktraffic.in).
     """
-    MAPPLS_MAP_SDK_KEY = os.environ.get("MAPPLS_MAP_SDK_KEY", "")
-    if not MAPPLS_MAP_SDK_KEY:
-        raise HTTPException(status_code=500, detail="MAPPLS_MAP_SDK_KEY not configured")
-    return {"key": MAPPLS_MAP_SDK_KEY}
+    MAPPLS_KEY = os.environ.get("MAPPLS_KEY", "")
+    if not MAPPLS_KEY:
+        raise HTTPException(status_code=500, detail="MAPPLS_KEY not configured")
+    return {"key": MAPPLS_KEY}
 
 
 @api_router.get("/staticmap")
