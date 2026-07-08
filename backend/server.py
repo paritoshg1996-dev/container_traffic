@@ -506,6 +506,70 @@ async def places_search(
         return {"suggestedLocations": [], "userAddedLocations": []}
 
 
+@api_router.get("/mapkey")
+async def map_key():
+    """Returns the Mappls Static Key used to init the client-side Interactive
+    Map JS SDK (map-confirm modal in index.html). This is the same static
+    key as MAPPLS_KEY — confirmed to match the "trucktraffic-website" app's
+    credentials in the Mappls console.
+
+    Note: this key is inherently public once used client-side — it appears
+    in a <script src> tag in the page source no matter how it's delivered.
+    The actual protection is domain-whitelisting this key in Mappls Console
+    → trucktraffic-website → Whitelisting (restrict to trucktraffic.in).
+    """
+    MAPPLS_KEY = os.environ.get("MAPPLS_KEY", "")
+    if not MAPPLS_KEY:
+        raise HTTPException(status_code=500, detail="MAPPLS_KEY not configured")
+    return {"key": MAPPLS_KEY}
+
+
+@api_router.get("/staticmap")
+async def static_map(
+    lat: float = Query(...),
+    lng: float = Query(...),
+    zoom: int = Query(default=15),
+    size: str = Query(default="400x260"),
+):
+    """Server-side proxy for Mappls' Still Map Image API.
+
+    Keeps MAPPLS_KEY out of the browser entirely — the frontend requests
+    this endpoint (e.g. `${API}/staticmap?lat=..&lng=..`) as a plain <img
+    src>, and we attach the key here before calling Mappls. Used by the
+    origin/destination "confirm on map" step (see setupLocationInput /
+    showMapConfirm in index.html).
+    """
+    MAPPLS_KEY = os.environ.get("MAPPLS_KEY", "")
+    if not MAPPLS_KEY:
+        raise HTTPException(status_code=500, detail="MAPPLS_KEY not configured")
+    try:
+        resp = await http_client.get(
+            "https://tile.mappls.com/map/raster_tile/still_image",
+            params={
+                "center": f"{lat},{lng}",
+                "zoom": zoom,
+                "size": size,
+                "markers": f"{lat},{lng}",
+                "access_token": MAPPLS_KEY,
+            },
+        )
+        if resp.status_code != 200 or not resp.content:
+            logger.warning(
+                f"Static map non-200 from Mappls: status={resp.status_code} "
+                f"body={resp.text[:500]!r}"
+            )
+            raise HTTPException(status_code=502, detail="Static map unavailable")
+        return Response(
+            content=resp.content,
+            media_type=resp.headers.get("content-type", "image/png"),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"Static map fetch failed: {e}")
+        raise HTTPException(status_code=502, detail="Static map unavailable")
+
+
 @api_router.get("/testgeocode")
 async def test_geocode(
     pincode: Optional[str] = Query(default=None),
