@@ -10,12 +10,10 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+import math
 import re
-import requests
-import urllib3
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)  # postalpincode.in SSL cert expired
-
+import httpx
 import firebase_admin
 from firebase_admin import credentials as fb_credentials, auth as fb_auth
 
@@ -39,6 +37,15 @@ async def _unique_short_id() -> str:
             return sid
     # Fallback: use 8 chars if 6-char space is somehow saturated
     return _gen_short_id(8)
+
+
+async def _unique_ptl_group_short_id() -> str:
+    """Generate a short_id that doesn't already exist in the ptl_groups collection."""
+    for _ in range(10):
+        sid = _gen_short_id()
+        if not await db.ptl_groups.find_one({"short_id": sid}, {"_id": 1}):
+            return sid
+    return _gen_short_id(8)
 load_dotenv(ROOT_DIR / '.env')
 
 # MongoDB connection
@@ -48,6 +55,17 @@ db = client[os.environ['DB_NAME']]
 
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
+
+# Shared async HTTP clients for outbound calls (Nominatim, postalpincode.in,
+# Mappls, TinyURL). Using httpx instead of `requests` matters here because
+# these calls happen inside `async def` route handlers — a blocking
+# `requests.get()` freezes the entire event loop for the call's duration
+# (up to its timeout), stalling every other concurrent request the process
+# is serving, not just the geocoding one. Two clients: one default (TLS
+# verified) and one with verification disabled, since postalpincode.in's
+# cert is expired but everything else should stay verified.
+http_client: httpx.AsyncClient = None
+http_client_insecure: httpx.AsyncClient = None
 
 logging.basicConfig(
     level=logging.INFO,
@@ -182,11 +200,9 @@ async def lookup_pincode(pincode: str):
     if not (pincode.isdigit() and len(pincode) == 6):
         raise HTTPException(status_code=400, detail="Pincode must be 6 digits")
     try:
-        resp = requests.get(
+        resp = await http_client_insecure.get(
             f"https://api.postalpincode.in/pincode/{pincode}",
-            timeout=8,
             headers={"User-Agent": "LoadLink/1.0"},
-            verify=False,  # postalpincode.in SSL cert expired
         )
         data = resp.json()
         if isinstance(data, list) and data and data[0].get("Status") == "Success":
@@ -243,11 +259,9 @@ async def search_city(name: str):
     if len(name) < 3:
         return []
     try:
-        resp = requests.get(
+        resp = await http_client_insecure.get(
             f"https://api.postalpincode.in/postoffice/{name}",
-            timeout=8,
             headers={"User-Agent": "LoadLink/1.0"},
-            verify=False,  # postalpincode.in SSL cert expired
         )
         data = resp.json()
         out: List[CitySuggestion] = []
@@ -281,8 +295,7 @@ class GeoInfo(BaseModel):
     found: bool = False
 
 
-@api_router.get("/geocode/{pincode}", response_model=GeoInfo)
-async def geocode_pincode(pincode: str):
+async def _geocode_pincode_core(pincode: str) -> "GeoInfo":
     """Resolve an Indian pincode to lat/lon. Cached in Mongo.
 
     Strategy:
@@ -290,10 +303,12 @@ async def geocode_pincode(pincode: str):
     2. Nominatim by postalcode (free, usually reliable)
     3. Nominatim by city name from postalpincode.in (fallback)
     All results cached permanently so each pincode is only ever looked up once.
-    """
-    if not (pincode.isdigit() and len(pincode) == 6):
-        raise HTTPException(status_code=400, detail="Pincode must be 6 digits")
 
+    Shared by the /geocode/{pincode} endpoint and by the server-side lat/lon
+    backfill in create_load / update_load, so a load posted or edited without
+    lat/lon still gets it filled in at write time instead of relying on the
+    client to fall back to this same lookup on every future search.
+    """
     cached = await db.pincode_geo.find_one({"pincode": pincode}, {"_id": 0})
     if cached and cached.get("found"):
         return GeoInfo(**cached)
@@ -302,10 +317,9 @@ async def geocode_pincode(pincode: str):
 
     # Step 1: Nominatim by postalcode
     try:
-        resp = requests.get(
+        resp = await http_client.get(
             "https://nominatim.openstreetmap.org/search",
             params={"postalcode": pincode, "country": "India", "format": "json", "limit": 1},
-            timeout=10,
             headers=nominatim_headers,
         )
         data = resp.json()
@@ -319,11 +333,9 @@ async def geocode_pincode(pincode: str):
 
     # Step 2: Look up city name from postalpincode.in, then geocode by city name
     try:
-        resp = requests.get(
+        resp = await http_client_insecure.get(
             f"https://api.postalpincode.in/pincode/{pincode}",
-            timeout=8,
             headers={"User-Agent": "LoadLink/1.0"},
-            verify=False,  # postalpincode.in SSL cert is expired
         )
         data = resp.json()
         if isinstance(data, list) and data and data[0].get("Status") == "Success":
@@ -333,10 +345,9 @@ async def geocode_pincode(pincode: str):
                 city_name = first.get("District") or first.get("Block") or first.get("Name") or ""
                 state_name = first.get("State") or ""
                 if city_name:
-                    geo_resp = requests.get(
+                    geo_resp = await http_client.get(
                         "https://nominatim.openstreetmap.org/search",
                         params={"q": f"{city_name}, {state_name}, India", "format": "json", "limit": 1, "countrycodes": "in"},
-                        timeout=10,
                         headers=nominatim_headers,
                     )
                     geo_data = geo_resp.json()
@@ -351,6 +362,14 @@ async def geocode_pincode(pincode: str):
     return GeoInfo(pincode=pincode, found=False)
 
 
+@api_router.get("/geocode/{pincode}", response_model=GeoInfo)
+async def geocode_pincode(pincode: str):
+    """Resolve an Indian pincode to lat/lon. See _geocode_pincode_core for strategy."""
+    if not (pincode.isdigit() and len(pincode) == 6):
+        raise HTTPException(status_code=400, detail="Pincode must be 6 digits")
+    return await _geocode_pincode_core(pincode)
+
+
 @api_router.get("/geocode-city/{city_name}")
 async def geocode_city(city_name: str):
     """Resolve an Indian city/locality name to lat/lon via Nominatim.
@@ -361,6 +380,16 @@ async def geocode_city(city_name: str):
     city_name = (city_name or "").strip()
     if not city_name:
         raise HTTPException(status_code=400, detail="city_name is required")
+    return await _geocode_city_core(city_name)
+
+
+async def _geocode_city_core(city_name: str) -> "GeoInfo":
+    """Core city-name->latlon resolution logic; shared by the /geocode-city
+    endpoint and by the server-side lat/lon backfill in create_load /
+    update_load (used when a load has no pincode, only a place/city name)."""
+    city_name = (city_name or "").strip()
+    if not city_name:
+        return GeoInfo(pincode="", found=False)
 
     cache_key = city_name.lower()
     cached = await db.city_geo.find_one({"city": cache_key}, {"_id": 0})
@@ -368,7 +397,7 @@ async def geocode_city(city_name: str):
         return GeoInfo(pincode="", lat=cached["lat"], lon=cached["lon"], found=True)
 
     try:
-        resp = requests.get(
+        resp = await http_client.get(
             "https://nominatim.openstreetmap.org/search",
             params={
                 "q": f"{city_name}, India",
@@ -376,7 +405,6 @@ async def geocode_city(city_name: str):
                 "limit": 1,
                 "countrycodes": "in",
             },
-            timeout=10,
             headers={"User-Agent": "LoadLink/1.0 (loadlink.app)"},
         )
         data = resp.json()
@@ -394,6 +422,40 @@ async def geocode_city(city_name: str):
     except Exception as e:
         logger.warning(f"City geocode failed for {city_name}: {e}")
         return GeoInfo(pincode="", found=False)
+
+
+async def _resolve_missing_coords(
+    pincode: str, place_name: str, city: str, full_address: str
+) -> tuple:
+    """Best-effort server-side lat/lon resolution for a load's origin or
+    destination, mirroring the same pincode → eLoc/city-name fallback chain
+    the client used to run on every search (see geocodePin/geocodeEloc in
+    the app). Called from create_load and update_load so a load's coords
+    get filled in once, at write time, instead of every load without stored
+    lat/lon forcing a client-side geocode round-trip on every future search.
+
+    Returns (lat, lon) or (None, None) if nothing could be resolved.
+    """
+    # Step 1: a valid 6-digit pincode, either the field itself or extracted
+    # from the full address string (same regex the client used).
+    candidate_pincode = pincode if (pincode and pincode.isdigit() and len(pincode) == 6) else None
+    if not candidate_pincode and full_address:
+        m = re.search(r'\b(\d{6})\b', full_address)
+        if m:
+            candidate_pincode = m.group(1)
+    if candidate_pincode:
+        info = await _geocode_pincode_core(candidate_pincode)
+        if info.found:
+            return info.lat, info.lon
+
+    # Step 2: city/place name fallback (CITY-type Mappls results with no pincode)
+    name = place_name or city
+    if name:
+        info = await _geocode_city_core(name)
+        if info.found:
+            return info.lat, info.lon
+
+    return None, None
 
 
 @api_router.get("/places")
@@ -422,10 +484,9 @@ async def places_search(
         # pod=CITY is unreliable for short queries — Mappls returns empty/invalid JSON
         if pod and len(query) >= 4:
             params["pod"] = pod
-        resp = requests.get(
+        resp = await http_client.get(
             "https://search.mappls.com/search/places/autosuggest/json",
             params=params,
-            timeout=8,
             headers={
                 "User-Agent": "TruckTraffic/1.0 (trucktraffic.in)",
                 "Referer": "https://ptl-market.onrender.com",
@@ -443,6 +504,77 @@ async def places_search(
     except Exception as e:
         logger.warning(f"Places search failed: {e}")
         return {"suggestedLocations": [], "userAddedLocations": []}
+
+
+@api_router.get("/mapkey")
+async def map_key():
+    """Returns the Mappls Static Key for the *trucktraffic-website* app, used
+    to init the client-side Interactive Map JS SDK (map-confirm modal in
+    index.html).
+
+    This is intentionally a SEPARATE credential from MAPPLS_KEY: MAPPLS_KEY
+    is the REST API key tied to a different Mappls app (used server-side for
+    Autosuggest/Geocode), while the JS Map SDK requires its own app-specific
+    Static Key — they are not interchangeable even when both apps show the
+    same assets as "Active". Set MAPPLS_MAP_SDK_KEY in Render's environment
+    variables to the Static Key from Mappls Console → Applications →
+    trucktraffic-website → Credentials.
+
+    Note: this key is inherently public once used client-side — it appears
+    in a <script src> tag in the page source no matter how it's delivered.
+    The actual protection is domain-whitelisting this key in Mappls Console
+    → trucktraffic-website → Whitelisting (restrict to trucktraffic.in).
+    """
+    MAPPLS_MAP_SDK_KEY = os.environ.get("MAPPLS_MAP_SDK_KEY", "")
+    if not MAPPLS_MAP_SDK_KEY:
+        raise HTTPException(status_code=500, detail="MAPPLS_MAP_SDK_KEY not configured")
+    return {"key": MAPPLS_MAP_SDK_KEY}
+
+
+@api_router.get("/staticmap")
+async def static_map(
+    lat: float = Query(...),
+    lng: float = Query(...),
+    zoom: int = Query(default=15),
+    size: str = Query(default="400x260"),
+):
+    """Server-side proxy for Mappls' Still Map Image API.
+
+    Keeps MAPPLS_KEY out of the browser entirely — the frontend requests
+    this endpoint (e.g. `${API}/staticmap?lat=..&lng=..`) as a plain <img
+    src>, and we attach the key here before calling Mappls. Used by the
+    origin/destination "confirm on map" step (see setupLocationInput /
+    showMapConfirm in index.html).
+    """
+    MAPPLS_KEY = os.environ.get("MAPPLS_KEY", "")
+    if not MAPPLS_KEY:
+        raise HTTPException(status_code=500, detail="MAPPLS_KEY not configured")
+    try:
+        resp = await http_client.get(
+            "https://tile.mappls.com/map/raster_tile/still_image",
+            params={
+                "center": f"{lat},{lng}",
+                "zoom": zoom,
+                "size": size,
+                "markers": f"{lat},{lng}",
+                "access_token": MAPPLS_KEY,
+            },
+        )
+        if resp.status_code != 200 or not resp.content:
+            logger.warning(
+                f"Static map non-200 from Mappls: status={resp.status_code} "
+                f"body={resp.text[:500]!r}"
+            )
+            raise HTTPException(status_code=502, detail="Static map unavailable")
+        return Response(
+            content=resp.content,
+            media_type=resp.headers.get("content-type", "image/png"),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"Static map fetch failed: {e}")
+        raise HTTPException(status_code=502, detail="Static map unavailable")
 
 
 @api_router.get("/testgeocode")
@@ -465,10 +597,9 @@ async def test_geocode(
     if pincode:
         try:
             # Step 1: Nominatim by postalcode
-            resp = requests.get(
+            resp = await http_client.get(
                 "https://nominatim.openstreetmap.org/search",
                 params={"postalcode": pincode, "country": "India", "format": "json", "limit": 1},
-                timeout=10,
                 headers={"User-Agent": "TruckTraffic/1.0 (trucktraffic.in)"},
             )
             data = resp.json()
@@ -478,11 +609,9 @@ async def test_geocode(
 
         try:
             # Step 2: postalpincode.in (with SSL bypass)
-            resp2 = requests.get(
+            resp2 = await http_client_insecure.get(
                 f"https://api.postalpincode.in/pincode/{pincode}",
-                timeout=8,
                 headers={"User-Agent": "LoadLink/1.0"},
-                verify=False,
             )
             results["postalpincode"] = resp2.json()
         except Exception as e:
@@ -490,10 +619,9 @@ async def test_geocode(
 
     if city:
         try:
-            resp3 = requests.get(
+            resp3 = await http_client.get(
                 "https://nominatim.openstreetmap.org/search",
                 params={"q": f"{city}, India", "format": "json", "limit": 1, "countrycodes": "in"},
-                timeout=10,
                 headers={"User-Agent": "TruckTraffic/1.0 (trucktraffic.in)"},
             )
             data3 = resp3.json()
@@ -554,10 +682,9 @@ async def test_mappls(
         params[k] = v
 
     try:
-        resp = requests.get(
+        resp = await http_client.get(
             "https://search.mappls.com/search/places/autosuggest/json",
             params=params,
-            timeout=8,
             headers={
                 "User-Agent": "TruckTraffic/1.0 (trucktraffic.in)",
                 "Referer": "https://ptl-market.onrender.com",
@@ -596,6 +723,23 @@ async def create_load(payload: LoadCreate):
     load = Load(**payload.dict())
     # Assign a unique short_id before inserting
     load.short_id = await _unique_short_id()
+
+    # Guarantee lat/lon are stored at post time, so search never has to fall
+    # back to client-side geocoding for a freshly-posted load (see
+    # _resolve_missing_coords).
+    if load.origin_latitude is None or load.origin_longitude is None:
+        lat, lon = await _resolve_missing_coords(
+            load.origin_pincode, load.origin_place_name, load.origin_city, load.origin_full_address
+        )
+        if lat is not None:
+            load.origin_latitude, load.origin_longitude = lat, lon
+    if load.destination_latitude is None or load.destination_longitude is None:
+        lat, lon = await _resolve_missing_coords(
+            load.destination_pincode, load.destination_place_name, load.destination_city, load.destination_full_address
+        )
+        if lat is not None:
+            load.destination_latitude, load.destination_longitude = lat, lon
+
     doc = load.dict()
     await db.loads.insert_one(doc)
     return load
@@ -621,9 +765,47 @@ async def list_loads(
     ids = [d["id"] for d in docs]
     counts: dict = {}
     if ids:
-        cursor2 = db.loads.find({"id": {"$in": ids}}, {"_id": 0, "id": 1, "images": 1})
+        # Compute image_count with Mongo's $size instead of pulling the
+        # full images array (each entry can be several MB) back over the
+        # wire just to call len() on it client-side.
+        cursor2 = db.loads.aggregate([
+            {"$match": {"id": {"$in": ids}}},
+            {"$project": {"_id": 0, "id": 1, "image_count": {"$size": {"$ifNull": ["$images", []]}}}},
+        ])
         async for d in cursor2:
-            counts[d["id"]] = len(d.get("images") or [])
+            counts[d["id"]] = d["image_count"]
+    out = []
+    for d in docs:
+        d["image_count"] = counts.get(d["id"], 0)
+        d["images"] = []
+        out.append(d)
+    return out
+
+
+@api_router.get("/loads/my/{phone}")
+async def get_my_loads(phone: str):
+    """Return this poster's own Truck Space listings, server-filtered by phone
+    (mirrors /ptl/loads/my/{phone}). Used by the My Posts screen so it doesn't
+    have to fetch every truck-space listing on the platform and filter client-side.
+    Returns loads WITHOUT inline image data (same as the /loads list endpoint)."""
+    phone = _norm_phone(phone)
+    if len(phone) != 10:
+        raise HTTPException(status_code=400, detail="phone must be a 10-digit number")
+
+    cursor = db.loads.find(
+        {"poster_phone": phone}, {"_id": 0, "images": 0}
+    ).sort("created_at", -1).limit(200)
+    docs = await cursor.to_list(200)
+
+    ids = [d["id"] for d in docs]
+    counts: dict = {}
+    if ids:
+        cursor2 = db.loads.aggregate([
+            {"$match": {"id": {"$in": ids}}},
+            {"$project": {"_id": 0, "id": 1, "image_count": {"$size": {"$ifNull": ["$images", []]}}}},
+        ])
+        async for d in cursor2:
+            counts[d["id"]] = d["image_count"]
     out = []
     for d in docs:
         d["image_count"] = counts.get(d["id"], 0)
@@ -643,11 +825,12 @@ async def get_load_by_short_id(short_id: str):
     doc = await db.loads.find_one({"short_id": short_id}, {"_id": 0, "images": 0})
     if not doc:
         raise HTTPException(status_code=404, detail="Load not found")
-    doc["image_count"] = await db.loads.count_documents({"short_id": short_id})
-    # image_count is approximate here; patch it properly
-    full = await db.loads.find_one({"short_id": short_id}, {"_id": 0, "id": 1, "images": 1})
-    if full:
-        doc["image_count"] = len(full.get("images") or [])
+    # $size avoids pulling the full images array back just to count it.
+    count_docs = await db.loads.aggregate([
+        {"$match": {"short_id": short_id}},
+        {"$project": {"_id": 0, "image_count": {"$size": {"$ifNull": ["$images", []]}}}},
+    ]).to_list(1)
+    doc["image_count"] = count_docs[0]["image_count"] if count_docs else 0
     return doc
 
 
@@ -699,6 +882,41 @@ async def update_load(load_id: str, payload: LoadUpdate):
     update = {k: v for k, v in payload.dict().items() if v is not None}
     if not update:
         raise HTTPException(status_code=400, detail="No fields to update")
+
+    # If origin/destination location fields changed but lat/lon weren't
+    # explicitly provided in this update, backfill them now — the same
+    # guarantee create_load makes, so an edited load doesn't fall back to
+    # client-side geocoding either.
+    origin_fields = ("origin_pincode", "origin_place_name", "origin_city", "origin_full_address")
+    dest_fields = ("destination_pincode", "destination_place_name", "destination_city", "destination_full_address")
+    needs_origin_backfill = any(k in update for k in origin_fields) and not (
+        "origin_latitude" in update and "origin_longitude" in update
+    )
+    needs_dest_backfill = any(k in update for k in dest_fields) and not (
+        "destination_latitude" in update and "destination_longitude" in update
+    )
+    if needs_origin_backfill or needs_dest_backfill:
+        existing = await db.loads.find_one({"id": load_id}, {"_id": 0})
+        if existing:
+            if needs_origin_backfill:
+                lat, lon = await _resolve_missing_coords(
+                    update.get("origin_pincode", existing.get("origin_pincode", "")),
+                    update.get("origin_place_name", existing.get("origin_place_name", "")),
+                    update.get("origin_city", existing.get("origin_city", "")),
+                    update.get("origin_full_address", existing.get("origin_full_address", "")),
+                )
+                if lat is not None:
+                    update["origin_latitude"], update["origin_longitude"] = lat, lon
+            if needs_dest_backfill:
+                lat, lon = await _resolve_missing_coords(
+                    update.get("destination_pincode", existing.get("destination_pincode", "")),
+                    update.get("destination_place_name", existing.get("destination_place_name", "")),
+                    update.get("destination_city", existing.get("destination_city", "")),
+                    update.get("destination_full_address", existing.get("destination_full_address", "")),
+                )
+                if lat is not None:
+                    update["destination_latitude"], update["destination_longitude"] = lat, lon
+
     res = await db.loads.update_one({"id": load_id}, {"$set": update})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Load not found")
@@ -1113,10 +1331,9 @@ async def shorten_url(payload: ShortenRequest):
     if cached and cached.get("short"):
         return ShortenResponse(**cached)
     try:
-        resp = requests.get(
+        resp = await http_client.get(
             "https://tinyurl.com/api-create.php",
             params={"url": long_url},
-            timeout=8,
             headers={"User-Agent": "LoadLink/1.0"},
         )
         text = (resp.text or "").strip()
@@ -1211,6 +1428,710 @@ async def verify_firebase_token(payload: VerifyTokenRequest):
     )
 
 
+# ============================================================================
+# ===== PTL (Partial Truck Load) Consolidation =====
+# ============================================================================
+# Multiple shippers with small loads on the same route are grouped together
+# to fill a single 40ft truck (20,000 kg), splitting cost proportionally.
+
+CARGO_COMPATIBILITY = {
+    "GENERAL":    ["GENERAL", "FMCG", "AUTO_PARTS", "TEXTILES"],
+    "FRAGILE":    ["FRAGILE", "GENERAL"],
+    "HAZMAT":     ["HAZMAT"],
+    "PERISHABLE": ["PERISHABLE"],
+}
+TRUCK_CAPACITY_KG = 20000        # one truck's max payload (single-load cap only)
+
+
+class PtlLoadPost(BaseModel):
+    poster_phone: str
+    origin_locality: str
+    origin_city: str
+    origin_state: Optional[str] = ""
+    origin_pincode: Optional[str] = ""
+    origin_latitude: Optional[float] = None
+    origin_longitude: Optional[float] = None
+    destination_locality: str
+    destination_city: str
+    destination_state: Optional[str] = ""
+    destination_pincode: Optional[str] = ""
+    destination_latitude: Optional[float] = None
+    destination_longitude: Optional[float] = None
+    cargo_type: str          # e.g. "Bags", "Carton Box", "Drums"
+    cargo_category: str      # "GENERAL" | "FRAGILE" | "HAZMAT" | "PERISHABLE"
+    weight_kg: float
+    truck_type: Optional[str] = ""   # preferred truck: Open / Container / Trailer
+    loading_date: Optional[str] = None   # YYYY-MM-DD
+    ready_date: Optional[str] = None     # legacy alias for loading_date
+    # Optional details (collapsible section in the UI)
+    dimension_length: Optional[float] = None    # ft
+    dimension_breadth: Optional[float] = None   # ft
+    dimension_height: Optional[float] = None    # ft
+    cargo_placement: Optional[str] = ""         # "Stackable" | "Non Stackable"
+    images: Optional[List[str]] = None          # base64 data URIs (max 3)
+
+
+class PtlGroupResponse(BaseModel):
+    id: str
+    corridor: str
+    origin_display: str
+    destination_display: str
+    load_ids: List[str]
+    total_weight_kg: float
+    capacity_kg: float
+    capacity_remaining_kg: float
+    fill_pct: float
+    cargo_categories: List[str]
+    status: str
+    created_at: str
+    members: Optional[List[dict]] = None
+
+
+def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance between two lat/lon points, in kilometres."""
+    R = 6371
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlam = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2) ** 2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def derive_corridor(city: str) -> str:
+    """Normalise city name to a corridor tag used for group matching."""
+    return (city or "").strip().upper()
+
+
+def _strip_group_internals(g: dict) -> dict:
+    """Remove anchor lat/lon fields the client should not see."""
+    out = {k: v for k, v in g.items() if k not in {"origin_lat", "origin_lon", "dest_lat", "dest_lon"}}
+    return out
+
+
+async def _create_solo_ptl_group(new_load: dict) -> str:
+    """Create a standalone group containing only this load — no matching.
+
+    Every posted partial load becomes its own listing; the group is only kept
+    as a container so the existing marketplace, deep-link (`/a/{group_id}`)
+    and Bids Received endpoints keep working without changes.
+    """
+    origin_corridor = derive_corridor(new_load["origin"]["city"])
+    dest_corridor = derive_corridor(new_load["destination"]["city"])
+    now_iso = datetime.now(timezone.utc).isoformat()
+    gid = f"GRP-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{new_load['poster_phone'][-4:]}-{_gen_short_id(4)}"
+    short_id = await _unique_ptl_group_short_id()
+    group_doc = {
+        "id": gid,
+        "short_id": short_id,
+        "corridor": f"{origin_corridor}→{dest_corridor}",
+        "origin_display": new_load["origin"]["locality"] or new_load["origin"]["city"],
+        "destination_display": new_load["destination"]["locality"] or new_load["destination"]["city"],
+        "origin_lat": new_load["origin"].get("latitude"),
+        "origin_lon": new_load["origin"].get("longitude"),
+        "dest_lat": new_load["destination"].get("latitude"),
+        "dest_lon": new_load["destination"].get("longitude"),
+        "load_ids": [new_load["id"]],
+        "total_weight_kg": new_load["weight_kg"],
+        "capacity_kg": TRUCK_CAPACITY_KG,
+        "capacity_remaining_kg": max(0, TRUCK_CAPACITY_KG - new_load["weight_kg"]),
+        "fill_pct": round(min(new_load["weight_kg"] / TRUCK_CAPACITY_KG * 100, 999.9), 1),
+        "cargo_categories": [new_load["cargo_category"]],
+        "status": "FORMING",
+        "created_at": now_iso,
+    }
+    await db.ptl_groups.insert_one(group_doc)
+    await db.ptl_loads.update_one(
+        {"id": new_load["id"]},
+        {"$set": {"group_id": gid, "status": "OPEN"}},
+    )
+    return gid
+
+
+# ── POST a new partial load + trigger matching ─────────────────────────────
+@api_router.post("/ptl/loads")
+async def post_ptl_load(payload: PtlLoadPost):
+    phone = _norm_phone(payload.poster_phone)
+    if len(phone) != 10:
+        raise HTTPException(status_code=400, detail="poster_phone must be a 10-digit number")
+    if payload.weight_kg <= 0:
+        raise HTTPException(status_code=400, detail="weight_kg must be > 0")
+    if payload.weight_kg > TRUCK_CAPACITY_KG:
+        raise HTTPException(status_code=400, detail=f"weight_kg cannot exceed {TRUCK_CAPACITY_KG} kg (one full truck)")
+    # cargo_category is accepted as-is (raw cargo type e.g. "Bags", "Drums",
+    # "Pipes", "Carton Box", "Fresh Produce", "Others: <text>"). No
+    # recategorisation is performed.
+
+    user = await db.users.find_one({"phone": phone}, {"_id": 0, "name": 1, "company": 1})
+    now = datetime.now(timezone.utc)
+    load_id = f"PTL-{now.strftime('%Y%m%d%H%M%S')}-{phone[-4:]}-{_gen_short_id(4)}"
+
+    # Guarantee lat/lon are stored at post time, same as /loads (truck-space)
+    # does via _resolve_missing_coords — otherwise a listing posted without
+    # coordinates (e.g. certain city selections) can never have a bid
+    # deviation computed against it later, since _deviation_km needs both
+    # sides to have coordinates.
+    origin_lat, origin_lon = payload.origin_latitude, payload.origin_longitude
+    if origin_lat is None or origin_lon is None:
+        lat, lon = await _resolve_missing_coords(
+            payload.origin_pincode or "", payload.origin_locality, payload.origin_city, ""
+        )
+        if lat is not None:
+            origin_lat, origin_lon = lat, lon
+    dest_lat, dest_lon = payload.destination_latitude, payload.destination_longitude
+    if dest_lat is None or dest_lon is None:
+        lat, lon = await _resolve_missing_coords(
+            payload.destination_pincode or "", payload.destination_locality, payload.destination_city, ""
+        )
+        if lat is not None:
+            dest_lat, dest_lon = lat, lon
+
+    doc = {
+        "id": load_id,
+        "poster_phone": phone,
+        "poster_name": (user or {}).get("name", ""),
+        "poster_company": (user or {}).get("company", ""),
+        "origin": {
+            "locality": payload.origin_locality,
+            "city": payload.origin_city,
+            "state": payload.origin_state or "",
+            "pincode": payload.origin_pincode,
+            "latitude": origin_lat,
+            "longitude": origin_lon,
+        },
+        "destination": {
+            "locality": payload.destination_locality,
+            "city": payload.destination_city,
+            "state": payload.destination_state or "",
+            "pincode": payload.destination_pincode,
+            "latitude": dest_lat,
+            "longitude": dest_lon,
+        },
+        "cargo_type": payload.cargo_type,
+        "cargo_category": payload.cargo_category,
+        "weight_kg": payload.weight_kg,
+        "truck_type": payload.truck_type or "",
+        "loading_date": payload.loading_date or payload.ready_date,
+        "ready_date": payload.ready_date,
+        "dimension_length": payload.dimension_length,
+        "dimension_breadth": payload.dimension_breadth,
+        "dimension_height": payload.dimension_height,
+        "cargo_placement": payload.cargo_placement or "",
+        "images": payload.images or [],
+        "status": "OPEN",
+        "group_id": None,
+        "posted_at": now.isoformat(),
+        "expires_at": (now + timedelta(days=7)),
+    }
+    await db.ptl_loads.insert_one(doc)
+    # No group formation / matching — each posted partial load becomes its own
+    # standalone listing (a solo "group" is created purely so the existing
+    # marketplace endpoints, deep-link paths and Bids Received flows keep
+    # working unchanged).
+    group_id = await _create_solo_ptl_group(doc)
+    group_doc = await db.ptl_groups.find_one({"id": group_id}, {"_id": 0, "short_id": 1})
+    return {
+        "load_id": load_id,
+        "group_id": group_id,
+        "group_short_id": (group_doc or {}).get("short_id"),
+        "matched": False,
+    }
+
+
+# ── GET my PTL loads ───────────────────────────────────────────────────────
+@api_router.get("/ptl/loads/my/{phone}")
+async def get_my_ptl_loads(phone: str):
+    phone = _norm_phone(phone)
+    if len(phone) != 10:
+        raise HTTPException(status_code=400, detail="phone must be a 10-digit number")
+    cursor = db.ptl_loads.find(
+        {"poster_phone": phone, "status": {"$ne": "CANCELLED"}},
+        # Exclude inline base64 images (same reasoning as /loads/my/{phone}):
+        # each photo can be several MB, and the My Posts list only needs a
+        # count to render the photo badge, not the bytes themselves.
+        {"_id": 0, "expires_at": 0, "images": 0},
+    ).sort("posted_at", -1).limit(50)
+    loads = await cursor.to_list(length=50)
+
+    ids = [l["id"] for l in loads]
+    counts: dict = {}
+    if ids:
+        cursor2 = db.ptl_loads.aggregate([
+            {"$match": {"id": {"$in": ids}}},
+            {"$project": {"_id": 0, "id": 1, "image_count": {"$size": {"$ifNull": ["$images", []]}}}},
+        ])
+        async for d in cursor2:
+            counts[d["id"]] = d["image_count"]
+
+    # Flatten origin/destination so the frontend type matches PtlLoad
+    out = []
+    for l in loads:
+        o = l.get("origin") or {}
+        d = l.get("destination") or {}
+        out.append({
+            **{k: v for k, v in l.items() if k not in ("origin", "destination")},
+            "origin_locality": o.get("locality", ""),
+            "origin_city": o.get("city", ""),
+            "origin_state": o.get("state", ""),
+            "origin_pincode": o.get("pincode", ""),
+            "origin_latitude": o.get("latitude"),
+            "origin_longitude": o.get("longitude"),
+            "destination_locality": d.get("locality", ""),
+            "destination_city": d.get("city", ""),
+            "destination_state": d.get("state", ""),
+            "destination_pincode": d.get("pincode", ""),
+            "destination_latitude": d.get("latitude"),
+            "destination_longitude": d.get("longitude"),
+            "image_count": counts.get(l["id"], 0),
+        })
+    return out
+
+
+# ── DELETE a PTL load (hard delete) ────────────────────────────────────────
+# Hard-deletes the load row from the DB (matches truck-space DELETE behaviour)
+# and recomputes/cleans up the group it belonged to. Related bids for this
+# listing are also removed so they don't linger as orphans.
+@api_router.delete("/ptl/loads/{load_id}")
+async def cancel_ptl_load(load_id: str, phone: str):
+    load = await db.ptl_loads.find_one({"id": load_id})
+    if not load:
+        raise HTTPException(status_code=404, detail="Load not found")
+    if load["poster_phone"] != _norm_phone(phone):
+        raise HTTPException(status_code=403, detail="Not your load")
+
+    gid = load.get("group_id")
+
+    # Remove the load row itself (hard delete)
+    await db.ptl_loads.delete_one({"id": load_id})
+
+    # Clean up any bids placed on this listing
+    try:
+        await db.bids.delete_many({"listing_id": load_id})
+    except Exception:
+        pass
+
+    # Recompute group totals / clean up empty group
+    if gid:
+        g = await db.ptl_groups.find_one({"id": gid})
+        if g:
+            remaining_ids = [lid for lid in g.get("load_ids", []) if lid != load_id]
+            new_total = max(0.0, g["total_weight_kg"] - load["weight_kg"])
+            new_rem = max(0, TRUCK_CAPACITY_KG - new_total)
+            new_fill = (new_total / TRUCK_CAPACITY_KG * 100) if TRUCK_CAPACITY_KG else 0
+            if not remaining_ids:
+                # No members left — delete the group
+                await db.ptl_groups.delete_one({"id": gid})
+            else:
+                # Recompute cargo_categories from remaining loads
+                rem_loads = await db.ptl_loads.find(
+                    {"id": {"$in": remaining_ids}, "status": {"$ne": "CANCELLED"}},
+                    {"_id": 0, "cargo_category": 1},
+                ).to_list(length=50)
+                rem_cats = list({l["cargo_category"] for l in rem_loads})
+                # Solo listings only — remaining loads keep the group in
+                # FORMING status.
+                await db.ptl_groups.update_one(
+                    {"id": gid},
+                    {
+                        "$set": {
+                            "load_ids": remaining_ids,
+                            "total_weight_kg": new_total,
+                            "capacity_remaining_kg": new_rem,
+                            "fill_pct": round(min(new_fill, 999.9), 1),
+                            "status": "FORMING",
+                            "cargo_categories": rem_cats or g.get("cargo_categories", []),
+                        }
+                    },
+                )
+    return {"deleted": True}
+
+
+# ── GET all FORMING / FULL groups (for browsing in the market) ─────────────
+@api_router.get("/ptl/groups")
+async def list_ptl_groups(
+    origin_city: Optional[str] = None,
+    dest_city: Optional[str] = None,
+    viewer_phone: Optional[str] = None,
+):
+    viewer = _norm_phone(viewer_phone) if viewer_phone else ""
+    # Marketplace only surfaces FORMING groups — those still looking for a
+    # partner. PAIRED and CONFIRMED groups are private to their two members.
+    query: dict = {"status": "FORMING"}
+    if origin_city and dest_city:
+        query["corridor"] = f"{derive_corridor(origin_city)}→{derive_corridor(dest_city)}"
+    elif origin_city:
+        query["corridor"] = {"$regex": f"^{re.escape(derive_corridor(origin_city))}→", "$options": "i"}
+    elif dest_city:
+        query["corridor"] = {"$regex": f"→{re.escape(derive_corridor(dest_city))}$", "$options": "i"}
+
+    groups = await db.ptl_groups.find(query, {"_id": 0}).sort("created_at", -1).to_list(length=50)
+
+    out: List[dict] = []
+    for g in groups:
+        load_ids = g.get("load_ids", [])
+        members: List[dict] = []
+        if load_ids:
+            loads = await db.ptl_loads.find(
+                {"id": {"$in": load_ids}, "status": {"$ne": "CANCELLED"}},
+                {"_id": 0, "id": 1, "poster_name": 1, "poster_company": 1, "poster_phone": 1,
+                 "origin": 1, "destination": 1, "weight_kg": 1, "cargo_type": 1,
+                 "cargo_category": 1, "status": 1, "truck_type": 1, "loading_date": 1,
+                 "dimension_length": 1, "dimension_breadth": 1, "dimension_height": 1,
+                 "cargo_placement": 1, "images": 1},
+            ).to_list(length=20)
+            for l in loads:
+                o = l.get("origin") or {}
+                d = l.get("destination") or {}
+                poster_phone = l.get("poster_phone", "")
+                members.append({
+                    "load_id": l.get("id"),
+                    "name": l.get("poster_name", ""),
+                    "company": l.get("poster_company", ""),
+                    "origin_locality": o.get("locality", ""),
+                    "origin_city": o.get("city", ""),
+                    "origin_state": o.get("state", ""),
+                    "origin_pincode": o.get("pincode", ""),
+                    "destination_locality": d.get("locality", ""),
+                    "destination_city": d.get("city", ""),
+                    "destination_state": d.get("state", ""),
+                    "destination_pincode": d.get("pincode", ""),
+                    "weight_kg": l.get("weight_kg", 0),
+                    "cargo_type": l.get("cargo_type", ""),
+                    "cargo_category": l.get("cargo_category", ""),
+                    "confirmed": l.get("status") == "CONFIRMED",
+                    "truck_type": l.get("truck_type", ""),
+                    "loading_date": l.get("loading_date"),
+                    "dimension_length": l.get("dimension_length"),
+                    "dimension_breadth": l.get("dimension_breadth"),
+                    "dimension_height": l.get("dimension_height"),
+                    "cargo_placement": l.get("cargo_placement", ""),
+                    "images": l.get("images") or [],
+                    "phone": poster_phone,
+                    "is_me": (viewer and poster_phone == viewer) or False,
+                })
+        g_out = _strip_group_internals(g)
+        g_out["members"] = members
+        out.append(g_out)
+    return out
+
+
+# ── GET single group detail ────────────────────────────────────────────────
+@api_router.get("/ptl/groups/{group_id}")
+async def get_ptl_group(group_id: str, viewer_phone: Optional[str] = None, light: bool = False):
+    # `light=true` is used by screens (like My Posts) that batch-fetch many
+    # groups just to render a list/badge and don't need actual photo bytes —
+    # only whether photos exist. It excludes inline base64 `images` and
+    # returns `image_count` instead. Default (light unset) is unchanged so
+    # existing callers like the marketplace detail view / WhatsApp share
+    # links keep getting full images.
+    # Accept either the full `GRP-…` id or the 6-char short_id used by
+    # WhatsApp share links (`https://www.trucktraffic.in/a/{short_id}`).
+    g = await db.ptl_groups.find_one(
+        {"$or": [{"id": group_id}, {"short_id": group_id}]},
+        {"_id": 0},
+    )
+    if not g:
+        raise HTTPException(status_code=404, detail="Group not found")
+    viewer = _norm_phone(viewer_phone) if viewer_phone else ""
+    load_ids = g.get("load_ids", [])
+    loads = await db.ptl_loads.find(
+        {"id": {"$in": load_ids}, "status": {"$ne": "CANCELLED"}},
+        {"_id": 0, "images": 0} if light else {"_id": 0},
+    ).to_list(length=20) if load_ids else []
+
+    image_counts: dict = {}
+    if light and load_ids:
+        cursor2 = db.ptl_loads.aggregate([
+            {"$match": {"id": {"$in": load_ids}, "status": {"$ne": "CANCELLED"}}},
+            {"$project": {"_id": 0, "id": 1, "image_count": {"$size": {"$ifNull": ["$images", []]}}}},
+        ])
+        async for d in cursor2:
+            image_counts[d["id"]] = d["image_count"]
+    # Solo listings only — the poster's phone is exposed to the viewer once
+    # they open the detail (there is no "pair" gate anymore since matching
+    # was retired). This matches the behaviour of the list endpoint
+    # (`GET /api/ptl/groups`), which already returns `phone` publicly, so the
+    # website and app can render the "Call" button consistently on the
+    # adjustment-load detail page.
+    members: List[dict] = []
+    for l in loads:
+        members.append({
+            "load_id": l.get("id"),
+            "name": l.get("poster_name", ""),
+            "company": l.get("poster_company", ""),
+            "origin_locality": (l.get("origin") or {}).get("locality", ""),
+            "origin_city": (l.get("origin") or {}).get("city", ""),
+            "origin_state": (l.get("origin") or {}).get("state", ""),
+            "origin_pincode": (l.get("origin") or {}).get("pincode", ""),
+            "destination_locality": (l.get("destination") or {}).get("locality", ""),
+            "destination_city": (l.get("destination") or {}).get("city", ""),
+            "destination_state": (l.get("destination") or {}).get("state", ""),
+            "destination_pincode": (l.get("destination") or {}).get("pincode", ""),
+            "weight_kg": l.get("weight_kg", 0),
+            "cargo_type": l.get("cargo_type", ""),
+            "cargo_category": l.get("cargo_category", ""),
+            "confirmed": l.get("status") == "CONFIRMED",
+            "phone": l.get("poster_phone", ""),
+            "is_me": (viewer and l.get("poster_phone") == viewer) or False,
+            "truck_type": l.get("truck_type", ""),
+            "loading_date": l.get("loading_date"),
+            "dimension_length": l.get("dimension_length"),
+            "dimension_breadth": l.get("dimension_breadth"),
+            "dimension_height": l.get("dimension_height"),
+            "cargo_placement": l.get("cargo_placement", ""),
+            "images": [] if light else (l.get("images") or []),
+            "image_count": image_counts.get(l.get("id"), len(l.get("images") or [])),
+        })
+    g_out = _strip_group_internals(g)
+    g_out["members"] = members
+    # Surface the primary poster's contact on the group root as well, so
+    # clients that read `group.poster_phone` / `group.poster_name` directly
+    # (like the website's adjustment-load detail panel) can render the
+    # Call button without having to dig into `members[]`.
+    if loads:
+        primary_load = loads[0]
+        g_out.setdefault("poster_phone", primary_load.get("poster_phone", ""))
+        g_out.setdefault("poster_name", primary_load.get("poster_name", ""))
+        g_out.setdefault("poster_company", primary_load.get("poster_company", ""))
+    return g_out
+
+
+# ============================================================================
+# ===== Bids =====
+# ============================================================================
+# A bid is an offer placed by a non-poster user on a Truck Space (loads) or
+# Partial Load (ptl_loads) listing. The bid captures the bidder's intended
+# origin/destination/weight/cargo so the poster can compare each interested
+# party. Exactly one active bid per (bidder_phone, listing_id) — re-submitting
+# updates the existing record.
+
+class BidCreate(BaseModel):
+    listing_id: str
+    listing_type: str                 # "load" (truck space) | "ptl" (partial load)
+    bidder_phone: str
+    origin_locality: Optional[str] = ""
+    origin_city: Optional[str] = ""
+    origin_pincode: Optional[str] = ""
+    origin_latitude: Optional[float] = None
+    origin_longitude: Optional[float] = None
+    destination_locality: Optional[str] = ""
+    destination_city: Optional[str] = ""
+    destination_pincode: Optional[str] = ""
+    destination_latitude: Optional[float] = None
+    destination_longitude: Optional[float] = None
+    weight_tons: float
+    cargo_type: str
+
+
+async def _get_listing(listing_id: str, listing_type: str):
+    """Fetch the underlying listing doc and normalise its origin/destination
+    + poster_phone shape. Returns None if not found."""
+    if listing_type == "load":
+        doc = await db.loads.find_one({"id": listing_id}, {
+            "_id": 0, "id": 1, "poster_phone": 1,
+            "origin_locality": 1, "origin_city": 1, "origin_pincode": 1,
+            "origin_latitude": 1, "origin_longitude": 1,
+            "destination_locality": 1, "destination_city": 1, "destination_pincode": 1,
+            "destination_latitude": 1, "destination_longitude": 1,
+        })
+        if not doc:
+            return None
+        return {
+            "id": doc["id"],
+            "poster_phone": doc.get("poster_phone", ""),
+            "origin_locality": doc.get("origin_locality", ""),
+            "origin_city": doc.get("origin_city", ""),
+            "origin_pincode": doc.get("origin_pincode", ""),
+            "origin_latitude": doc.get("origin_latitude"),
+            "origin_longitude": doc.get("origin_longitude"),
+            "destination_locality": doc.get("destination_locality", ""),
+            "destination_city": doc.get("destination_city", ""),
+            "destination_pincode": doc.get("destination_pincode", ""),
+            "destination_latitude": doc.get("destination_latitude"),
+            "destination_longitude": doc.get("destination_longitude"),
+        }
+    if listing_type == "ptl":
+        doc = await db.ptl_loads.find_one({"id": listing_id}, {"_id": 0})
+        if not doc:
+            return None
+        o = doc.get("origin") or {}
+        d = doc.get("destination") or {}
+        return {
+            "id": doc["id"],
+            "poster_phone": doc.get("poster_phone", ""),
+            "origin_locality": o.get("locality", ""),
+            "origin_city": o.get("city", ""),
+            "origin_pincode": o.get("pincode", ""),
+            "origin_latitude": o.get("latitude"),
+            "origin_longitude": o.get("longitude"),
+            "destination_locality": d.get("locality", ""),
+            "destination_city": d.get("city", ""),
+            "destination_pincode": d.get("pincode", ""),
+            "destination_latitude": d.get("latitude"),
+            "destination_longitude": d.get("longitude"),
+        }
+    return None
+
+
+def _deviation_km(
+    bid_lat: Optional[float], bid_lon: Optional[float],
+    post_lat: Optional[float], post_lon: Optional[float],
+) -> Optional[float]:
+    """Straight-line distance between bid endpoint and post endpoint in km,
+    rounded to 1 decimal. Returns None when either side has no coordinates."""
+    if bid_lat is None or bid_lon is None or post_lat is None or post_lon is None:
+        return None
+    return round(haversine_km(bid_lat, bid_lon, post_lat, post_lon), 1)
+
+
+@api_router.post("/bids")
+async def create_or_update_bid(payload: BidCreate):
+    """Place (or replace) a bid on a Truck Space or Partial Load listing.
+    Enforces: one bid per (bidder_phone, listing_id); bidder cannot equal poster."""
+    bidder = _norm_phone(payload.bidder_phone)
+    if len(bidder) != 10:
+        raise HTTPException(status_code=400, detail="bidder_phone must be a 10-digit number")
+    if payload.listing_type not in ("load", "ptl"):
+        raise HTTPException(status_code=400, detail="listing_type must be 'load' or 'ptl'")
+    if payload.weight_tons <= 0:
+        raise HTTPException(status_code=400, detail="weight_tons must be > 0")
+    if not (payload.cargo_type or "").strip():
+        raise HTTPException(status_code=400, detail="cargo_type is required")
+
+    listing = await _get_listing(payload.listing_id, payload.listing_type)
+    if not listing:
+        raise HTTPException(status_code=404, detail="Listing not found")
+    if listing["poster_phone"] == bidder:
+        raise HTTPException(status_code=400, detail="You cannot bid on your own post")
+
+    # Look up bidder profile for display name / company
+    user = await db.users.find_one({"phone": bidder}, {"_id": 0, "name": 1, "company": 1})
+
+    origin_dev = _deviation_km(
+        payload.origin_latitude, payload.origin_longitude,
+        listing.get("origin_latitude"), listing.get("origin_longitude"),
+    )
+    dest_dev = _deviation_km(
+        payload.destination_latitude, payload.destination_longitude,
+        listing.get("destination_latitude"), listing.get("destination_longitude"),
+    )
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    bid_doc = {
+        "listing_id": payload.listing_id,
+        "listing_type": payload.listing_type,
+        "poster_phone": listing["poster_phone"],
+        "bidder_phone": bidder,
+        "bidder_name": (user or {}).get("name", ""),
+        "bidder_company": (user or {}).get("company", ""),
+        "origin_locality": payload.origin_locality or "",
+        "origin_city": payload.origin_city or "",
+        "origin_pincode": payload.origin_pincode or "",
+        "origin_latitude": payload.origin_latitude,
+        "origin_longitude": payload.origin_longitude,
+        "destination_locality": payload.destination_locality or "",
+        "destination_city": payload.destination_city or "",
+        "destination_pincode": payload.destination_pincode or "",
+        "destination_latitude": payload.destination_latitude,
+        "destination_longitude": payload.destination_longitude,
+        "weight_tons": payload.weight_tons,
+        "cargo_type": payload.cargo_type,
+        "origin_deviation_km": origin_dev,
+        "destination_deviation_km": dest_dev,
+        "updated_at": now_iso,
+    }
+
+    existing = await db.bids.find_one(
+        {"listing_id": payload.listing_id, "bidder_phone": bidder},
+        {"_id": 0, "id": 1, "created_at": 1},
+    )
+    if existing:
+        await db.bids.update_one(
+            {"listing_id": payload.listing_id, "bidder_phone": bidder},
+            {"$set": bid_doc},
+        )
+        bid_doc["id"] = existing["id"]
+        bid_doc["created_at"] = existing.get("created_at", now_iso)
+        return {**bid_doc, "updated": True}
+    bid_doc["id"] = str(uuid.uuid4())
+    bid_doc["created_at"] = now_iso
+    await db.bids.insert_one(bid_doc)
+    bid_doc.pop("_id", None)
+    return {**bid_doc, "updated": False}
+
+
+@api_router.get("/bids/check")
+async def check_bid(viewer_phone: str, listing_id: str):
+    """Has this viewer already bid on this listing?"""
+    v = _norm_phone(viewer_phone)
+    if len(v) != 10:
+        return {"bid_placed": False}
+    doc = await db.bids.find_one(
+        {"listing_id": listing_id, "bidder_phone": v},
+        {"_id": 0},
+    )
+    return {"bid_placed": bool(doc), "bid": doc}
+
+
+@api_router.get("/bids/listing/{listing_id}")
+async def list_bids_for_listing(listing_id: str, viewer_phone: str):
+    """Return all bids for a listing. Only the listing's poster can view."""
+    v = _norm_phone(viewer_phone)
+    if len(v) != 10:
+        raise HTTPException(status_code=400, detail="viewer_phone must be 10 digits")
+    # Find the listing across both collections to verify ownership
+    load = await db.loads.find_one({"id": listing_id}, {"_id": 0, "poster_phone": 1})
+    ptl = None
+    if not load:
+        ptl = await db.ptl_loads.find_one({"id": listing_id}, {"_id": 0, "poster_phone": 1})
+    if not load and not ptl:
+        raise HTTPException(status_code=404, detail="Listing not found")
+    owner = (load or ptl).get("poster_phone", "")
+    if owner != v:
+        raise HTTPException(status_code=403, detail="Only the post owner can view bids")
+    cursor = db.bids.find({"listing_id": listing_id}, {"_id": 0}).sort("created_at", -1)
+    out = await cursor.to_list(length=500)
+    return out
+
+
+@api_router.get("/bids/counts/{phone}")
+async def bid_counts_for_my_posts(phone: str):
+    """Count of bids per listing for posts owned by `phone`.
+    Returns {listing_id: count}. Used by My Posts to show a badge on each post."""
+    p = _norm_phone(phone)
+    if len(p) != 10:
+        return {}
+    pipeline = [
+        {"$match": {"poster_phone": p}},
+        {"$group": {"_id": "$listing_id", "count": {"$sum": 1}}},
+    ]
+    out: dict = {}
+    async for row in db.bids.aggregate(pipeline):
+        out[row["_id"]] = row["count"]
+    return out
+
+
+@api_router.delete("/bids/{listing_id}")
+async def withdraw_bid(listing_id: str, phone: str):
+    """A bidder withdraws their bid from a listing."""
+    p = _norm_phone(phone)
+    if len(p) != 10:
+        raise HTTPException(status_code=400, detail="phone must be 10 digits")
+    res = await db.bids.delete_one({"listing_id": listing_id, "bidder_phone": p})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="No bid to withdraw")
+    return {"withdrawn": True}
+
+
+# ── Temporary: download the updated website HTML ───────────────────────────
+@api_router.get("/download/website")
+async def download_website():
+    from fastapi.responses import FileResponse
+    path = "/app/website.html"
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(path, media_type="text/html", filename="index.html")
+
+
 app.include_router(api_router)
 
 app.add_middleware(
@@ -1225,9 +2146,38 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup():
     """Ensure indexes exist on startup. Idempotent — safe to run every time."""
+    global http_client, http_client_insecure
+    http_client = httpx.AsyncClient(timeout=10.0)
+    http_client_insecure = httpx.AsyncClient(timeout=10.0, verify=False)
     try:
         await db.loads.create_index("short_id", unique=True, sparse=True, background=True)
         await db.loads.create_index("id", unique=True, background=True)
+        # PTL indexes
+        await db.ptl_loads.create_index([("poster_phone", 1), ("status", 1)], background=True)
+        await db.ptl_loads.create_index([("group_id", 1)], background=True)
+        await db.ptl_loads.create_index([("status", 1), ("posted_at", -1)], background=True)
+        await db.ptl_loads.create_index("id", unique=True, background=True)
+        await db.ptl_groups.create_index([("corridor", 1), ("status", 1)], background=True)
+        await db.ptl_groups.create_index([("status", 1), ("fill_pct", -1)], background=True)
+        await db.ptl_groups.create_index("id", unique=True, background=True)
+        await db.ptl_groups.create_index("short_id", unique=True, sparse=True, background=True)
+        # Backfill short_id on existing groups (idempotent — only touches docs missing it)
+        try:
+            missing = db.ptl_groups.find(
+                {"$or": [{"short_id": None}, {"short_id": {"$exists": False}}]},
+                {"_id": 0, "id": 1},
+            )
+            async for g in missing:
+                sid = await _unique_ptl_group_short_id()
+                await db.ptl_groups.update_one({"id": g["id"]}, {"$set": {"short_id": sid}})
+        except Exception as e:
+            logger.warning(f"PTL group short_id backfill skipped: {e}")
+        # TTL — auto-delete expired PTL loads (expires_at is a BSON Date)
+        await db.ptl_loads.create_index([("expires_at", 1)], expireAfterSeconds=0, background=True)
+        # Bids — one bid per (bidder, listing); lookup by listing and by poster
+        await db.bids.create_index([("listing_id", 1), ("bidder_phone", 1)], unique=True, background=True)
+        await db.bids.create_index([("poster_phone", 1)], background=True)
+        await db.bids.create_index([("listing_id", 1), ("created_at", -1)], background=True)
         logger.info("MongoDB indexes ensured on startup.")
     except Exception as e:
         logger.warning(f"Index creation on startup failed (non-fatal): {e}")
@@ -1235,4 +2185,6 @@ async def startup():
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
+    await http_client.aclose()
+    await http_client_insecure.aclose()
     client.close()
