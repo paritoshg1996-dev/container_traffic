@@ -143,7 +143,7 @@ class LoadCreate(BaseModel):
     destination_eloc: Optional[str] = ""
     cargo_types: List[str] = []
     cargo_placement: str = ""
-    truck_type: str = ""
+    truck_type: str = ""   # container type: "20ft" / "40ft" / "40HC"
     weight_tons: float
     space_cuft: Optional[float] = None
     dimension_length: Optional[float] = None
@@ -1358,18 +1358,32 @@ async def verify_firebase_token(payload: VerifyTokenRequest):
 
 
 # ============================================================================
-# ===== PTL (Partial Truck Load) Consolidation =====
+# ===== Container LCL Consolidation =====
 # ============================================================================
-# Multiple shippers with small loads on the same route are grouped together
-# to fill a single 40ft truck (20,000 kg), splitting cost proportionally.
+# Shippers with less-than-container-load (LCL) cargo on the same route post
+# against a container; capacity below is tracked per-listing so multiple
+# small shippers can see how much of that container is already spoken for.
+#
+# NOTE: removed the old CARGO_COMPATIBILITY dict here — it was defined but
+# never referenced anywhere (matching is manual: browse + call/bid, not an
+# automated compatibility check), so it was dead code.
 
-CARGO_COMPATIBILITY = {
-    "GENERAL":    ["GENERAL", "FMCG", "AUTO_PARTS", "TEXTILES"],
-    "FRAGILE":    ["FRAGILE", "GENERAL"],
-    "HAZMAT":     ["HAZMAT"],
-    "PERISHABLE": ["PERISHABLE"],
+# Approximate standard payload capacities (kg) by ISO container type. These
+# vary by manufacturer, container age/condition and the gross-weight rating
+# of the specific unit/line — treat as a sensible default, not a certified
+# figure; verify against your CFS/carrier tariff before enforcing hard limits.
+CONTAINER_CAPACITY_KG = {
+    "20ft": 21700,
+    "40ft": 26730,
+    "40HC": 26500,
 }
-TRUCK_CAPACITY_KG = 20000        # one truck's max payload (single-load cap only)
+DEFAULT_CONTAINER_CAPACITY_KG = 26730   # fallback: standard 40ft payload
+
+
+def resolve_container_capacity_kg(container_type: Optional[str]) -> float:
+    """Look up max payload (kg) for a container type, falling back to the
+    40ft default when the type is missing or unrecognised."""
+    return CONTAINER_CAPACITY_KG.get((container_type or "").strip(), DEFAULT_CONTAINER_CAPACITY_KG)
 
 
 class PtlLoadPost(BaseModel):
@@ -1389,7 +1403,9 @@ class PtlLoadPost(BaseModel):
     cargo_type: str          # e.g. "Bags", "Carton Box", "Drums"
     cargo_category: str      # "GENERAL" | "FRAGILE" | "HAZMAT" | "PERISHABLE"
     weight_kg: float
-    truck_type: Optional[str] = ""   # preferred truck: Open / Container / Trailer
+    truck_type: Optional[str] = ""   # container type: "20ft" / "40ft" / "40HC"
+                                      # (field name kept as truck_type — an
+                                      # API/DB rename wasn't in scope for this pass)
     loading_date: Optional[str] = None   # YYYY-MM-DD
     ready_date: Optional[str] = None     # legacy alias for loading_date
     # Optional details (collapsible section in the UI)
@@ -1449,6 +1465,7 @@ async def _create_solo_ptl_group(new_load: dict) -> str:
     now_iso = datetime.now(timezone.utc).isoformat()
     gid = f"GRP-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{new_load['poster_phone'][-4:]}-{_gen_short_id(4)}"
     short_id = await _unique_ptl_group_short_id()
+    cap_kg = resolve_container_capacity_kg(new_load.get("truck_type"))
     group_doc = {
         "id": gid,
         "short_id": short_id,
@@ -1461,9 +1478,9 @@ async def _create_solo_ptl_group(new_load: dict) -> str:
         "dest_lon": new_load["destination"].get("longitude"),
         "load_ids": [new_load["id"]],
         "total_weight_kg": new_load["weight_kg"],
-        "capacity_kg": TRUCK_CAPACITY_KG,
-        "capacity_remaining_kg": max(0, TRUCK_CAPACITY_KG - new_load["weight_kg"]),
-        "fill_pct": round(min(new_load["weight_kg"] / TRUCK_CAPACITY_KG * 100, 999.9), 1),
+        "capacity_kg": cap_kg,
+        "capacity_remaining_kg": max(0, cap_kg - new_load["weight_kg"]),
+        "fill_pct": round(min(new_load["weight_kg"] / cap_kg * 100, 999.9), 1),
         "cargo_categories": [new_load["cargo_category"]],
         "status": "FORMING",
         "created_at": now_iso,
@@ -1484,8 +1501,12 @@ async def post_ptl_load(payload: PtlLoadPost):
         raise HTTPException(status_code=400, detail="poster_phone must be a 10-digit number")
     if payload.weight_kg <= 0:
         raise HTTPException(status_code=400, detail="weight_kg must be > 0")
-    if payload.weight_kg > TRUCK_CAPACITY_KG:
-        raise HTTPException(status_code=400, detail=f"weight_kg cannot exceed {TRUCK_CAPACITY_KG} kg (one full truck)")
+    max_kg = resolve_container_capacity_kg(payload.truck_type)
+    if payload.weight_kg > max_kg:
+        raise HTTPException(
+            status_code=400,
+            detail=f"weight_kg cannot exceed {max_kg:.0f} kg (max payload for a {payload.truck_type or '40ft'} container)",
+        )
     # cargo_category is accepted as-is (raw cargo type e.g. "Bags", "Drums",
     # "Pipes", "Carton Box", "Fresh Produce", "Others: <text>"). No
     # recategorisation is performed.
@@ -1644,8 +1665,9 @@ async def cancel_ptl_load(load_id: str, phone: str):
         if g:
             remaining_ids = [lid for lid in g.get("load_ids", []) if lid != load_id]
             new_total = max(0.0, g["total_weight_kg"] - load["weight_kg"])
-            new_rem = max(0, TRUCK_CAPACITY_KG - new_total)
-            new_fill = (new_total / TRUCK_CAPACITY_KG * 100) if TRUCK_CAPACITY_KG else 0
+            cap_kg = g.get("capacity_kg") or DEFAULT_CONTAINER_CAPACITY_KG
+            new_rem = max(0, cap_kg - new_total)
+            new_fill = (new_total / cap_kg * 100) if cap_kg else 0
             if not remaining_ids:
                 # No members left — delete the group
                 await db.ptl_groups.delete_one({"id": gid})
