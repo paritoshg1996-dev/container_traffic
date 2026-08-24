@@ -116,8 +116,17 @@ function isRouteInfoValid(pin: string, info: any, requireValidFlag: boolean = fa
   return (info.latitude != null && info.longitude != null) || !!(info.city || info.locality || info.placeName);
 }
 
-const TRUCK_CAPACITY_KG = 20000;
-const PTL_CARGO_TYPES = ["Bags", "Carton Box", "Drums", "Loose", "Others"];
+// Approximate standard payload capacities (kg) by ISO container type — mirrors
+// backend/server.py's CONTAINER_CAPACITY_KG. Verify against your CFS/carrier
+// tariff before relying on these for anything beyond a UI estimate.
+const CONTAINER_CAPACITY_KG: Record<string, number> = { "20ft": 21700, "40ft": 26730, "40HC": 26500 };
+const DEFAULT_CONTAINER_CAPACITY_KG = 26730; // fallback: standard 40ft payload
+function resolveContainerCapacityKg(containerType?: string | null): number {
+  return CONTAINER_CAPACITY_KG[(containerType || "").trim()] ?? DEFAULT_CONTAINER_CAPACITY_KG;
+}
+// NOTE: PTL_CARGO_TYPES was removed here — it was defined but never
+// referenced anywhere else in the file (CARGO_TYPE_OPTIONS below is the
+// array actually used by every cargo-type picker).
 
 // Phone-auth storage keys
 const PROFILE_KEY = "profile";
@@ -180,10 +189,13 @@ const CARGO_TYPE_OPTIONS = [
   { key: "Fresh Produce", label: "Fresh Produce", image: require("../assets/images/cargo_produce.png") },
   { key: "Others",        label: "Others",        image: require("../assets/images/cargo_others.png") },
 ];
-const TRUCK_TYPES: { name: string; image: any }[] = [
-  { name: "Open", image: require("../assets/trucks/open.png") },
-  { name: "Container", image: require("../assets/trucks/container.png") },
-  { name: "Trailer", image: require("../assets/trucks/trailer.png") },
+// TODO(assets): these three still point at the old open/container/trailer
+// truck images as placeholders so the picker keeps 3 visually distinct
+// options — swap in real 20ft/40ft/40HC container artwork before shipping.
+const CONTAINER_TYPES: { name: string; image: any }[] = [
+  { name: "20ft", image: require("../assets/trucks/open.png") },
+  { name: "40ft", image: require("../assets/trucks/container.png") },
+  { name: "40HC", image: require("../assets/trucks/trailer.png") },
 ];
 
 type Profile = { name: string; phone: string; company: string; profile_verified?: boolean; verification_submitted?: boolean };
@@ -1434,9 +1446,9 @@ if (!destValid)
               </TouchableOpacity>
             </View>
 
-            <SectionTitle icon="bus-outline" title="Truck Type" />
+            <SectionTitle icon="cube-outline" title="Container Type" />
             <View style={styles.truckRow}>
-              {TRUCK_TYPES.map((t) => {
+              {CONTAINER_TYPES.map((t) => {
                 const on = truckType === t.name;
                 return (
                   <TouchableOpacity key={t.name} onPress={() => setTruckType(t.name)} style={[styles.truckCard, on && styles.truckCardOn, on && styles.filledBorderBlue]} activeOpacity={0.7}>
@@ -2191,7 +2203,7 @@ if (pricePerTon && parseInt(pricePerTon, 10) > 10000) return Alert.alert("Price 
           `📍 ${dLocClean || dCityClean || destPin}` +
           (dCityClean && dAbbr ? `\n   ${dCityClean}, ${dAbbr}` : (dCityClean ? `\n   ${dCityClean}` : (dAbbr ? `\n   ${dAbbr}` : ""))) +
           `\n   ${destPin}`;
-        const truckLabelPost = truckType === "Open" ? "Open Truck" : truckType === "Container" ? "Container Truck" : truckType === "Trailer" ? "Trailer Truck" : truckType;
+        const truckLabelPost = truckType === "20ft" ? "20ft Container" : truckType === "40ft" ? "40ft Container" : truckType === "40HC" ? "40HC Container" : truckType;
         const poArea = oLocClean || oCityClean || originPin;
         const poCity = oCityClean && oCityClean !== oLocClean ? `, ${oCityClean}` : "";
         const poState = oAbbr ? `, ${oAbbr}` : "";
@@ -2395,9 +2407,9 @@ return (
           </TouchableOpacity>
         </Modal>
 
-        <SectionTitle icon="bus-outline" title="Truck Type" />
+        <SectionTitle icon="cube-outline" title="Container Type" />
         <View style={styles.truckRow} testID="truck-types-row">
-          {TRUCK_TYPES.map((t) => {
+          {CONTAINER_TYPES.map((t) => {
             const on = truckType === t.name;
             return (
               <TouchableOpacity key={t.name} testID={`truck-type-${t.name.replace(/\s+/g, "-")}`} onPress={() => setTruckType(t.name)} style={[styles.truckCard, on && styles.truckCardOn, on && styles.filledBorderBlue]} activeOpacity={0.7}>
@@ -4118,7 +4130,7 @@ function buildPtlShareText(primary: PtlMember | undefined, group: PtlGroup, shar
   const pdState = dAbbr ? `, ${dAbbr}` : "";
   const postOriginLabel = poArea ? `📍 From: ${poArea}${poCity}${poState}${primary?.origin_pincode ? `, ${primary.origin_pincode}` : ""}` : `📍 Route: ${group.origin_display} → ${group.destination_display}`;
   const postDestLabel   = poArea ? `📍 To: ${pdArea}${pdCity}${pdState}${primary?.destination_pincode ? `, ${primary.destination_pincode}` : ""}` : "";
-  const truckLabel = primary?.truck_type === "Open" ? "Open Truck" : primary?.truck_type === "Container" ? "Container Truck" : primary?.truck_type === "Trailer" ? "Trailer Truck" : primary?.truck_type;
+  const truckLabel = primary?.truck_type === "20ft" ? "20ft Container" : primary?.truck_type === "40ft" ? "40ft Container" : primary?.truck_type === "40HC" ? "40HC Container" : primary?.truck_type;
   const loadingDateStr = primary?.loading_date
     ? (() => { try { return new Date(primary.loading_date as string).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }); } catch { return primary.loading_date as string; } })()
     : null;
@@ -4164,7 +4176,7 @@ function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhon
       `📍 ${dLocClean || dCityClean || load.destination_pincode}` +
       (dCityClean && dAbbr ? `\n   ${dCityClean}, ${dAbbr}` : (dCityClean ? `\n   ${dCityClean}` : (dAbbr ? `\n   ${dAbbr}` : ""))) +
       `\n   ${load.destination_pincode}`;
-    const truckLabelCard = load.truck_type === "Open" ? "Open Truck" : load.truck_type === "Container" ? "Container Truck" : load.truck_type === "Trailer" ? "Trailer Truck" : load.truck_type;
+    const truckLabelCard = load.truck_type === "20ft" ? "20ft Container" : load.truck_type === "40ft" ? "40ft Container" : load.truck_type === "40HC" ? "40HC Container" : load.truck_type;
     const oArea = oLocClean || oCityClean || load.origin_pincode;
     const oPin = load.origin_pincode;
     const dArea = dLocClean || dCityClean || load.destination_pincode;
@@ -4192,7 +4204,7 @@ function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhon
   };
    const dateStr = useMemo(() => { try { return new Date(load.loading_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }); } catch { return load.loading_date; } }, [load.loading_date]);
 
-  const truckImg = TRUCK_TYPES.find(t => t.name === load.truck_type)?.image;
+  const truckImg = CONTAINER_TYPES.find(t => t.name === load.truck_type)?.image;
 
   return (
     <TouchableOpacity activeOpacity={0.92} onPress={() => setShowDetail(true)} testID={`load-card-${load.id}`}>
@@ -4355,7 +4367,9 @@ type Bid = {
   updated_at: string;
 };
 
-const BID_CARGO_TYPES = ["Bags", "Carton Box", "Pipes", "Drums", "Fresh Produce", "Others"];
+// Was a hand-duplicated copy of CARGO_TYPE_OPTIONS's keys (same 6 values) —
+// derived instead so the two can't drift apart when cargo types change.
+const BID_CARGO_TYPES = CARGO_TYPE_OPTIONS.map(o => o.key);
 
 // ============== BidFormModal ==============
 // Small bottom-sheet form that lets a non-poster offer a bid on a listing.
@@ -4775,7 +4789,7 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
     const cD = sanitizeCityForDisplay(l.destination_city || "", l.destination_pincode || "", stD);
     const hasDim = l.dimension_length || l.dimension_breadth || l.dimension_height;
     const dimStr = hasDim ? `${l.dimension_length || "-"} × ${l.dimension_breadth || "-"} × ${l.dimension_height || "-"} ft` : null;
-    const truckImg = TRUCK_TYPES.find(t => t.name === l.truck_type)?.image;
+    const truckImg = CONTAINER_TYPES.find(t => t.name === l.truck_type)?.image;
     const imageCount = l.image_count || 0;
     const hasInlineImages = l.images && l.images.length > 0;
     const viewerImages: string[] = hasInlineImages
@@ -4809,7 +4823,7 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
           <Text style={detailStyles.sectionTitle}>Truck Details</Text>
           <DetailRow icon="calendar-outline" label="Loading Date" value={dateStr} />
           <DetailRow icon="barbell-outline" label="Weight" value={`${l.weight_tons} Tons free`} />
-          {l.truck_type ? <DetailRow icon="car-outline" label="Truck Type" value={l.truck_type} truckImg={truckImg} /> : null}
+          {l.truck_type ? <DetailRow icon="cube-outline" label="Container Type" value={l.truck_type} truckImg={truckImg} /> : null}
           {dimStr ? <DetailRow icon="resize-outline" label="Dimensions (L×B×H)" value={dimStr} /> : null}
           {l.cargo_placement ? <DetailRow icon="layers-outline" label="Cargo Placement" value={l.cargo_placement} /> : null}
           {(l.cargo_types || []).filter(Boolean).length > 0 ? <DetailRow icon="cube-outline" label="Cargo Types" value={(l.cargo_types || []).map((c: string) => c.startsWith("Others:") ? c.slice(8).trim() : c).join(", ")} /> : null}
@@ -4869,7 +4883,7 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
     const dateStr = primary?.loading_date ? (() => { try { return new Date(primary.loading_date as string).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }); } catch { return primary.loading_date; } })() : null;
     const hasDim = primary?.dimension_length || primary?.dimension_breadth || primary?.dimension_height;
     const dimStr = hasDim ? `${primary?.dimension_length || "-"} × ${primary?.dimension_breadth || "-"} × ${primary?.dimension_height || "-"} ft` : null;
-    const truckImg = TRUCK_TYPES.find(t => t.name === primary?.truck_type)?.image;
+    const truckImg = CONTAINER_TYPES.find(t => t.name === primary?.truck_type)?.image;
     const viewerImages: string[] = primary?.images && primary.images.length > 0 ? primary.images : [];
     return (
       <>
@@ -4900,7 +4914,7 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
           {dateStr ? <DetailRow icon="calendar-outline" label="Loading Date" value={dateStr} /> : null}
           <DetailRow icon="barbell-outline" label="Weight" value={`${(weightKg / 1000).toFixed(1)} Tons posted`} />
           {cargoLabel ? <DetailRow icon="cube-outline" label="Cargo Type" value={cargoLabel} /> : null}
-          {primary?.truck_type ? <DetailRow icon="car-outline" label="Truck Type" value={primary.truck_type} truckImg={truckImg} /> : null}
+          {primary?.truck_type ? <DetailRow icon="cube-outline" label="Container Type" value={primary.truck_type} truckImg={truckImg} /> : null}
           {dimStr ? <DetailRow icon="resize-outline" label="Dimensions (L×B×H)" value={dimStr} /> : null}
           {primary?.cargo_placement ? <DetailRow icon="layers-outline" label="Cargo Placement" value={primary.cargo_placement} /> : null}
         </View>
@@ -4965,7 +4979,7 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
         const dCityClean = sanitizeCityForDisplay(load.destination_city || "", load.destination_pincode || "", dStateName);
         const oAbbr = stateAbbr(oStateName);
         const dAbbr = stateAbbr(dStateName);
-        const truckLabelDetail = load.truck_type === "Open" ? "Open Truck" : load.truck_type === "Container" ? "Container Truck" : load.truck_type === "Trailer" ? "Trailer Truck" : load.truck_type;
+        const truckLabelDetail = load.truck_type === "20ft" ? "20ft Container" : load.truck_type === "40ft" ? "40ft Container" : load.truck_type === "40HC" ? "40HC Container" : load.truck_type;
         const oArea = oLocClean || oCityClean || load.origin_pincode;
         const dArea = dLocClean || dCityClean || load.destination_pincode;
         const oCity = oCityClean && oCityClean !== oLocClean ? `, ${oCityClean}` : "";
@@ -6447,13 +6461,13 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
             <CollapsibleSection
               accentColor={COLORS.secondary}
               accentBg="#FFF4EE"
-              icon="bus-outline"
-              title="Truck Preference"
+              icon="cube-outline"
+              title="Container Preference"
               summary={truckType}
               testID="ptl-opt-truck"
             >
               <View style={styles.truckRow} testID="ptl-truck-row">
-                {TRUCK_TYPES.map((t) => {
+                {CONTAINER_TYPES.map((t) => {
                   const on = truckType === t.name;
                   return (
                     <TouchableOpacity
@@ -6815,7 +6829,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
       const postOriginLabel = `📍 From: ${poArea}${poCity}${poState}${originPin ? `, ${originPin}` : ""}`;
       const postDestLabel   = `📍 To: ${pdArea}${pdCity}${pdState}${destPin ? `, ${destPin}` : ""}`;
       const cargoDisplay = cargoTypeFinal.replace(/^Others:\s*/, "");
-      const truckLabelPost = truckType === "Open" ? "Open Truck" : truckType === "Container" ? "Container Truck" : truckType === "Trailer" ? "Trailer Truck" : truckType;
+      const truckLabelPost = truckType === "20ft" ? "20ft Container" : truckType === "40ft" ? "40ft Container" : truckType === "40HC" ? "40HC Container" : truckType;
 
       const waText =
         `📦 *Partial Load Available - Truck Traffic*\n\n` +
@@ -7145,13 +7159,13 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
         <CollapsibleSection
           accentColor={COLORS.secondary}
           accentBg="#FFF4EE"
-          icon="bus-outline"
-          title="Truck Preference"
+          icon="cube-outline"
+          title="Container Preference"
           summary={truckType}
           testID="ptl-opt-truck"
         >
           <View style={styles.truckRow} testID="ptl-truck-row">
-            {TRUCK_TYPES.map((t) => {
+            {CONTAINER_TYPES.map((t) => {
               const on = truckType === t.name;
               return (
                 <TouchableOpacity
@@ -7291,8 +7305,8 @@ function ptlLoadToGroup(
     destination_display: item.destination_locality || item.destination_city || "",
     load_ids: [item.id],
     total_weight_kg: item.weight_kg,
-    capacity_kg: TRUCK_CAPACITY_KG,
-    capacity_remaining_kg: TRUCK_CAPACITY_KG - item.weight_kg,
+    capacity_kg: resolveContainerCapacityKg(item.truck_type),
+    capacity_remaining_kg: resolveContainerCapacityKg(item.truck_type) - item.weight_kg,
     fill_pct: 0,
     cargo_categories: item.cargo_type ? [item.cargo_type] : [],
     status: "FORMING",
