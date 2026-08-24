@@ -1,0 +1,33 @@
+{
+  "summary": "Backend-only verification of the UN/LOCODE (world sea ports + India ICD) migration. New pytest suite /app/backend/tests/test_unlocode_ports.py — 19 tests, all PASS against the public preview backend (https://ports-exact-match.preview.emergentagent.com/api). Verified: POST /api/loads stores UN/LOCODE in origin/destination_pincode and leaves all 4 lat/lon fields null (no server geocoding), client-sent coords pass through verbatim; GET /api/loads?origin=INNSA&destination=SGSIN returns ONLY exact origin+destination matches (INMAA->NLRTM and INNSA->NLRTM correctly excluded), origin-only filter works, unknown codes return [], _id excluded, images stripped with image_count computed, past loading_date (2020-01-01) load is purged from DB by the list endpoint; PATCH /api/loads/{id} updating origin/destination pincode+locality returns 200 with lat/lon still null (no geocode backfill), 404 for unknown id, 400 for empty body; PTL POST /api/ptl/loads (INNSA/SGSIN) creates a solo FORMING group with corridor 'INNSA→SGSIN', origin_display = port name (locality), pincodes stored as UN/LOCODE with null coords; GET /api/ptl/groups?origin_city=INNSA&dest_city=SGSIN&viewer_phone=... returns the group with members carrying UN/LOCODEs and is_me=true, INMAA/NLRTM returns 0 groups, lowercase query still matches (derive_corridor uppercases), origin-only prefix regex matches, DELETE /api/ptl/loads removes it from the marketplace. Bonus regression: placing a bid on a coordinate-less UN/LOCODE load succeeds (deviation logic degrades to null, no 500). No 5xx or exceptions in backend logs. All test data (phones 9000000123/9000000124) cleaned up.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/loads", "issue": "Filter is case-SENSITIVE (origin=innsa&destination=sgsin returns []) whereas PTL /api/ptl/groups uppercases via derive_corridor(). create_load also stores origin_pincode verbatim without .upper(). If any client path ever sends a lowercase/whitespace-padded code, Find-Space search silently returns 0 results. Recommend normalising (.strip().upper()) on both write (create_load/update_load) and read (list_loads)."},
+      {"endpoint": "POST /api/loads", "issue": "No validation on origin_pincode/destination_pincode format — any string (e.g. 'ZZZZZ', '', '400001') is accepted as a UN/LOCODE. Consider a 5-char alpha regex or validation against the local port dataset so stale 6-digit pincode clients fail loudly instead of creating unmatchable listings."},
+      {"endpoint": "GET /api/loads", "issue": "Side effect on a read: every list call runs db.loads.delete_many({loading_date: {$lt: today}}). Works, but a GET mutating data is risky (concurrent reads all issue deletes) — better as a TTL index or a scheduled job."},
+      {"endpoint": "POST /api/bids", "issue": "deviation_km is now permanently null for load/PTL listings because coordinates are no longer populated (haversine/_deviation_km is effectively dead code for this flow). Verify the UI does not show an empty/blank 'deviation' field; consider removing the feature or deriving distance from the port dataset."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": ["/app/backend/tests/test_unlocode_ports.py", "/app/test_reports/pytest/unlocode_results.xml"],
+  "action_items": [
+    "Decide on UN/LOCODE case normalisation for /api/loads (write + read) so it matches PTL corridor behaviour.",
+    "Optionally validate UN/LOCODE format on POST/PATCH /api/loads.",
+    "Confirm the bid 'deviation_km' UI handles a permanent null now that geocoding is gone."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 2077 lines — well past the 700-line guideline; split loads/PTL/bids/users/geocode into routers.",
+    "Dead/legacy geocoding surface remains: /api/geocode/{pincode}, /api/geocode-city/{city}, /api/testgeocode, /api/mappls* and _geocode_pincode_core are no longer used by the load/PTL flows. Remove or clearly mark as legacy to avoid confusion (and note /app/backend/tests/test_geocode_filter.py still tests the old proximity behaviour and is now stale).",
+    "list_loads deletes documents inside a GET handler — prefer a MongoDB TTL/expiry field or background job.",
+    "derive_corridor() is the single normalisation point for PTL but loads use raw equality; centralise a normalise_locode() helper used by both."
+  ],
+  "updated_files": ["/app/backend/tests/test_unlocode_ports.py (new)"],
+  "success_rate": {"backend": "100% (19/19)", "frontend": "not tested (React Native — out of scope)"},
+  "seed_data_creation": "Temporary loads/PTL load/users/bid for phones 9000000123 and 9000000124 (INNSA/SGSIN, INMAA/NLRTM, INNSA/NLRTM, INMAA/SGSIN). All deleted in module teardown; DB verified empty of test rows after run.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "/app/memory/test_credentials.md does NOT exist (only PRD.md in /app/memory). No credentials needed for these endpoints; Firebase auth endpoints skipped (service account missing, expected).",
+  "context_for_next_testing_agent": "Use /app/backend/tests/test_unlocode_ports.py as the regression suite for the UN/LOCODE ports change (BASE_URL from EXPO_PUBLIC_BACKEND_URL, defaults to the preview URL; container date is 2026-08-24 so loading_date must be in the future, e.g. 2026-12-01). /app/backend/tests/test_geocode_filter.py is STALE (asserts removed proximity/geocode behaviour) — do not treat its failures as new regressions. Firebase-auth-dependent endpoints remain untestable (no service account).",
+  "rca_of_the_issue": "N/A — no defects reproduced. The reported behaviours (no geocoding, exact UN/LOCODE matching, UN/LOCODE corridors) all confirmed at API and DB level."
+}

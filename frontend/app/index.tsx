@@ -22,6 +22,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { rs, rf } from "../theme/responsive";
+import { searchPorts } from "../data/ports";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
@@ -1337,14 +1338,10 @@ if (!destValid)
         origin_pincode: originPin, origin_locality: originInfo?.locality || "", origin_city: originInfo?.city || "", origin_state: originInfo?.state || "",
         origin_place_name: originInfo?.placeName || "",
         origin_full_address: originInfo?.fullAddress || "",
-        origin_latitude: originInfo?.latitude ?? null,
-        origin_longitude: originInfo?.longitude ?? null,
         origin_eloc: originInfo?.eLoc || "",
         destination_pincode: destPin, destination_locality: destInfo?.locality || "", destination_city: destInfo?.city || "", destination_state: destInfo?.state || "",
         destination_place_name: destInfo?.placeName || "",
         destination_full_address: destInfo?.fullAddress || "",
-        destination_latitude: destInfo?.latitude ?? null,
-        destination_longitude: destInfo?.longitude ?? null,
         destination_eloc: destInfo?.eLoc || "",
         cargo_placement: placement, truck_type: truckType, weight_tons: weight, space_cuft: null,
         dimension_length: lengthVal, dimension_breadth: breadthVal, dimension_height: heightVal, price_per_ton: priceVal,
@@ -2159,14 +2156,10 @@ if (pricePerTon && parseInt(pricePerTon, 10) > 10000) return Alert.alert("Price 
         origin_pincode: originPin, origin_locality: originInfo?.locality || "", origin_city: originInfo?.city || "", origin_state: originInfo?.state || "",
         origin_place_name: originInfo?.placeName || "",
         origin_full_address: originInfo?.fullAddress || "",
-        origin_latitude: originInfo?.latitude ?? null,
-        origin_longitude: originInfo?.longitude ?? null,
         origin_eloc: originInfo?.eLoc || "",
         destination_pincode: destPin, destination_locality: destInfo?.locality || "", destination_city: destInfo?.city || "", destination_state: destInfo?.state || "",
         destination_place_name: destInfo?.placeName || "",
         destination_full_address: destInfo?.fullAddress || "",
-        destination_latitude: destInfo?.latitude ?? null,
-        destination_longitude: destInfo?.longitude ?? null,
         destination_eloc: destInfo?.eLoc || "",
         cargo_types: cargoTypes.filter(c => !c.startsWith("Others:") || !!cargoOther.trim()), cargo_placement: placement, truck_type: truckType, weight_tons: w, space_cuft: null,
         dimension_length: lengthVal, dimension_breadth: breadthVal, dimension_height: heightVal, price_per_ton: priceVal,
@@ -2833,10 +2826,10 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
   const [recents, setRecents] = useState<CitySuggestion[]>([]);
   const [searching, setSearching] = useState(false);
   const [listening, setListening] = useState(false);
-  const [voiceStatus, setVoiceStatus] = useState("Speak the city name or pincode");
+  const [voiceStatus, setVoiceStatus] = useState("Speak the port name");
   const inputRef = useRef<TextInput>(null);
 
-  const isPincodeMode = query.length === 0 || /^\d/.test(query);
+
 
   useEffect(() => {
     if (visible) {
@@ -2848,283 +2841,51 @@ function RouteSearchModal({ visible, label, testIDPrefix, onClose, onSelect }: {
     }
   }, [visible]);
 
-  // Name/city search via Mappls places API (mirrors web autocomplete)
+  // Local port/ICD autocomplete — searches the bundled UN/LOCODE dataset
+  // by NAME only. No network calls, no pincode or proximity logic.
   useEffect(() => {
-    if (isPincodeMode) { setResults([]); return; }
     const q = query.trim();
-    if (q.length < 3) { setResults([]); return; }
-    let cancelled = false;
+    if (q.length < 1) { setResults([]); setSearching(false); return; }
     setSearching(true);
-    const t = setTimeout(async () => {
-      try {
-        // Mappls pod only accepts ONE value per request — send three parallel
-        // requests (CITY, LC=Locality, SLC=SubLocality) and merge the results.
-        // This gives us area-level suggestions only, no POIs or addresses.
-        // Mappls pod only accepts ONE value per request — send two parallel
-        // requests (CITY and LC=Locality) and merge the results.
-        // SLC (SubLocality) is excluded — results are too granular (specific
-        // chowks, micro-zones) and not how logistics users describe locations.
-        const [rCity, rLoc] = await Promise.all([
-          fetch(`${API}/places?query=${encodeURIComponent(q)}&pod=CITY`),
-          fetch(`${API}/places?query=${encodeURIComponent(q)}&pod=LC`),
-        ]);
-        const [dCity, dLoc] = await Promise.all([
-          rCity.json(), rLoc.json(),
-        ]);
-
-        // Merge both, dedup by eLoc, preserve relevance order within each pod
-        const seen = new Set<string>();
-        const all: any[] = [];
-        for (const item of [
-          ...(dCity.suggestedLocations || []),
-          ...(dLoc.suggestedLocations  || []),
-        ]) {
-          if (!seen.has(item.eLoc)) { seen.add(item.eLoc); all.push(item); }
-        }
-
-		  
-
-        // Dev-only: log raw Mappls items (type + placeName) so any future
-        // divergence vs the website can be diagnosed quickly. No filtering
-        // happens here — this is purely observational. Stripped from
-        // production bundles by Metro.
-        if (__DEV__) {
-          // eslint-disable-next-line no-console
-          console.log(
-            `[Mappls] q="${q}" types=`,
-            all.map((s: any) => ({ type: s?.type, name: s?.placeName }))
-          );
-        }
-
-        // Match the website exactly: preserve Mappls' native order — no
-        // client-side re-ranking, no type whitelist. The only filter is the
-        // post-mapping pincode-validity check (`.filter(s.pincode)` below),
-        // which mirrors the web app's behaviour of dropping any result we
-        // can't resolve to a 6-digit pincode.
-
-        // Map Mappls autosuggest items to CitySuggestion using the structured
-        // `addressTokens` payload (the canonical source). Comma-splitting the
-        // placeAddress is fragile and was the root cause of state==pincode
-        // bugs — we only fall back to it when tokens are missing.
-        const mapped: CitySuggestion[] = all.slice(0, 10).map((s: any) => {
-          const tokens = s.addressTokens || {};
-
-          // Pincode: prefer tokens, then regex on address string.
-        const directPin = (s.placeAddress || "").match(/\b(\d{6})\b/);
-
-
-
-const pincode: string =
-  (tokens.pincode && /^\d{6}$/.test(tokens.pincode)
-    ? tokens.pincode
-    : "") ||
-  (directPin ? directPin[1] : "");
-
-
-
-          // State: ONLY from tokens. Never from address tail (that's often
-          // a pincode and caused the Vashi/400703/400703 bug).
-          let state: string = (tokens.state || "").trim();
-          // Final safety: if tokens.state is somehow a 6-digit number, drop it.
-          if (/^\d{6}$/.test(state)) state = "";
-
-          // City: tokens.city → district → locality.
-          let city: string =
-            (tokens.city || tokens.district || tokens.locality || "").trim();
-
-          // Locality: most specific available — subLocality → locality →
-          // village → POI → city. The user's spec.
-          const poiName = (s.poi || s.placeName || "").trim();
-          let locality: string =
-            (tokens.subLocality || tokens.locality || tokens.village || poiName || city).trim();
-
-          // Address tail fallback ONLY when tokens are absent.
-          if (!state || !city) {
-            const parts = (s.placeAddress || "")
-              .split(",")
-              .map((p: string) => p.trim())
-              .filter(Boolean);
-            // Drop a trailing pincode segment, if present.
-            const cleaned = parts.filter((p: string) => !/^\d{6}$/.test(p));
-            if (!state && cleaned.length >= 1) state = cleaned[cleaned.length - 1];
-            if (!city && cleaned.length >= 2) city = cleaned[cleaned.length - 2];
-            if (/^\d{6}$/.test(state)) state = "";
-            if (/^\d{6}$/.test(city)) city = "";
-          }
-
-          return {
-            name: s.placeName,
-            city,
-            locality,
-            state,
-            pincode,
-            placeName: s.placeName || "",
-            fullAddress: s.placeAddress || "",
-            latitude: typeof s.latitude === "number" ? s.latitude : (s.latitude ? parseFloat(s.latitude) : null),
-            longitude: typeof s.longitude === "number" ? s.longitude : (s.longitude ? parseFloat(s.longitude) : null),
-            eLoc: s.eLoc || "",
-          };
-        });
-
-        // Results are already area-level (CITY / LOCALITY / SUB_LOCALITY)
-        // because we used pod=CITY and pod=LC in the fetch above.
-        if (!cancelled) setResults(mapped);
-      } catch { if (!cancelled) setResults([]); }
-      finally { if (!cancelled) setSearching(false); }
-    }, 350);
-    return () => { cancelled = true; clearTimeout(t); };
-  }, [query, isPincodeMode]);
-
-  // Pincode lookup
-  useEffect(() => {
-    if (!isPincodeMode || query.length !== 6) return;
-    let cancelled = false;
-    (async () => {
-      setSearching(true);
-      try {
-        const r = await fetch(`${API}/pincode/${query}`);
-        const j = await r.json();
-        if (!cancelled && j.valid) {
-          const s: CitySuggestion = {
-            name: j.locality || j.city || query,
-            city: j.city || "",
-            locality: j.locality || j.city || "",
-            state: j.state || "",
-            pincode: query,
-            placeName: j.locality || j.city || query,
-            fullAddress: [j.locality || j.city, j.city, j.state, query].filter(Boolean).join(", "),
-            latitude: null,
-            longitude: null,
-            eLoc: "",
-          };
-          setResults([s]);
-        } else if (!cancelled) setResults([]);
-      } catch { if (!cancelled) setResults([]); }
-      finally { if (!cancelled) setSearching(false); }
-    })();
-    return () => { cancelled = true; };
-  }, [query, isPincodeMode]);
+    const t = setTimeout(() => {
+      const matches = searchPorts(q, 30);
+      const mapped: CitySuggestion[] = matches.map((p) => ({
+        name: p.name,
+        city: p.country,
+        locality: p.name,
+        state: "",
+        pincode: p.code,
+        placeName: p.name,
+        fullAddress: [p.name, p.country, p.code].filter(Boolean).join(", "),
+        latitude: null,
+        longitude: null,
+        eLoc: "",
+      }));
+      setResults(mapped);
+      setSearching(false);
+    }, 150);
+    return () => clearTimeout(t);
+  }, [query]);
 
   const handleChange = (t: string) => {
-    if (/^\d/.test(t) || t.length === 0) {
-      setQuery(t.replace(/\D/g, "").slice(0, 6));
-    } else {
-      setQuery(t);
-    }
+    setQuery(t);
   };
 
   const pick = (s: CitySuggestion) => {
-    if (!s.pincode) {
-      // Autosuggest never returns lat/lon — but placeAddress always contains
-      // the pincode (e.g. "Mumbai, Maharashtra, 400053"). Extract it; the
-      // coords themselves get resolved later via geocodePin when needed.
-      const addressPin = (s.fullAddress || "").match(/\b(\d{6})\b/)?.[1] || "";
-      const displayLocality = (s.placeName || s.locality || s.name || "").trim();
-
-      // Update the parent screen and close the picker immediately — saving
-      // to recent searches is local housekeeping and must never block the UI.
-      onSelect(
-        displayLocality,
-        addressPin,
-        {
-          city: s.city || "",
-          locality: displayLocality,
-          state: s.state || "",
-          valid: true,
-          placeName: s.placeName || s.name || "",
-          fullAddress: s.fullAddress || "",
-          latitude: null,
-          longitude: null,
-          eLoc: s.eLoc || "",
-        }
-      );
-      onClose();
-
-      saveRecentSearch(testIDPrefix, { ...s, pincode: addressPin }).catch(() => {});
-      return;
-    }
-
-    // Best-effort city/state/locality straight from the Mappls result — good
-    // enough to show immediately, so the picker closes with no perceptible
-    // delay after a tap.
-    const initialCity = (() => {
-      let c = s.city || "";
-      if (/^\d{6}$/.test(c.trim())) c = "";
-      return c;
-    })();
-    const initialState = (() => {
-      let st = s.state || "";
-      if (/^\d{6}$/.test(st.trim())) st = "";
-      if (st && s.pincode && st.trim() === s.pincode) st = "";
-      return st;
-    })();
-    const initialLocality = (s.placeName || s.locality || s.name || "").trim();
-
-    onSelect(initialLocality, s.pincode, {
-      city: initialCity,
-      locality: initialLocality,
-      state: initialState,
+    const displayName = (s.placeName || s.name || "").trim();
+    onSelect(displayName, s.pincode, {
+      city: s.city || "",
+      locality: displayName,
+      state: "",
       valid: true,
-      placeName: s.placeName || s.name || "",
-      fullAddress: s.fullAddress || "",
-      latitude: s.latitude ?? null,
-      longitude: s.longitude ?? null,
-      eLoc: s.eLoc || "",
+      placeName: displayName,
+      fullAddress: s.fullAddress || [displayName, s.city, s.pincode].filter(Boolean).join(", "),
+      latitude: null,
+      longitude: null,
+      eLoc: "",
     });
     onClose();
-
-    // Enrich with the authoritative city/state from the pincode endpoint in
-    // the background (so, e.g., "Rewari"/"Thane" show even when Mappls'
-    // own city field didn't resolve to it). This network call used to be
-    // awaited BEFORE onSelect/onClose, which is what caused the noticeable
-    // lag after tapping a result — now it only patches the result afterward,
-    // and only if it actually found something different.
-    (async () => {
-      let finalCity = initialCity;
-      let finalState = initialState;
-      let finalLocality = initialLocality;
-      try {
-        const r = await fetch(`${API}/pincode/${s.pincode}`);
-        const j = await r.json();
-        if (j && j.valid) {
-          // Postal API is authoritative for city and state only — never locality.
-          // j.locality is a post office admin name, not the area name the user saw.
-          if (j.city) finalCity = j.city;
-          if (j.state) finalState = j.state;
-          if (!finalLocality) finalLocality = j.locality || j.city || s.name;
-        }
-      } catch {}
-
-      // Guard: if city ended up identical to state (e.g., "Haryana"/"Haryana"),
-      // fall back to the locality from the original search.
-      if (finalCity && finalState && finalCity.trim().toLowerCase() === finalState.trim().toLowerCase()) {
-        const fallback = (s.locality || s.name || "").split(",")[0].trim();
-        if (fallback && fallback.toLowerCase() !== finalState.trim().toLowerCase()) {
-          finalCity = fallback;
-        }
-      }
-      if (finalState && /^\d{6}$/.test(finalState.trim())) finalState = "";
-      if (finalCity && /^\d{6}$/.test(finalCity.trim())) finalCity = "";
-
-      const enriched: CitySuggestion = { ...s, city: finalCity, state: finalState, locality: finalLocality };
-      saveRecentSearch(testIDPrefix, enriched).catch(() => {});
-
-      // Only patch the already-selected value if enrichment changed something —
-      // avoids a redundant, invisible re-render in the common case.
-      if (finalCity !== initialCity || finalState !== initialState || finalLocality !== initialLocality) {
-        onSelect(finalLocality, enriched.pincode, {
-          city: finalCity,
-          locality: finalLocality,
-          state: finalState,
-          valid: true,
-          placeName: s.placeName || s.name || "",
-          fullAddress: s.fullAddress || "",
-          latitude: s.latitude ?? null,
-          longitude: s.longitude ?? null,
-          eLoc: s.eLoc || "",
-        });
-      }
-    })();
+    saveRecentSearch(testIDPrefix, s).catch(() => {});
   };
 
 
@@ -3156,7 +2917,7 @@ const pincode: string =
       const perm = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
       if (!perm?.granted) { Alert.alert("Microphone needed", "Please grant microphone permission to use voice input."); return; }
       try { ExpoSpeechRecognitionModule.stop(); } catch {}
-      setVoiceStatus("Speak the city name or pincode");
+      setVoiceStatus("Speak the port name");
       setListening(true);
       ExpoSpeechRecognitionModule.start({ lang: "en-IN", interimResults: true, continuous: false, maxAlternatives: 1, addsPunctuation: false });
     } catch (err) { setListening(false); Alert.alert("Voice not available", "Voice input is not available on this device."); }
@@ -3229,8 +2990,8 @@ const pincode: string =
 
         {/* Section labels rendered inline in the list. Only show no-results /
             searching states when the user is actively typing. */}
-        {query.length >= 2 && !searching && results.length === 0 ? (
-          <Text style={srm.noResultText}>No results found. Try a different name or pincode.</Text>
+        {query.length >= 1 && !searching && results.length === 0 ? (
+          <Text style={srm.noResultText}>No ports found. Try a different name.</Text>
         ) : searching ? (
           <View style={srm.searchingRow}>
             <ActivityIndicator size="small" color={COLORS.primary} />
@@ -3261,10 +3022,7 @@ const pincode: string =
               );
             }
             const s = item.data;
-            const cleanState = sanitizeStateForDisplay(s.state || "", s.pincode);
-            const cleanCity = sanitizeCityForDisplay(s.city || "", s.pincode, cleanState);
-            const abbr = stateAbbr(cleanState);
-            const subLine = cleanCity && abbr ? `${cleanCity}, ${abbr}` : (cleanCity || abbr || "");
+            const subLine = (s.city || "").trim();
             return (
               <TouchableOpacity
                 testID={`${testIDPrefix}-modal-suggest-${s.pincode}`}
@@ -3440,7 +3198,7 @@ function SmartRouteInput({ label, testIDPrefix, text, pin, info, onChange, accen
         ) : (
           <View style={sriStyles.placeholder}>
             <Ionicons name="search" size={16} color={COLORS.textMuted} style={{ marginRight: 6 }} />
-            <Text style={sriStyles.placeholderText}>Pincode or city…</Text>
+            <Text style={sriStyles.placeholderText}>Search port…</Text>
           </View>
         )}
         {hasValue ? (
@@ -3492,143 +3250,27 @@ const sriStyles = StyleSheet.create({
   clearBtn: { position: "absolute", top: 8, right: 8 },
 });
 // ============== Load Market ==============
-const geoCache = new Map<string, { lat: number; lon: number; found: boolean }>();
 
-async function geocodePin(pin: string) {
-  if (geoCache.has(pin)) return geoCache.get(pin)!;
-  try {
-    const r = await fetch(`${API}/geocode/${pin}`);
-    const j = await r.json();
-    const out = { lat: j.lat || 0, lon: j.lon || 0, found: !!j.found };
-    if (out.found) geoCache.set(pin, out);
-    return out;
-  } catch { return { lat: 0, lon: 0, found: false }; }
-}
-
-// Resolves lat/lon from a city/locality name via Nominatim.
-// Used when a CITY-type Mappls result has no pincode in placeAddress
-// (e.g. Mumbai → placeAddress = "Maharashtra" with no 6-digit pin).
-async function geocodeCityName(name: string) {
-  if (!name) return { lat: 0, lon: 0, found: false };
-  const key = `city:${name.toLowerCase()}`;
-  if (geoCache.has(key)) return geoCache.get(key)!;
-  try {
-    const r = await fetch(`${API}/geocode-city/${encodeURIComponent(name)}`);
-    const j = await r.json();
-    if (j.found) {
-      const out = { lat: j.lat, lon: j.lon, found: true };
-      geoCache.set(key, out);
-      return out;
-    }
-  } catch {}
-  return { lat: 0, lon: 0, found: false };
-}
-
-// geocodeEloc: resolves coords for a load stored without lat/lon.
-// 1. Extract pincode from fullAddress (e.g. "Mumbai, Maharashtra, 400053" → 400053)
-// 2. If no pincode (e.g. CITY results where placeAddress = "Maharashtra"),
-//    fall back to city-name geocoding via Nominatim.
-async function geocodeEloc(eLoc: string, fallbackName?: string, fullAddress?: string) {
-  if (!eLoc) return { lat: 0, lon: 0, found: false };
-  const key = `eloc:${eLoc}`;
-  if (geoCache.has(key)) return geoCache.get(key)!;
-
-  // Step 1: pincode from stored full address
-  const pin = (fullAddress || "").match(/\b(\d{6})\b/)?.[1] || "";
-  if (pin) {
-    const result = await geocodePin(pin);
-    if (result.found) {
-      geoCache.set(key, result);
-      return result;
-    }
-  }
-
-  // Step 2: city name geocoding (for CITY-type results with no pincode)
-  if (fallbackName) {
-    const result = await geocodeCityName(fallbackName);
-    if (result.found) {
-      geoCache.set(key, result);
-      return result;
-    }
-  }
-
-  return { lat: 0, lon: 0, found: false };
-}
-
-function haversineKm(a: { lat: number; lon: number }, b: { lat: number; lon: number }) {
-  const toRad = (d: number) => (d * Math.PI) / 180;
-  const R = 6371;
-  const dLat = toRad(b.lat - a.lat), dLon = toRad(b.lon - a.lon);
-  const x = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLon / 2) ** 2;
-  return 2 * R * Math.asin(Math.sqrt(x));
-}
-
-function bearingRad(a: { lat: number; lon: number }, b: { lat: number; lon: number }) {
-  const toRad = (d: number) => (d * Math.PI) / 180;
-  const lat1 = toRad(a.lat), lat2 = toRad(b.lat), dLon = toRad(b.lon - a.lon);
-  return Math.atan2(Math.sin(dLon) * Math.cos(lat2), Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon));
-}
-
-function trackDistancesKm(start: { lat: number; lon: number }, end: { lat: number; lon: number }, p: { lat: number; lon: number }) {
-  const R = 6371;
-  const d13 = haversineKm(start, p) / R, t13 = bearingRad(start, p), t12 = bearingRad(start, end);
-  const xt = Math.asin(Math.sin(d13) * Math.sin(t13 - t12)) * R;
-  const at = Math.acos(Math.cos(d13) / Math.cos(xt / R)) * R;
-  return { cross: Math.abs(xt), along: at };
-}
-
-type ActiveFilter = { origin: string; dest: string; originCity?: string; destCity?: string; weightKg: number; volumeCuft: number | null; originCoord: { lat: number; lon: number }; destCoord: { lat: number; lon: number }; postedKind?: "truck" | "ptl"; postedId?: string };
+type ActiveFilter = { origin: string; dest: string; originCity?: string; destCity?: string; weightKg: number; volumeCuft: number | null; postedKind?: "truck" | "ptl"; postedId?: string };
 type Distances = Record<string, { origin: number; dest: number; offRoute: boolean }>;
 
-// Builds an ActiveFilter (same shape the Find/Filter modal produces) from a
-// route the user just posted (origin/destination pin + autosuggest info).
-// Used to auto-apply origin/destination filters on the Find page right
-// after a Truck Space or Partial Load post, regardless of whether the
-// WhatsApp share redirect happens or the user comes straight back.
-async function buildRouteFilterFromPost(
+// Builds an ActiveFilter from a route the user just posted. Matching is now
+// exact origin + destination UN/LOCODE — no coordinates, no geocoding.
+function buildRouteFilterFromPost(
   originPin: string,
   originInfo: RouteInfo,
   destPin: string,
   destInfo: RouteInfo,
-): Promise<ActiveFilter | null> {
-  try {
-    let oc: { lat: number; lon: number; found: boolean };
-    if (originInfo?.latitude != null && originInfo?.longitude != null) {
-      oc = { lat: originInfo.latitude, lon: originInfo.longitude, found: true };
-    } else if (/^\d{6}$/.test(originPin)) {
-      oc = await geocodePin(originPin);
-    } else if (originInfo?.eLoc) {
-      oc = await geocodeEloc(originInfo.eLoc, originInfo.placeName || originInfo.city || "", originInfo.fullAddress || "");
-    } else {
-      return null;
-    }
-
-    let dc: { lat: number; lon: number; found: boolean };
-    if (destInfo?.latitude != null && destInfo?.longitude != null) {
-      dc = { lat: destInfo.latitude, lon: destInfo.longitude, found: true };
-    } else if (/^\d{6}$/.test(destPin)) {
-      dc = await geocodePin(destPin);
-    } else if (destInfo?.eLoc) {
-      dc = await geocodeEloc(destInfo.eLoc, destInfo.placeName || destInfo.city || "", destInfo.fullAddress || "");
-    } else {
-      return null;
-    }
-
-    if (!oc.found || !dc.found) return null;
-
-    return {
-      origin: originPin,
-      dest: destPin,
-      originCity: originInfo?.city || originInfo?.locality || originInfo?.placeName || "",
-      destCity: destInfo?.city || destInfo?.locality || destInfo?.placeName || "",
-      weightKg: 0,
-      volumeCuft: null,
-      originCoord: { lat: oc.lat, lon: oc.lon },
-      destCoord: { lat: dc.lat, lon: dc.lon },
-    };
-  } catch {
-    return null;
-  }
+): ActiveFilter | null {
+  if (!originPin || !destPin) return null;
+  return {
+    origin: originPin,
+    dest: destPin,
+    originCity: originPin,
+    destCity: destPin,
+    weightKg: 0,
+    volumeCuft: null,
+  };
 }
 
 // Map of 10-digit phone -> saved contact name from the user's address book.
@@ -3757,107 +3399,15 @@ function LoadMarketScreen({ profile, pendingFilter, onConsumePendingFilter }: { 
 
 
 
- type CoordResult = { lat: number; lon: number; found: boolean };
-
- // A "descriptor" says how a load's coord should be resolved, without
- // resolving it yet. Loads that already have stored lat/lon need no
- // network call at all; loads sharing the same pincode/eLoc get the
- // same dedupe key so they only trigger one lookup between them.
- type CoordDescriptor =
-   | { kind: "coord"; coord: CoordResult }
-   | { kind: "pin"; key: string; pin: string }
-   | { kind: "eloc"; key: string; eLoc: string; fallbackName: string; fullAddress: string }
-   | { kind: "none" };
-
- const originDescriptor = (load: Load): CoordDescriptor => {
-   if (load.origin_latitude != null && load.origin_longitude != null) {
-     return { kind: "coord", coord: { lat: load.origin_latitude, lon: load.origin_longitude, found: true } };
-   } else if (/^\d{6}$/.test(load.origin_pincode)) {
-     return { kind: "pin", key: `pin:${load.origin_pincode}`, pin: load.origin_pincode };
-   } else if (load.origin_eloc) {
-     return { kind: "eloc", key: `eloc:${load.origin_eloc}`, eLoc: load.origin_eloc, fallbackName: load.origin_place_name || load.origin_city || "", fullAddress: load.origin_full_address || "" };
-   }
-   return { kind: "none" };
- };
-
- const destDescriptor = (load: Load): CoordDescriptor => {
-   if (load.destination_latitude != null && load.destination_longitude != null) {
-     return { kind: "coord", coord: { lat: load.destination_latitude, lon: load.destination_longitude, found: true } };
-   } else if (/^\d{6}$/.test(load.destination_pincode)) {
-     return { kind: "pin", key: `pin:${load.destination_pincode}`, pin: load.destination_pincode };
-   } else if (load.destination_eloc) {
-     return { kind: "eloc", key: `eloc:${load.destination_eloc}`, eLoc: load.destination_eloc, fallbackName: load.destination_place_name || load.destination_city || "", fullAddress: load.destination_full_address || "" };
-   }
-   return { kind: "none" };
- };
-
- const resolveDescriptor = (d: CoordDescriptor): Promise<CoordResult> => {
-   if (d.kind === "pin") return geocodePin(d.pin);
-   if (d.kind === "eloc") return geocodeEloc(d.eLoc, d.fallbackName, d.fullAddress);
-   return Promise.resolve({ lat: 0, lon: 0, found: false });
- };
-
- const GEOCODE_CHUNK_SIZE = 20;
-
  const applyFilter = useCallback(async (f: ActiveFilter) => {
-    const dist: Distances = {};
-    const survivors: { load: Load; total: number }[] = [];
-
-    // Only loads that already pass the cheap weight/volume checks need coords resolved.
-    const eligible = allLoads.filter((load) => {
+    // Exact origin + destination UN/LOCODE match. Weight/volume still apply.
+    const survivors = allLoads.filter((load) => {
       if (load.weight_tons * 1000 < f.weightKg) return false;
       if (f.volumeCuft != null && load.space_cuft != null && load.space_cuft < f.volumeCuft) return false;
-      return true;
+      return load.origin_pincode === f.origin && load.destination_pincode === f.dest;
     });
-
-    // Work out how each load's coords should be resolved, but don't fire
-    // any requests yet — this lets us dedupe first.
-    const originDescByLoadId: Record<string, CoordDescriptor> = {};
-    const destDescByLoadId: Record<string, CoordDescriptor> = {};
-    const uniqueLookups = new Map<string, CoordDescriptor>();
-    for (const load of eligible) {
-      const od = originDescriptor(load), dd = destDescriptor(load);
-      originDescByLoadId[load.id] = od;
-      destDescByLoadId[load.id] = dd;
-      if ((od.kind === "pin" || od.kind === "eloc") && !uniqueLookups.has(od.key)) uniqueLookups.set(od.key, od);
-      if ((dd.kind === "pin" || dd.kind === "eloc") && !uniqueLookups.has(dd.key)) uniqueLookups.set(dd.key, dd);
-    }
-
-    // Resolve each unique pin/eLoc exactly once — loads sharing an origin
-    // or destination (common on popular lanes) no longer trigger duplicate
-    // network calls — fanned out in fixed-size chunks rather than awaiting
-    // one at a time. Cached lookups (see geoCache) resolve instantly.
-    const resolvedByKey: Record<string, CoordResult> = {};
-    const uniqueEntries = Array.from(uniqueLookups.entries());
-    for (let i = 0; i < uniqueEntries.length; i += GEOCODE_CHUNK_SIZE) {
-      const chunk = uniqueEntries.slice(i, i + GEOCODE_CHUNK_SIZE);
-      const chunkResults = await Promise.all(chunk.map(async ([key, desc]) => ({ key, coord: await resolveDescriptor(desc) })));
-      for (const { key, coord } of chunkResults) resolvedByKey[key] = coord;
-    }
-
-    const coordFor = (d: CoordDescriptor): CoordResult =>
-      d.kind === "coord" ? d.coord : d.kind === "none" ? { lat: 0, lon: 0, found: false } : resolvedByKey[d.key];
-
-    for (const load of eligible) {
-      const lo = coordFor(originDescByLoadId[load.id]);
-      const ld = coordFor(destDescByLoadId[load.id]);
-      if (!lo.found || !ld.found) continue;
-
-      const dOrigin = haversineKm(f.originCoord, lo), dDest = haversineKm(f.destCoord, ld);
-      if (dOrigin <= 30 && dDest <= 30) { dist[load.id] = { origin: dOrigin, dest: dDest, offRoute: false }; survivors.push({ load, total: dOrigin + dDest }); continue; }
-      const routeLen = haversineKm(lo, ld);
-      if (routeLen > 400) {
-        const oTrack = trackDistancesKm(lo, ld, f.originCoord), dTrack = trackDistancesKm(lo, ld, f.destCoord);
-        const inSegment = (at: number) => at >= 0 && at <= routeLen;
-        if (oTrack.cross <= 30 && dTrack.cross <= 30 && inSegment(oTrack.along) && inSegment(dTrack.along) && oTrack.along <= dTrack.along) {
-          dist[load.id] = { origin: oTrack.cross, dest: dTrack.cross, offRoute: true };
-          survivors.push({ load, total: oTrack.cross + dTrack.cross });
-        }
-      }
-    }
-    survivors.sort((a, b) => a.total - b.total);
-    setFilteredLoads(survivors.map((s) => s.load));
-    setDistances(dist);
+    setFilteredLoads(survivors);
+    setDistances({});
   }, [allLoads]);
 
   // Common filter: applies to trucks (client-side haversine route match) and
@@ -3993,12 +3543,12 @@ function LoadMarketScreen({ profile, pendingFilter, onConsumePendingFilter }: { 
           keyExtractor={(it) => it.key}
           contentContainerStyle={{ padding: 16, paddingBottom: 80 }}
           refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={onRefreshAll} />}
-          ListFooterComponent={isFiltered && feed.length > 0 ? <Text style={styles.approxNote}>* Truck-space distances are approximate (straight-line)</Text> : null}
+          ListFooterComponent={null}
           ListEmptyComponent={
             <View style={styles.emptyWrap} testID="empty-state">
               <Ionicons name={isFiltered ? "search" : "cube-outline"} size={48} color={COLORS.textSubtle} />
               <Text style={styles.emptyTitle}>{isFiltered ? "No matching listings found" : "No listings yet"}</Text>
-              <Text style={styles.emptySub}>{isFiltered ? "Try adjusting your cargo details or search within a wider area." : "Be the first to post a truck space or partial load!"}</Text>
+              <Text style={styles.emptySub}>{isFiltered ? "Try a different origin or destination port." : "Be the first to post a truck space or partial load!"}</Text>
             </View>
           }
           extraData={contactsMap.size}
@@ -4247,12 +3797,6 @@ function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhon
         </View>
       </View>
 
-      {distance ? (
-        <View style={styles.distanceRow} testID={`distance-${load.id}`}>
-          <View style={styles.distanceChip}><Ionicons name="location-outline" size={12} color={COLORS.success} /><Text style={styles.distanceText}>Origin: {distance.origin.toFixed(1)} km {distance.offRoute ? "off-route" : "away"}</Text></View>
-          <View style={styles.distanceChip}><Ionicons name="flag-outline" size={12} color={COLORS.success} /><Text style={styles.distanceText}>Dest: {distance.dest.toFixed(1)} km {distance.offRoute ? "off-route" : "away"}</Text></View>
-        </View>
-      ) : null}
 
       <View style={styles.divider} />
 
@@ -4429,14 +3973,6 @@ function BidFormModal({
     if (!cargoType) return Alert.alert("Cargo type", "Select a cargo type");
     setSubmitting(true);
     try {
-      // Best-effort geocode for both endpoints to compute deviation server-side.
-      // Only geocode by pincode when one was actually selected — a city-only
-      // selection (no pincode) already carries lat/lon on `originInfo` /
-      // `destInfo` from the place picker itself.
-      const [og, dg] = await Promise.all([
-        /^\d{6}$/.test(originPin) ? fetch(`${API}/geocode/${originPin}`).then(r => r.json()).catch(() => null) : Promise.resolve(null),
-        /^\d{6}$/.test(destPin) ? fetch(`${API}/geocode/${destPin}`).then(r => r.json()).catch(() => null) : Promise.resolve(null),
-      ]);
       const body = {
         listing_id: listingId,
         listing_type: listingType,
@@ -4444,13 +3980,9 @@ function BidFormModal({
         origin_pincode: originPin,
         origin_city: originInfo?.city || "",
         origin_locality: originInfo?.locality || "",
-        origin_latitude: og?.found ? og.lat : (originInfo?.latitude ?? null),
-        origin_longitude: og?.found ? og.lon : (originInfo?.longitude ?? null),
         destination_pincode: destPin,
         destination_city: destInfo?.city || "",
         destination_locality: destInfo?.locality || "",
-        destination_latitude: dg?.found ? dg.lat : (destInfo?.latitude ?? null),
-        destination_longitude: dg?.found ? dg.lon : (destInfo?.longitude ?? null),
         weight_tons: w,
         cargo_type: cargoType,
       };
@@ -5651,58 +5183,14 @@ if (!destValid) {
 	  
     setBusy(true);
     try {
-      
-		
-		let oc;
-let dc;
-
-if (
-  originInfo?.latitude != null &&
-  originInfo?.longitude != null
-) {
-  oc = {
-    lat: originInfo.latitude,
-    lon: originInfo.longitude,
-    found: true,
-  };
-} else if (/^\d{6}$/.test(originPin)) {
-  oc = await geocodePin(originPin);
-} else if (originInfo?.eLoc) {
-  oc = await geocodeEloc(originInfo.eLoc, originInfo.placeName || originInfo.city || "", originInfo.fullAddress || "");
-} else {
-  setOriginErr("Location coordinates unavailable. Please select a different origin.");
-  return;
-}
-
-if (
-  destInfo?.latitude != null &&
-  destInfo?.longitude != null
-) {
-  dc = {
-    lat: destInfo.latitude,
-    lon: destInfo.longitude,
-    found: true,
-  };
-} else if (/^\d{6}$/.test(destPin)) {
-  dc = await geocodePin(destPin);
-} else if (destInfo?.eLoc) {
-  dc = await geocodeEloc(destInfo.eLoc, destInfo.placeName || destInfo.city || "", destInfo.fullAddress || "");
-} else {
-  setDestErr("Location coordinates unavailable. Please select a different destination.");
-  return;
-}
-
-if (!oc.found) {
-  setOriginErr("Location could not be resolved.");
-  return;
-}
-
-if (!dc.found) {
-  setDestErr("Location could not be resolved.");
-  return;
-}
-		
-      await onApply({ origin: originPin, dest: destPin, originCity: originInfo?.city || originInfo?.locality || originInfo?.placeName || "", destCity: destInfo?.city || destInfo?.locality || destInfo?.placeName || "", weightKg: 0, volumeCuft: null, originCoord: { lat: oc.lat, lon: oc.lon }, destCoord: { lat: dc.lat, lon: dc.lon } });
+      await onApply({
+        origin: originPin,
+        dest: destPin,
+        originCity: originPin,
+        destCity: destPin,
+        weightKg: 0,
+        volumeCuft: null,
+      });
     } finally { setBusy(false); }
   };
 
@@ -5718,7 +5206,7 @@ if (!dc.found) {
         </View>
         <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.fill}>
           <SafeScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
-            <Text style={styles.modalSubtitle}>Enter your cargo details to find matching truck space and partial loads within 30 km of your route.</Text>
+            <Text style={styles.modalSubtitle}>Select origin and destination ports to find exactly matching truck space and partial loads.</Text>
 
             <SectionTitle icon="navigate-outline" title="Route" />
             <View style={styles.routeInputsRow}>
@@ -6190,8 +5678,6 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
           origin_place_name: originInfo?.placeName || "",
           origin_full_address: originInfo?.fullAddress || "",
           origin_eloc: originInfo?.eLoc || "",
-          origin_latitude: originInfo?.latitude ?? null,
-          origin_longitude: originInfo?.longitude ?? null,
           destination_locality: destInfo?.locality || destText || destInfo?.placeName || "",
           destination_city: destInfo?.city || destInfo?.locality || destInfo?.placeName || destText || "",
           destination_state: destInfo?.state || "",
@@ -6199,8 +5685,6 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
           destination_place_name: destInfo?.placeName || "",
           destination_full_address: destInfo?.fullAddress || "",
           destination_eloc: destInfo?.eLoc || "",
-          destination_latitude: destInfo?.latitude ?? null,
-          destination_longitude: destInfo?.longitude ?? null,
           cargo_type: cargoTypeFinal,
           cargo_category: cargoTypeFinal,
           weight_kg: Math.round(weight * 1000),
@@ -6782,8 +6266,6 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
           origin_place_name: originInfo?.placeName || "",
           origin_full_address: originInfo?.fullAddress || "",
           origin_eloc: originInfo?.eLoc || "",
-          origin_latitude: originInfo?.latitude ?? null,
-          origin_longitude: originInfo?.longitude ?? null,
           destination_locality: destInfo?.locality || destText || destInfo?.placeName || "",
           destination_city: destInfo?.city || destInfo?.locality || destInfo?.placeName || destText || "",
           destination_state: destInfo?.state || "",
@@ -6791,8 +6273,6 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
           destination_place_name: destInfo?.placeName || "",
           destination_full_address: destInfo?.fullAddress || "",
           destination_eloc: destInfo?.eLoc || "",
-          destination_latitude: destInfo?.latitude ?? null,
-          destination_longitude: destInfo?.longitude ?? null,
           cargo_type: cargoTypeFinal,
           cargo_category: cargoTypeFinal,
           weight_kg: Math.round(weight * 1000),    // tons → kg

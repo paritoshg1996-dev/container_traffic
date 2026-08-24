@@ -653,22 +653,9 @@ async def create_load(payload: LoadCreate):
     # Assign a unique short_id before inserting
     load.short_id = await _unique_short_id()
 
-    # Guarantee lat/lon are stored at post time, so search never has to fall
-    # back to client-side geocoding for a freshly-posted load (see
-    # _resolve_missing_coords).
-    if load.origin_latitude is None or load.origin_longitude is None:
-        lat, lon = await _resolve_missing_coords(
-            load.origin_pincode, load.origin_place_name, load.origin_city, load.origin_full_address
-        )
-        if lat is not None:
-            load.origin_latitude, load.origin_longitude = lat, lon
-    if load.destination_latitude is None or load.destination_longitude is None:
-        lat, lon = await _resolve_missing_coords(
-            load.destination_pincode, load.destination_place_name, load.destination_city, load.destination_full_address
-        )
-        if lat is not None:
-            load.destination_latitude, load.destination_longitude = lat, lon
-
+    # Ports/ICDs are matched exactly by UN/LOCODE — normalise casing, no geocoding.
+    load.origin_pincode = (load.origin_pincode or "").strip().upper()
+    load.destination_pincode = (load.destination_pincode or "").strip().upper()
     doc = load.dict()
     await db.loads.insert_one(doc)
     return load
@@ -684,9 +671,9 @@ async def list_loads(
 
     query = {}
     if origin:
-        query["origin_pincode"] = origin
+        query["origin_pincode"] = origin.strip().upper()
     if destination:
-        query["destination_pincode"] = destination
+        query["destination_pincode"] = destination.strip().upper()
 
     cursor = db.loads.find(query, {"_id": 0, "images": 0}).sort("created_at", -1).limit(500)
     docs = await cursor.to_list(500)
@@ -811,40 +798,9 @@ async def update_load(load_id: str, payload: LoadUpdate):
     update = {k: v for k, v in payload.dict().items() if v is not None}
     if not update:
         raise HTTPException(status_code=400, detail="No fields to update")
-
-    # If origin/destination location fields changed but lat/lon weren't
-    # explicitly provided in this update, backfill them now — the same
-    # guarantee create_load makes, so an edited load doesn't fall back to
-    # client-side geocoding either.
-    origin_fields = ("origin_pincode", "origin_place_name", "origin_city", "origin_full_address")
-    dest_fields = ("destination_pincode", "destination_place_name", "destination_city", "destination_full_address")
-    needs_origin_backfill = any(k in update for k in origin_fields) and not (
-        "origin_latitude" in update and "origin_longitude" in update
-    )
-    needs_dest_backfill = any(k in update for k in dest_fields) and not (
-        "destination_latitude" in update and "destination_longitude" in update
-    )
-    if needs_origin_backfill or needs_dest_backfill:
-        existing = await db.loads.find_one({"id": load_id}, {"_id": 0})
-        if existing:
-            if needs_origin_backfill:
-                lat, lon = await _resolve_missing_coords(
-                    update.get("origin_pincode", existing.get("origin_pincode", "")),
-                    update.get("origin_place_name", existing.get("origin_place_name", "")),
-                    update.get("origin_city", existing.get("origin_city", "")),
-                    update.get("origin_full_address", existing.get("origin_full_address", "")),
-                )
-                if lat is not None:
-                    update["origin_latitude"], update["origin_longitude"] = lat, lon
-            if needs_dest_backfill:
-                lat, lon = await _resolve_missing_coords(
-                    update.get("destination_pincode", existing.get("destination_pincode", "")),
-                    update.get("destination_place_name", existing.get("destination_place_name", "")),
-                    update.get("destination_city", existing.get("destination_city", "")),
-                    update.get("destination_full_address", existing.get("destination_full_address", "")),
-                )
-                if lat is not None:
-                    update["destination_latitude"], update["destination_longitude"] = lat, lon
+    for k in ("origin_pincode", "destination_pincode"):
+        if k in update and isinstance(update[k], str):
+            update[k] = update[k].strip().upper()
 
     res = await db.loads.update_one({"id": load_id}, {"$set": update})
     if res.matched_count == 0:
@@ -1442,9 +1398,10 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
-def derive_corridor(city: str) -> str:
-    """Normalise city name to a corridor tag used for group matching."""
-    return (city or "").strip().upper()
+def derive_corridor(code: str) -> str:
+    """Normalise a UN/LOCODE (or legacy city name) to a corridor tag used for
+    exact group matching."""
+    return (code or "").strip().upper()
 
 
 def _strip_group_internals(g: dict) -> dict:
@@ -1460,8 +1417,8 @@ async def _create_solo_ptl_group(new_load: dict) -> str:
     as a container so the existing marketplace, deep-link (`/a/{group_id}`)
     and Bids Received endpoints keep working without changes.
     """
-    origin_corridor = derive_corridor(new_load["origin"]["city"])
-    dest_corridor = derive_corridor(new_load["destination"]["city"])
+    origin_corridor = derive_corridor(new_load["origin"]["pincode"])
+    dest_corridor = derive_corridor(new_load["destination"]["pincode"])
     now_iso = datetime.now(timezone.utc).isoformat()
     gid = f"GRP-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{new_load['poster_phone'][-4:]}-{_gen_short_id(4)}"
     short_id = await _unique_ptl_group_short_id()
@@ -1515,25 +1472,9 @@ async def post_ptl_load(payload: PtlLoadPost):
     now = datetime.now(timezone.utc)
     load_id = f"PTL-{now.strftime('%Y%m%d%H%M%S')}-{phone[-4:]}-{_gen_short_id(4)}"
 
-    # Guarantee lat/lon are stored at post time, same as /loads (truck-space)
-    # does via _resolve_missing_coords — otherwise a listing posted without
-    # coordinates (e.g. certain city selections) can never have a bid
-    # deviation computed against it later, since _deviation_km needs both
-    # sides to have coordinates.
+    # Ports/ICDs match exactly by UN/LOCODE — no lat/lon geocoding.
     origin_lat, origin_lon = payload.origin_latitude, payload.origin_longitude
-    if origin_lat is None or origin_lon is None:
-        lat, lon = await _resolve_missing_coords(
-            payload.origin_pincode or "", payload.origin_locality, payload.origin_city, ""
-        )
-        if lat is not None:
-            origin_lat, origin_lon = lat, lon
     dest_lat, dest_lon = payload.destination_latitude, payload.destination_longitude
-    if dest_lat is None or dest_lon is None:
-        lat, lon = await _resolve_missing_coords(
-            payload.destination_pincode or "", payload.destination_locality, payload.destination_city, ""
-        )
-        if lat is not None:
-            dest_lat, dest_lon = lat, lon
 
     doc = {
         "id": load_id,

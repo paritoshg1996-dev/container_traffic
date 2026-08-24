@@ -1,215 +1,35 @@
-# Truck Traffic PTL — PRD
+# Truck Traffic — PRD / Working Notes
 
-## Original Problem Statement
-Add PTL (Partial Truck Load) consolidation to existing Truck Traffic app.
-Two shippers with small loads on the same route are matched into a single
-truck and split the cost. **Pair-only**: exactly 2 shippers per group, no more.
+## App
+Expo React Native (TypeScript) logistics marketplace (Truck Space + Partial Loads/PTL).
+Main UI: `frontend/app/index.tsx`. Backend: FastAPI `backend/server.py` + MongoDB.
+NOTE: The mobile app calls a REMOTE backend hardcoded at `https://ptl-market.onrender.com/api`
+(see `API` const in index.tsx). The local backend here is for validation only.
 
-## Stack
-- Frontend: React Native (Expo) — `/app/frontend/app/index.tsx`
-- Backend: FastAPI + MongoDB — `/app/backend/server.py`
+## Change Log
+### 2026-08-24 — Ports/ICD autocomplete + exact-match routing
+Original request: replace locality autocomplete with world ports + India ICDs;
+show Name/Country/UNLOCODE; match ports exactly (remove lat/long proximity filtering).
 
-## What's been implemented (Jan 2026)
+Implemented:
+- `frontend/data/ports.ts` — 5542 sea ports + India ICDs, generated from the UN/LOCODE
+  xlsx via `frontend/scripts/generate_ports.py`. Exposes `PORTS` and `searchPorts(query, limit)`
+  (searches port NAME only, diacritic/case-insensitive, prefix-ranked).
+- `RouteSearchModal` rewritten to search the local dataset (no Mappls API, no pincode mode).
+  Suggestion rows + input cards show Name / Country / UNLOCODE.
+  Field mapping through existing plumbing: `*_locality`=Name, `*_city`=Country, `*_pincode`=UNLOCODE.
+- Filtering: removed haversineKm/geocodePin/geocodeEloc/geocodeCityName/trackDistancesKm/bearingRad.
+  `applyFilter` now does EXACT origin+destination UNLOCODE match (weight/volume still apply).
+  Removed distance chips + "approximate/straight-line" footer + "within 30 km" copy.
+- Removed now-dead lat/long payload fields (truck post/edit, PTL post, bid body).
+- Backend: `create_load`/`update_load`/`post_ptl_load` no longer geocode lat/long.
+  `derive_corridor` + `_create_solo_ptl_group` now key PTL corridor by UNLOCODE, so
+  `/ptl/groups?origin_city=<UNLOCODE>&dest_city=<UNLOCODE>` matches exactly.
 
-### Iter 1 — MVP
-Backend models, N-member matching, 6 endpoints. Frontend tabs + cards + modals.
+Validated: ports.ts search; full Metro bundle compiles; TS clean in changed regions;
+backend exact-match `/loads?origin&destination`, PTL corridor match, and no-geocode confirmed via curl.
 
-### Iter 2 — UX refactor
-Bottom-nav rename; "Post Load" becomes a dedicated tab; profile shows both lists.
-
-### Iter 3 — Post Load form polish
-Mirrors Post Space 1:1 (stepper UI, optional collapsibles, photos, dim validation).
-
-### Iter 4 — Pair-only architecture
-Backend: PTL_MAX_MEMBERS=2 cap, FORMING→PAIRED→CONFIRMED, group reverts on cancel, marketplace surfaces only FORMING groups.
-Frontend: redesigned PtlGroupDetailModal (your-load / co-loader cards, big green call button), simplified marketplace card, MyPtlLoadsList status pills.
-
-### Iter 5 — Bid feature (current)
-**Original brief:** Non-poster users can place a structured Bid on any Truck
-Space or Partial Load detail screen. Posters see all incoming bids per post
-under a new "Bids Received" button on their My Posts cards.
-
-### Iter 6 — Bug fixes (Jan 2026)
-1. **Partial Load address second line missing state abbreviation**
-   - Backend: `PtlLoadPost` model + doc storage now include `origin_state` /
-     `destination_state`. `/ptl/loads/my`, `/ptl/groups`, `/ptl/groups/{id}`
-     return them in members payload so Partial Load card & detail render
-     `City, ST` identically to the Truck Space card.
-   - Frontend: `MyPtlLoadsList.groupFor` synthetic member now propagates
-     `origin_state` / `destination_state` from the PtlLoad row.
-   - **Note:** backend deployment (Render) must be redeployed for existing
-     users to benefit. Loads posted before the fix have no state in DB;
-     they will continue to miss the ST line.
-
-2. **Post-flow Find screen showed the just-created post & wrong type**
-   - The post-flow auto-filter now behaves per listing type:
-     * **Truck-space post** → Find toggles switch to show **only Partial
-       Loads** (the truck is looking for cargo).
-     * **Partial-load post** → Find shows **both Truck Spaces and other
-       Partial Loads** (a partial can pair with a truck OR with another
-       partial), so both toggles stay off (= show everything).
-     In both cases the posted listing id is excluded from the feed as a
-     safety belt so the user never sees their own new post.
-   - Implementation: extended `ActiveFilter` with optional `postedKind` +
-     `postedId`; `LoadMarketScreen` reads these to flip toggles and
-     exclude the id. Both PostLoad screens now attach these on
-     `onPosted(filter)`.
-
-
-**Backend (`/app/backend/server.py`)**
-- New collection `bids` with unique compound index `(listing_id, bidder_phone)`.
-- `BidCreate` model: listing_id, listing_type ('load' | 'ptl'), bidder_phone,
-  origin (locality/city/pincode/lat/lon), destination (same), weight_tons,
-  cargo_type.
-- `POST /api/bids` — creates or updates the caller's bid (one bid per listing
-  per phone). Self-bid blocked (400). 404 if listing missing. Server-side
-  haversine deviation between bid endpoint and post endpoint stored on the
-  bid (`origin_deviation_km`, `destination_deviation_km`).
-- `GET /api/bids/check?viewer_phone=&listing_id=` — has-the-viewer-bid?
-- `GET /api/bids/listing/{listing_id}?viewer_phone=` — list of all bids on
-  a listing. Only the poster (viewer == owner) can call; otherwise 403.
-- `GET /api/bids/counts/{phone}` — `{listing_id: count}` aggregate for posts
-  owned by phone (drives the badge on My Posts).
-- `DELETE /api/bids/{listing_id}?phone=` — withdraw a bid.
-- Indexes: `(listing_id, bidder_phone)` unique, `(poster_phone)`, `(listing_id, created_at)`.
-
-**Frontend (`/app/frontend/app/index.tsx`)**
-- `BidFormModal` — bottom-sheet form (origin pincode+city, destination
-  pincode+city, weight tons, cargo type pills: Bags, Carton Box, Pipes,
-  Drums, Fresh Produce, Others). Auto-fills city/locality via `/api/pincode/{pin}`.
-  Geocodes both endpoints via `/api/geocode/{pin}` before submit so backend
-  can compute deviation.
-- `BidsReceivedModal` — full-screen list. Each card: bidder avatar+name+company,
-  Call button (tel: link), origin+destination route, weight + cargo chips,
-  amber deviation banner showing `origin X km · dest Y km`.
-- `ListingDetailModal` (Truck Space & Partial Load detail) — bottom CTA bar
-  now shows a primary **Bid** button (testID `open-bid-form`) for non-poster
-  viewers; flips to "Bid Placed · Edit" once the viewer has bid. Call shortcut
-  remains alongside. The poster never sees the Bid CTA.
-- `MyTruckSpacePostsList` + `MyPtlLoadsList` — each post card gains a
-  **Bids Received** orange button (testID `bids-received-{id}`) with a count
-  pill (powered by `/api/bids/counts`). Tap opens `BidsReceivedModal`.
-
-**Tests**
-- `/app/backend/tests/test_bids_api.py` — 17 tests, all passing (covers
-  create, update, validation, self-bid block, missing-listing 404, deviation
-  math, check, owner-only listing, non-owner 403, counts aggregation, withdraw).
-
-## Backlog
-- P1: Notify poster when a new bid arrives (push / in-app notification).
-- P1: Bidder withdraws bid via UI (endpoint exists; no frontend control yet).
-- P2: Poster shortlist / accept-reject flow on a bid card.
-- P2: Sort / filter bids (by smallest deviation, lowest weight, newest).
-- P3: Move bids router into its own module — server.py is ~2k lines.
-- P3: Push notification on PTL pair formation (currently requires refresh).
-
-## 2026-01 — Partial Load posting: WhatsApp share flow (no group modal)
-- Removed the post-submit group formation modal (`PtlGroupDetailModal`) from
-  `PostPtlLoadScreen` (3rd bottom-nav tab / Post → Adjustment).
-- On successful POST `/ptl/loads`, the app now opens WhatsApp with a
-  pre-filled "Partial Load Available - Truck Traffic" message (route, weight,
-  cargo, loading date, poster contact) — mirroring the Truck Space "Post &
-  Share" flow.
-- Renamed primary CTA from **Post & find a group** → **Post & Share on
-  WhatsApp** (green WhatsApp style + logo icon). TestID `ptl-post-submit-btn`
-  preserved.
-- Kept the individual-load 20-ton cap on the form (weight stepper + modal
-  validation). Only the *group-combined* 20-ton concept is no longer shown to
-  the poster on submit.
-- Marketplace / Find Partial Loads and existing PTL group internals were
-  intentionally left untouched.
-
-## 2026-01 — Partial Load posting: solo listings + deep-link share
-Second iteration on top of the earlier "no group modal" change.
-
-**Backlog 1 done — backend no longer auto-groups posted PTL loads.**
-- `POST /api/ptl/loads` now calls new helper `_create_solo_ptl_group()` in
-  place of `match_ptl_load()`. Each posted partial load creates its own
-  standalone group (1 load = 1 group), so no more auto-pairing with existing
-  FORMING groups. Response still returns `{load_id, group_id, matched:false}`
-  so the frontend and existing marketplace/deep-link endpoints keep working
-  unchanged.
-- `match_ptl_load()` retained in code (dead-code for now) but no longer
-  called from the post endpoint. Kept for a future opt-in matching feature.
-
-**Backlog 2 done — shareable deep link in WhatsApp messages.**
-- Post Partial Load screen → WhatsApp text now includes
-  `🔗 More info: https://www.trucktraffic.in/a/{group_id}` (falls back to
-  `https://www.trucktraffic.in` only if the backend didn't return a
-  group_id).
-- Marketplace `PtlGroupCard.shareOnWhatsApp` and `ListingDetailModal.
-  shareDetailOnWhatsApp` also switched from the bare website URL to
-  `/a/{group.id}` so any share of an existing partial load opens straight
-  to its detail panel on trucktraffic.in (mirrors the truck-space
-  `/l/{short_id}` behaviour).
-
-**Verified**
-- Two identical-route PTL loads posted back-to-back → each got its own
-  `group_id`, both with `matched:false`.
-- Group retrievable via `GET /api/ptl/groups/{group_id}` (same endpoint the
-  website's `/a/{group_id}` deep link handler uses).
-
-## 2026-01 — PTL group-formation dead-code cleanup
-Removed ~485 lines of unreachable code from the retired auto-pairing flow.
-
-**Backend (`/app/backend/server.py`)**
-- Deleted `match_ptl_load()` (127 LoC), `confirm_group_membership` endpoint
-  (`POST /ptl/groups/{group_id}/confirm`, 21 LoC), and the pair-only
-  constants `PROXIMITY_KM` / `PTL_MAX_MEMBERS`.
-- `cancel_ptl_load` now always sets remaining groups to `FORMING` (no more
-  PAIRED branch); `get_ptl_group` no longer gates phone visibility on
-  `PAIRED`/`CONFIRMED` — the poster's phone is exposed to any viewer opening
-  the detail.
-
-**Frontend (`/app/frontend/app/index.tsx`)**
-- Deleted the entire `PtlGroupDetailModal` component (252 LoC) — no longer
-  rendered anywhere.
-- Removed `handleAccept`, `handleDecline`, the `PTL_PAIR_REQUEST /
-  ACCEPTED / DECLINED` notification cards, and the local `notifications /
-  notifLoading` state that only fed them.
-- Dropped `PTL_PAIR_*` variants and pair-request-only fields
-  (`requester_*`, `pending_load_id`) from the `AppNotification` type.
-- Removed the unreachable `<PostPtlModal visible={showPostPtl}/>` in the
-  marketplace and its dead `showPostPtl` state (that modal is now only
-  rendered for the *edit* flow from `MyPtlLoadsList`).
-- Simplified `PostPtlModal`'s "Find me a group" branch → since it's only
-  ever invoked with `editLoad`, the button now unconditionally reads
-  "Save changes" and the success message is a neutral "Your partial load
-  is now listed."
-
-**Verified**
-- Backend restarts clean, `POST /ptl/loads` still returns `{load_id,
-  group_id, matched:false}` and creates a solo group.
-- Removed `POST /ptl/groups/{group_id}/confirm` now returns HTTP 404.
-- TypeScript check passes on the modified regions.
-
----
-
-## 2026-01 — Adjustment Load (PTL) expired posts: hard-delete instead of soft-cancel
-
-**Problem**
-Adjustment / Partial Load postings whose loading date had passed were
-"disappearing" from My Posts (client-side filter) but the DB rows were
-being kept alive with `status = "CANCELLED"`. User wanted expired
-adjustment entries to be actually deleted from the DB, matching the
-behaviour of Truck Space postings (`DELETE /api/loads/{id}` — hard delete).
-
-**Changes**
-- `backend/server.py` → `DELETE /api/ptl/loads/{load_id}` now
-  hard-deletes the load row (`db.ptl_loads.delete_one`) instead of
-  updating it to `CANCELLED`. Response changed from `{cancelled: true}`
-  to `{deleted: true}`.
-- The endpoint still recomputes the parent group (or deletes the group
-  when the last member is removed), and now also removes orphan bids
-  via `db.bids.delete_many({listing_id: load_id})`.
-- `backend/tests/test_ptl_api.py` updated to assert the row is gone
-  (`ld is None`) and the response contains `deleted: true`.
-
-**Impact on frontend**
-- `MyPtlLoadsList` auto-expiry sweep (loading_date in past) already
-  called this endpoint; it now results in an actual row deletion.
-- Manual "Delete" button on My Posts → Adjustment tab also hard-deletes.
-
-**Verified**
-- Create → 1 row in DB → DELETE returns `{deleted: true}` → 0 rows in
-  DB → second DELETE returns 404. Empty solo group also cleaned up.
+## Backlog / Next
+- Native UI E2E (emulator) not runnable in this env.
+- Optional: prune unused StyleSheet entries (distanceRow/Chip/Text, approxNote) and dead
+  `_resolve_missing_coords` / FindPtlModal.
