@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Truck Traffic PTL",
+    "name": "Container Traffic",
     "slug": "trucktraffic-ptl",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -54,14 +54,14 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Allow Truck Traffic PTL to access your gallery to share photos.",
-          "cameraPermission": "Allow Truck Traffic PTL to access your camera to take photos."
+          "photosPermission": "Allow Container Traffic to access your gallery to share photos.",
+          "cameraPermission": "Allow Container Traffic to access your camera to take photos."
         }
       ],
       [
         "expo-contacts",
         {
-          "contactsPermission": "Allow Truck Traffic PTL to access your contacts so you can save truck-owner numbers directly to your phonebook."
+          "contactsPermission": "Allow Container Traffic to access your contacts so you can save shipper numbers directly to your phonebook."
         }
       ],
       [

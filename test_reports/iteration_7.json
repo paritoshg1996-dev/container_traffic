@@ -1,0 +1,41 @@
+{
+  "summary": "Backend-only verification of (a) new vessel_name/voyage_name fields on Container Space loads and (b) the REEFER / 40ftHC container-type changes, plus regressions on exact UN/LOCODE filtering and the PTL flow. New suite /app/backend/tests/test_vessel_voyage_reefer.py (23 tests) — ALL PASS against the public preview backend (https://ports-exact-match.preview.emergentagent.com/api). Verified: POST /api/loads persists and returns vessel_name/voyage_name (INNSA->SGSIN, truck_type 'Reefer', loading_date 2026-12-01); the fields are surfaced by GET /api/loads (exact-match query) and GET /api/loads/{id}/full; truck_type stored verbatim for '40ftHC', 'Reefer', '20ft', '40ft'. PATCH /api/loads/{id} updates vessel_name/voyage_name (200 + updated values, persisted on re-GET), a partial PATCH (weight_tons only) does NOT wipe existing vessel/voyage (None-filtered $set), PATCH truck_type->'Reefer' works, unknown id = 404, empty body = 400. REGRESSION exact-match filter: origin=INNSA&destination=SGSIN returns only exact matches (INMAA->SGSIN and INNSA->NLRTM excluded); lowercase/padded query (origin=innsa, destination=' sgsin ') now matches (create_load + list_loads both .strip().upper() — the case-sensitivity gap flagged in iteration_6 is FIXED); unknown codes return []. REGRESSION PTL: POST /api/ptl/loads with truck_type 'Reefer' succeeds, creates FORMING solo group with corridor 'INNSA→SGSIN', capacity_kg 26730 and correct capacity_remaining; GET /api/ptl/groups?origin_city=INNSA&dest_city=SGSIN returns it (lowercase query also matches); over-capacity Reefer (30000 kg) correctly rejected 400 with '26730 kg'; '40ftHC' PTL load resolves capacity 26500. Also re-ran the prior suite test_unlocode_ports.py (19 tests) — 1 test was STALE (asserted the old case-SENSITIVE behaviour); I updated that assertion to the new intended behaviour. Combined run: 42/42 passed. No 5xx and no new exceptions in backend logs (only the expected 'Firebase service account not found' warning; older cachecontrol ImportErrors in backend.err.log are historical, pre-dependency-install). All test data cleaned up — loads/ptl_loads/ptl_groups/bids collections verified empty and test users deleted.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "resolve_container_capacity_kg / POST /api/ptl/loads", "issue": "Container-type lookup is case-sensitive: CONTAINER_CAPACITY_KG.get(t.strip()) with no .upper()/canonicalisation. Verified truck_type='40fthc' silently falls back to DEFAULT 26730 kg instead of 26500 kg (wrong capacity/fill_pct, no error). Recommend a canonical map (lower-cased keys or an alias dict) so '40fthc'/'REEFER'/'reefer' resolve correctly."},
+      {"endpoint": "POST /api/loads", "issue": "vessel_name/voyage_name are Optional with '' defaults on the server while the mobile Post Container Space screen treats them as COMPULSORY. A load posted with them missing/empty is accepted (verified). If they are truly mandatory, enforce server-side (min_length / non-empty validator) so stale app versions or direct API calls cannot create listings without vessel/voyage."},
+      {"endpoint": "PATCH /api/loads/{id}", "issue": "update_load filters out only None, so vessel_name=\"\" (or voyage_name=\"\") DOES overwrite an existing value with an empty string. Acceptable if the client intends 'clear', but there is no way to distinguish clear-vs-omit and no non-empty validation on update."},
+      {"endpoint": "POST /api/ptl/loads", "issue": "PtlLoadPost has no vessel_name/voyage_name fields, so the two new sea-freight attributes exist only for Container Space (truck) loads. Confirm this asymmetry is intended for the PTL/partial-load flow."},
+      {"endpoint": "GET /api/loads", "issue": "Carried over from iteration_6 and still present: read handler mutates data (db.loads.delete_many on past loading_date) and origin/destination_pincode accept any string (no UN/LOCODE format validation, e.g. 'ZZZZZ' is stored)."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_vessel_voyage_reefer.py",
+    "/app/backend/tests/test_unlocode_ports.py",
+    "/app/test_reports/pytest/vessel_voyage_results.xml"
+  ],
+  "action_items": [
+    "Canonicalise container-type lookup (case-insensitive / alias map) in resolve_container_capacity_kg so '40fthc'/'reefer' don't silently fall back to the 26730 kg default.",
+    "Decide whether vessel_name/voyage_name should be server-enforced as mandatory on POST /api/loads (currently optional, defaults to '').",
+    "Confirm PATCH semantics for vessel_name/voyage_name empty string (clears the value) and whether PTL loads need the same fields."
+  ],
+  "critical_code_review_comments": [
+    "CONTAINER_CAPACITY_KG still keeps the legacy '40HC' key alongside '40ftHC' — good for old documents, but the PtlLoadPost docstring/comment (~line 1368) still says '20ft'/'40ft'/'40HC' and is now out of date; update comments and plan a data migration for any stored '40HC' values.",
+    "server.py is 2088 lines — past the 700-line guideline; split loads/PTL/bids/users into routers (repeat of iteration_6).",
+    "There is no GET /api/loads/{id} (only /api/loads/{id}/full) — GET on the bare id returns 405; keep in mind for clients/tests.",
+    "Normalisation is duplicated: create_load, update_load and derive_corridor each strip/upper independently. Extract a single normalise_locode() helper (also useful for container-type canonicalisation)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_vessel_voyage_reefer.py (new)",
+    "/app/backend/tests/test_unlocode_ports.py (updated 1 stale assertion: /loads filter is now case-insensitive)"
+  ],
+  "success_rate": {"backend": "100% (42/42 across both suites)", "frontend": "not tested (React Native — out of scope)"},
+  "seed_data_creation": "Temporary loads (INNSA/SGSIN, INMAA/SGSIN, INNSA/NLRTM, INMAA/NLRTM), PTL loads and users for phones 9000000771 / 9000000772 — all deleted; loads, ptl_loads, ptl_groups, bids collections verified empty after the run.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "/app/memory/test_credentials.md does NOT exist (only PRD.md). No credentials needed; Firebase-auth endpoints remain untestable (no service account).",
+  "context_for_next_testing_agent": "Regression suites: /app/backend/tests/test_vessel_voyage_reefer.py (vessel/voyage + Reefer/40ftHC) and /app/backend/tests/test_unlocode_ports.py (UN/LOCODE exact match). BASE_URL comes from EXPO_PUBLIC_BACKEND_URL, defaulting to the preview URL which proxies this container's backend. Container date is 2026-08-25 so loading_date must be future (2026-12-01) — list_loads purges past-dated loads. Use GET /api/loads/{id}/full (bare /api/loads/{id} is 405). /app/backend/tests/test_geocode_filter.py is STALE (asserts removed proximity/geocode behaviour).",
+  "rca_of_the_issue": "No defects reproduced in the requested scope. The only new finding is a code-path issue: resolve_container_capacity_kg does an exact-case dict lookup, so non-canonical casing of the new '40ftHC'/'Reefer' values silently resolves to the 26730 kg default (reproduced with truck_type='40fthc' -> capacity_kg 26730 instead of 26500)."
+}

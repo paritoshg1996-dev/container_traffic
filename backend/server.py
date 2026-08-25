@@ -143,7 +143,9 @@ class LoadCreate(BaseModel):
     destination_eloc: Optional[str] = ""
     cargo_types: List[str] = []
     cargo_placement: str = ""
-    truck_type: str = ""   # container type: "20ft" / "40ft" / "40HC"
+    truck_type: str = ""   # container type: "20ft" / "40ft" / "40ftHC" / "Reefer"
+    vessel_name: Optional[str] = ""
+    voyage_name: Optional[str] = ""
     weight_tons: float
     space_cuft: Optional[float] = None
     dimension_length: Optional[float] = None
@@ -783,6 +785,8 @@ class LoadUpdate(BaseModel):
     cargo_types: Optional[List[str]] = None
     cargo_placement: Optional[str] = None
     truck_type: Optional[str] = None
+    vessel_name: Optional[str] = None
+    voyage_name: Optional[str] = None
     weight_tons: Optional[float] = None
     space_cuft: Optional[float] = None
     dimension_length: Optional[float] = None
@@ -1331,6 +1335,8 @@ async def verify_firebase_token(payload: VerifyTokenRequest):
 CONTAINER_CAPACITY_KG = {
     "20ft": 21700,
     "40ft": 26730,
+    "40ftHC": 26500,
+    "Reefer": 26730,
     "40HC": 26500,
 }
 DEFAULT_CONTAINER_CAPACITY_KG = 26730   # fallback: standard 40ft payload
@@ -1338,8 +1344,10 @@ DEFAULT_CONTAINER_CAPACITY_KG = 26730   # fallback: standard 40ft payload
 
 def resolve_container_capacity_kg(container_type: Optional[str]) -> float:
     """Look up max payload (kg) for a container type, falling back to the
-    40ft default when the type is missing or unrecognised."""
-    return CONTAINER_CAPACITY_KG.get((container_type or "").strip(), DEFAULT_CONTAINER_CAPACITY_KG)
+    40ft default when the type is missing or unrecognised. Case-insensitive."""
+    key = (container_type or "").strip().lower()
+    lookup = {k.lower(): v for k, v in CONTAINER_CAPACITY_KG.items()}
+    return lookup.get(key, DEFAULT_CONTAINER_CAPACITY_KG)
 
 
 class PtlLoadPost(BaseModel):

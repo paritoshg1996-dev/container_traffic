@@ -150,10 +150,15 @@ class TestLoadExactMatchFilter:
         assert r.json() == []
 
     def test_lowercase_query_case_sensitivity(self, s):
-        """Documented behaviour check: /loads filter is case-sensitive."""
+        """Updated (2026-08-25): list_loads now normalises with .strip().upper(),
+        so a lowercase query MUST match the stored uppercase UN/LOCODE."""
         r = s.get(f"{API}/loads", params={"origin": "innsa", "destination": "sgsin"}, timeout=30)
         assert r.status_code == 200
-        assert r.json() == [], "lowercase now matches — behaviour changed"
+        rows = r.json()
+        assert rows, "lowercase query returned nothing — case normalisation regressed"
+        for d in rows:
+            assert d["origin_pincode"] == "INNSA"
+            assert d["destination_pincode"] == "SGSIN"
 
     def test_list_no_filter_includes_images_stripped(self, s):
         r = s.get(f"{API}/loads", timeout=30)

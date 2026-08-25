@@ -120,10 +120,22 @@ function isRouteInfoValid(pin: string, info: any, requireValidFlag: boolean = fa
 // Approximate standard payload capacities (kg) by ISO container type — mirrors
 // backend/server.py's CONTAINER_CAPACITY_KG. Verify against your CFS/carrier
 // tariff before relying on these for anything beyond a UI estimate.
-const CONTAINER_CAPACITY_KG: Record<string, number> = { "20ft": 21700, "40ft": 26730, "40HC": 26500 };
+const CONTAINER_CAPACITY_KG: Record<string, number> = { "20ft": 21700, "40ft": 26730, "40ftHC": 26500, "Reefer": 26730, "40HC": 26500 };
 const DEFAULT_CONTAINER_CAPACITY_KG = 26730; // fallback: standard 40ft payload
 function resolveContainerCapacityKg(containerType?: string | null): number {
   return CONTAINER_CAPACITY_KG[(containerType || "").trim()] ?? DEFAULT_CONTAINER_CAPACITY_KG;
+}
+// Human-readable label for a stored container type value.
+function containerLabel(t?: string | null): string {
+  const s = (t || "").trim();
+  const map: Record<string, string> = {
+    "20ft": "20ft Container",
+    "40ft": "40ft Container",
+    "40ftHC": "40ft HC Container",
+    "Reefer": "Reefer Container",
+    "40HC": "40ft HC Container",
+  };
+  return map[s] || s;
 }
 // NOTE: PTL_CARGO_TYPES was removed here — it was defined but never
 // referenced anywhere else in the file (CARGO_TYPE_OPTIONS below is the
@@ -194,9 +206,10 @@ const CARGO_TYPE_OPTIONS = [
 // truck images as placeholders so the picker keeps 3 visually distinct
 // options — swap in real 20ft/40ft/40HC container artwork before shipping.
 const CONTAINER_TYPES: { name: string; image: any }[] = [
-  { name: "20ft", image: require("../assets/trucks/open.png") },
-  { name: "40ft", image: require("../assets/trucks/container.png") },
-  { name: "40HC", image: require("../assets/trucks/trailer.png") },
+  { name: "20ft", image: require("../assets/trucks/cont_20ft.png") },
+  { name: "40ft", image: require("../assets/trucks/cont_40ft.png") },
+  { name: "40ftHC", image: require("../assets/trucks/cont_40hc.png") },
+  { name: "Reefer", image: require("../assets/trucks/cont_reefer.png") },
 ];
 
 type Profile = { name: string; phone: string; company: string; profile_verified?: boolean; verification_submitted?: boolean };
@@ -238,6 +251,8 @@ type Load = {
   poster_company: string;
   created_at: string;
   truck_type?: string;
+  vessel_name?: string;
+  voyage_name?: string;
   images?: string[];
   image_count?: number;
 };
@@ -248,7 +263,7 @@ type MapplsSuggestion = {
   eLoc: string;
 };
 
-// ============== PTL (Partial Truck Load) types ==============
+// ============== PTL (LCL) types ==============
 type PtlLoad = {
   id: string;
   poster_phone: string;
@@ -440,7 +455,7 @@ export default function Index() {
   const [showEditProfile, setShowEditProfile] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   // Origin/destination filter to auto-apply on the Find (market) page right
-  // after a Truck Space or Partial Load post — whether the WhatsApp share
+  // after a Container Space or LCL post — whether the WhatsApp share
   // redirect happens or the user returns straight to the app.
   const [pendingMarketFilter, setPendingMarketFilter] = useState<ActiveFilter | null>(null);
 
@@ -471,7 +486,7 @@ export default function Index() {
   }, []);
 
   const handleInvite = async () => {
-    const msg = `🚛 *Join me on Truck Traffic!*\n\nThe app for smarter truck matching across India:\n📦 *Partial Loads* — got a part-load? Combine it with another partial load to fill a truck together.\n🚚 *Truck Space* — got space left? Find partial loads to fill it up.\n\n📲 Download: ${PLAYSTORE_SHORT_URL}\n🌐 Website: https://www.trucktraffic.in\n\nLet\'s connect on the platform!`;
+    const msg = `🚛 *Join me on Container Traffic!*\n\nThe smarter way to match container space with LCL cargo:\n📦 *LCL* — got part-load cargo? Combine it with other LCL to fill a container together.\n🚚 *Container Space* — got space left in your container? Find LCL cargo to fill it up.\n\n📲 Download: ${PLAYSTORE_SHORT_URL}\n🌐 Website: https://www.trucktraffic.in\n\nLet\'s connect on the platform!`;
     try {
       await Linking.openURL(`https://wa.me/?text=${encodeURIComponent(msg)}`);
     } catch {
@@ -602,7 +617,7 @@ export default function Index() {
                 minimumFontScale={0.7}
                 allowFontScaling={false}
               >
-                Truck Traffic PTL
+                Container Traffic LCL
               </Text>
               <Text style={styles.headerSubtitle} numberOfLines={1}>Hi, {profile.name.split(" ")[0]}</Text>
             </View>
@@ -775,7 +790,7 @@ function ProfileSetup({ onSave, lockedPhone, initialName, initialCompany, isEdit
               <Ionicons name="arrow-back" size={24} color={COLORS.text} />
             </TouchableOpacity>
           ) : null}
-          <Text style={styles.profileTitle}>{isEditing ? "Edit Profile" : "Welcome to Truck Traffic"}</Text>
+          <Text style={styles.profileTitle}>{isEditing ? "Edit Profile" : "Welcome to Container Traffic"}</Text>
           <Text style={styles.profileSubtitle}>{isEditing ? "Update your name or company details" : "Set up your profile to start posting and finding loads"}</Text>
           <View style={{ height: 24 }} />
           <Field label="Your Name *">
@@ -1162,8 +1177,8 @@ function sanitizeCityForDisplay(city: string, pincode: string, state: string): s
   return c;
 }
 
-// Shared origin/destination row used by both the Truck Space card (LoadCard)
-// and the Partial Load card (MyPtlLoadsList), so both listing types render
+// Shared origin/destination row used by both the Container Space card (LoadCard)
+// and the LCL card (MyPtlLoadsList), so both listing types render
 // route info identically: icon + 3-line stack (locality / city,ST / pincode).
 function RouteEndpointBlock({ iconName, iconColor, locality, city, state, pincode }: {
   iconName: any; iconColor: string; locality: string; city: string; state: string; pincode: string;
@@ -1321,7 +1336,7 @@ if (!destValid)
   return Alert.alert("Invalid Destination", "Select a valid destination."); 
 	  
 	  
-	if (!truckType) return Alert.alert("Required", "Select a truck type.");
+	if (!truckType) return Alert.alert("Required", "Select a container type.");
     if (!weight || weight <= 0) return Alert.alert("Invalid", "Enter valid weight.");
     if (weight > 40) return Alert.alert("Weight limit exceeded", "Maximum allowed weight is 40 tons.");
     if (pricePerTon && parseInt(pricePerTon, 10) > 10000) return Alert.alert("Price limit exceeded", "Maximum allowed price is ₹10,000 per ton.");
@@ -1374,7 +1389,7 @@ if (!destValid)
                 onChange={(t, p, i) => { setDestText(t); setDestPin(p); setDestInfo(i); }} />
             </View>
 
-            <SectionTitle icon="calendar-outline" title="Loading Date" />
+            <SectionTitle icon="calendar-outline" title="Cutoff Date" />
             <View style={[styles.stepperRow, styles.filledBorderBlue]}>
               <TouchableOpacity
                 testID="edit-loading-date-minus"
@@ -1589,7 +1604,7 @@ if (!destValid)
               summary={imagesLoaded ? (images.length > 0 ? `${images.length} photo${images.length > 1 ? "s" : ""}` : "") : "Loading…"}
               testID="edit-opt-photos"
             >
-              <Text style={styles.label}>Attach up to 3 photos of the truck or available space</Text>
+              <Text style={styles.label}>Attach up to 3 photos of the container or available space</Text>
               <View style={styles.photoRow}>
                 {[0, 1, 2].map((idx) => {
                   const img = images[idx];
@@ -1890,7 +1905,7 @@ function ProfileScreen({ profile, onClose, onEdit, onProfileUpdate }: { profile:
   const [showVerifyDocs, setShowVerifyDocs] = useState(false);
 
 const handleInvite = async () => {
-    const msg = `🚛 *Join me on Truck Traffic!*\n\nThe app for smarter truck matching across India:\n📦 *Partial Loads* — got a part-load? Combine it with another partial load to fill a truck together.\n🚚 *Truck Space* — got space left? Find partial loads to fill it up.\n\n📲 Download: ${PLAYSTORE_SHORT_URL}\n🌐 Website: https://www.trucktraffic.in\n\nLet\'s connect on the platform!`;
+    const msg = `🚛 *Join me on Container Traffic!*\n\nThe smarter way to match container space with LCL cargo:\n📦 *LCL* — got part-load cargo? Combine it with other LCL to fill a container together.\n🚚 *Container Space* — got space left in your container? Find LCL cargo to fill it up.\n\n📲 Download: ${PLAYSTORE_SHORT_URL}\n🌐 Website: https://www.trucktraffic.in\n\nLet\'s connect on the platform!`;
     try {
       await Linking.openURL(`https://wa.me/?text=${encodeURIComponent(msg)}`);
     } catch {
@@ -1999,11 +2014,11 @@ const handleInvite = async () => {
         <View style={styles.statsRow}>
           <View style={[styles.statBox, profileStyles.statBoxOutline, { borderColor: COLORS.primary }]}>
             <Text style={[styles.statValue, { color: COLORS.primary }]} testID="my-loads-count">{myLoads.length}</Text>
-            <Text style={styles.statLabel}>Truck Space</Text>
+            <Text style={styles.statLabel}>Container Space</Text>
           </View>
           <View style={[styles.statBox, profileStyles.statBoxOutline, { borderColor: COLORS.secondary }]}>
             <Text style={[styles.statValue, { color: COLORS.secondary }]} testID="my-ptl-count">{myPtlLoads.length}</Text>
-            <Text style={styles.statLabel}>Partial Loads</Text>
+            <Text style={styles.statLabel}>LCL</Text>
           </View>
         </View>
         {loading ? <ActivityIndicator color={COLORS.primary} style={{ marginTop: 24 }} /> : null}
@@ -2053,6 +2068,8 @@ function PostLoadScreen({ profile, onPosted }: { profile: Profile; onPosted: (fi
   const [images, setImages] = useState<string[]>([]);
   const [placement, setPlacement] = useState<string>("");
   const [truckType, setTruckType] = useState<string>("");
+  const [vesselName, setVesselName] = useState("");
+  const [voyageName, setVoyageName] = useState("");
  
 const [weight, setWeight] = useState(1.0);
 const [date, setDate] = useState<Date>(new Date());
@@ -2137,7 +2154,9 @@ if (!destValid) {
 
 
 	  
-    if (!truckType) return Alert.alert("Required", "Select a truck type");
+    if (!truckType) return Alert.alert("Required", "Select a container type");
+if (!vesselName.trim()) return Alert.alert("Required", "Enter the vessel name");
+if (!voyageName.trim()) return Alert.alert("Required", "Enter the voyage name");
 const w = weight;
 if (!w || w <= 0) return Alert.alert("Invalid", "Enter valid weight in tons");
 if (w > 40) return Alert.alert("Weight limit exceeded", "Maximum allowed weight is 40 tons.");
@@ -2165,6 +2184,7 @@ if (pricePerTon && parseInt(pricePerTon, 10) > 10000) return Alert.alert("Price 
         dimension_length: lengthVal, dimension_breadth: breadthVal, dimension_height: heightVal, price_per_ton: priceVal,
         loading_date: date.toISOString().slice(0, 10), poster_name: profile.name, poster_phone: profile.phone,
         poster_company: profile.company, images,
+        vessel_name: vesselName.trim(), voyage_name: voyageName.trim(),
       };
       const res = await fetch(`${API}/loads`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       if (!res.ok) throw new Error("Failed to post");
@@ -2176,6 +2196,7 @@ if (pricePerTon && parseInt(pricePerTon, 10) > 10000) return Alert.alert("Price 
         setTruckType(""); setPlacement(""); setWeight(1.0); setImages([]);
         setDimL(""); setDimB(""); setDimH(""); setPricePerTon(""); setPriceError("");
         setCargoTypes([]); setCargoOther(""); setShowCargoOtherInput(false);
+        setVesselName(""); setVoyageName("");
       };
 
       if (alsoShare) {
@@ -2196,7 +2217,7 @@ if (pricePerTon && parseInt(pricePerTon, 10) > 10000) return Alert.alert("Price 
           `📍 ${dLocClean || dCityClean || destPin}` +
           (dCityClean && dAbbr ? `\n   ${dCityClean}, ${dAbbr}` : (dCityClean ? `\n   ${dCityClean}` : (dAbbr ? `\n   ${dAbbr}` : ""))) +
           `\n   ${destPin}`;
-        const truckLabelPost = truckType === "20ft" ? "20ft Container" : truckType === "40ft" ? "40ft Container" : truckType === "40HC" ? "40HC Container" : truckType;
+        const truckLabelPost = containerLabel(truckType);
         const poArea = oLocClean || oCityClean || originPin;
         const poCity = oCityClean && oCityClean !== oLocClean ? `, ${oCityClean}` : "";
         const poState = oAbbr ? `, ${oAbbr}` : "";
@@ -2206,11 +2227,12 @@ if (pricePerTon && parseInt(pricePerTon, 10) > 10000) return Alert.alert("Price 
         const postOriginLabel = `📍 From: ${poArea}${poCity}${poState}, ${originPin}`;
         const postDestLabel   = `📍 To: ${pdArea}${pdCity}${pdState}, ${destPin}`;
         const postShareUrl = loadSharePath(created);
-        const text = `🚛 *Truck Space Available - Truck Traffic*\n\n` +
+        const text = `🚛 *Container Space Available - Container Traffic*\n\n` +
           `${postOriginLabel}\n${postDestLabel}\n\n` +
           `🚚 ${truckLabelPost}\n` +
+          `🚢 *Vessel:* ${vesselName.trim()}  •  *Voyage:* ${voyageName.trim()}\n` +
           `⚖️ *Weight:* ${w} Tons\n` +
-          `📅 *Loading:* ${dateStr}\n\n` +
+          `📅 *Cutoff:* ${dateStr}\n\n` +
           `📞 *Contact:* ${profile.name}` +
           (profile.company ? ` — ${profile.company}` : "") +
           `\n+91 ${profile.phone}\n\n` +
@@ -2284,7 +2306,31 @@ return (
           />
         </View>
 
-        <SectionTitle icon="calendar-outline" title="Loading Date" />
+        <SectionTitle icon="boat-outline" title="Vessel Details" />
+        <Field label="Vessel Name *">
+          <TextInput
+            testID="post-vessel-name-input"
+            style={[styles.input, vesselName.trim() && styles.filledBorderBlue]}
+            placeholder="e.g., MSC Anna"
+            placeholderTextColor={COLORS.textSubtle}
+            value={vesselName}
+            onChangeText={setVesselName}
+            autoCapitalize="words"
+          />
+        </Field>
+        <Field label="Voyage Name *">
+          <TextInput
+            testID="post-voyage-name-input"
+            style={[styles.input, voyageName.trim() && styles.filledBorderBlue]}
+            placeholder="e.g., 245W"
+            placeholderTextColor={COLORS.textSubtle}
+            value={voyageName}
+            onChangeText={setVoyageName}
+            autoCapitalize="characters"
+          />
+        </Field>
+
+        <SectionTitle icon="calendar-outline" title="Cutoff Date" />
         <View style={[styles.stepperRow, styles.filledBorderBlue]}>
           <TouchableOpacity
             testID="loading-date-minus"
@@ -2530,7 +2576,7 @@ return (
         <CollapsibleSection
           accentColor={COLORS.primary}
           icon="cube-outline"
-          title="Cargo in Truck"
+          title="Cargo in Container"
           summary={cargoTypes.length > 0 ? cargoTypes.map(c => c.startsWith("Others:") ? c.slice(8).trim() : c).join(", ") : ""}
           testID="opt-cargo-type"
         >
@@ -2635,7 +2681,7 @@ return (
           summary={images.length > 0 ? `${images.length} photo${images.length > 1 ? "s" : ""}` : ""}
           testID="opt-photos"
         >
-          <Text style={styles.label}>Attach up to 3 photos of the truck or available space (max 50 MB each)</Text>
+          <Text style={styles.label}>Attach up to 3 photos of the container or available space (max 50 MB each)</Text>
           {uploadProgress !== null && (
             <View style={{ marginBottom: 10 }}>
               <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 4 }}>
@@ -3375,12 +3421,12 @@ function LoadMarketScreen({ profile, pendingFilter, onConsumePendingFilter }: { 
           .filter(Boolean)
           .map((d: string) => { try { const dt = new Date(d); dt.setHours(0,0,0,0); return dt; } catch { return null; } })
           .filter(Boolean) as Date[];
-        if (dates.length === 0) return true; // no loading date = always show
+        if (dates.length === 0) return true; // no cutoff date = always show
         return dates.some(d => d >= today);   // show if at least one member's date is today or future
       });
       setPtlGroups(active);
     } catch {
-      Alert.alert("Error", "Failed to fetch PTL groups");
+      Alert.alert("Error", "Failed to fetch LCL groups");
     } finally {
       setPtlLoading(false);
       setPtlRefreshing(false);
@@ -3411,7 +3457,7 @@ function LoadMarketScreen({ profile, pendingFilter, onConsumePendingFilter }: { 
   }, [allLoads]);
 
   // Common filter: applies to trucks (client-side haversine route match) and
-  // to partial loads (server-side city/weight match) at the same time.
+  // to LCL (server-side city/weight match) at the same time.
   const onApplyFilter = async (f: ActiveFilter) => {
     setActiveFilter(f);
     setShowFilter(false);
@@ -3428,23 +3474,23 @@ function LoadMarketScreen({ profile, pendingFilter, onConsumePendingFilter }: { 
     fetchPtlGroups(null);
   };
   // Auto-apply the origin/destination filter carried over from a just-completed
-  // Truck Space / Partial Load post, once loads have finished loading. This
+  // Container Space / LCL post, once loads have finished loading. This
   // fires whether the user was redirected to WhatsApp and came back, or
   // skipped the redirect entirely — either way they land here pre-filtered.
   // The intent of this screen is to surface *possible matches* from the
-  // opposite listing type: after posting a truck space we show matching
-  // partial loads (potential cargo for that truck), and after posting a
-  // partial load we show matching truck spaces (potential trucks for that
+  // opposite listing type: after posting a container space we show matching
+  // LCL (potential cargo for that truck), and after posting a
+  // LCL we show matching container spaces (potential trucks for that
   // cargo). The just-posted listing itself is also excluded by id.
   useEffect(() => {
     if (pendingFilter && !loading) {
       if (pendingFilter.postedKind === "truck") {
-        // Truck-space poster is looking for cargo → only Partial Loads.
+        // Truck-space poster is looking for cargo → only LCL.
         setShowTrucks(false);
         setShowPartials(true);
       } else if (pendingFilter.postedKind === "ptl") {
         // Partial-load poster is looking for both a truck AND other
-        // partial loads (partials can pair up too), so leave both types
+        // LCL (partials can pair up too), so leave both types
         // on. Toggles both OFF is the "show everything" state.
         setShowTrucks(false);
         setShowPartials(false);
@@ -3495,7 +3541,7 @@ function LoadMarketScreen({ profile, pendingFilter, onConsumePendingFilter }: { 
           onPress={() => setShowTrucks((v) => !v)}
         >
           <Ionicons name="car-outline" size={14} color={showTrucks ? COLORS.surface : COLORS.textMuted} />
-          <Text style={[styles.modeToggleText, showTrucks && styles.modeToggleTextActive]}>Truck Space</Text>
+          <Text style={[styles.modeToggleText, showTrucks && styles.modeToggleTextActive]}>Container Space</Text>
         </TouchableOpacity>
         <TouchableOpacity
           testID="market-mode-ptl"
@@ -3503,7 +3549,7 @@ function LoadMarketScreen({ profile, pendingFilter, onConsumePendingFilter }: { 
           onPress={() => setShowPartials((v) => !v)}
         >
           <Ionicons name="cube-outline" size={14} color={showPartials ? COLORS.surface : COLORS.textMuted} />
-          <Text style={[styles.modeToggleText, showPartials && styles.modeToggleTextActive]}>Partial Load</Text>
+          <Text style={[styles.modeToggleText, showPartials && styles.modeToggleTextActive]}>LCL</Text>
         </TouchableOpacity>
       </View>
 
@@ -3548,7 +3594,7 @@ function LoadMarketScreen({ profile, pendingFilter, onConsumePendingFilter }: { 
             <View style={styles.emptyWrap} testID="empty-state">
               <Ionicons name={isFiltered ? "search" : "cube-outline"} size={48} color={COLORS.textSubtle} />
               <Text style={styles.emptyTitle}>{isFiltered ? "No matching listings found" : "No listings yet"}</Text>
-              <Text style={styles.emptySub}>{isFiltered ? "Try a different origin or destination port." : "Be the first to post a truck space or partial load!"}</Text>
+              <Text style={styles.emptySub}>{isFiltered ? "Try a different origin or destination port." : "Be the first to post a container space or LCL!"}</Text>
             </View>
           }
           extraData={contactsMap.size}
@@ -3642,7 +3688,7 @@ function loadSharePath(load: any): string {
   return "https://www.trucktraffic.in";
 }
 
-// Returns the short-link path for a Partial Load (adjustment-load) group.
+// Returns the short-link path for a LCL (adjustment-load) group.
 // Mirrors `loadSharePath` — prefers the server-assigned 6-char short_id and
 // falls back to the full `GRP-…` id for older groups.
 function groupSharePath(group: any): string {
@@ -3658,7 +3704,7 @@ function groupSharePath(group: any): string {
 //   https://play.google.com/store/apps/details?id=com.ptlmarket.trucktraffic
 const PLAYSTORE_SHORT_URL = "https://trucktraffic.in/app";
 
-// Builds the WhatsApp share text for a Partial Load (adjustment-load) group.
+// Builds the WhatsApp share text for a LCL (adjustment-load) group.
 // Used by the Post & Share flow, the PTL group card, and the PTL detail page,
 // so all three surfaces produce the exact same message.
 function buildPtlShareText(primary: PtlMember | undefined, group: PtlGroup, shareUrl: string): string {
@@ -3680,17 +3726,17 @@ function buildPtlShareText(primary: PtlMember | undefined, group: PtlGroup, shar
   const pdState = dAbbr ? `, ${dAbbr}` : "";
   const postOriginLabel = poArea ? `📍 From: ${poArea}${poCity}${poState}${primary?.origin_pincode ? `, ${primary.origin_pincode}` : ""}` : `📍 Route: ${group.origin_display} → ${group.destination_display}`;
   const postDestLabel   = poArea ? `📍 To: ${pdArea}${pdCity}${pdState}${primary?.destination_pincode ? `, ${primary.destination_pincode}` : ""}` : "";
-  const truckLabel = primary?.truck_type === "20ft" ? "20ft Container" : primary?.truck_type === "40ft" ? "40ft Container" : primary?.truck_type === "40HC" ? "40HC Container" : primary?.truck_type;
+  const truckLabel = containerLabel(primary?.truck_type);
   const loadingDateStr = primary?.loading_date
     ? (() => { try { return new Date(primary.loading_date as string).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }); } catch { return primary.loading_date as string; } })()
     : null;
   return (
-    `📦 *Partial Load Available - Truck Traffic*\n\n` +
+    `📦 *LCL Available - Container Traffic*\n\n` +
     `${postOriginLabel}${postDestLabel ? `\n${postDestLabel}` : ""}\n\n` +
     (truckLabel ? `🚚 ${truckLabel}\n` : "") +
     `⚖️ *Weight:* ${weightT} Tons\n` +
     (cargo ? `📦 *Cargo:* ${cargo}\n` : "") +
-    (loadingDateStr ? `📅 *Loading:* ${loadingDateStr}\n` : "") +
+    (loadingDateStr ? `📅 *Cutoff:* ${loadingDateStr}\n` : "") +
     `\n📞 *Contact:* ${primary?.name || ""}` +
     (primary?.company ? ` — ${primary.company}` : "") +
     `\n+91 ${primary?.phone || ""}\n\n` +
@@ -3726,7 +3772,7 @@ function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhon
       `📍 ${dLocClean || dCityClean || load.destination_pincode}` +
       (dCityClean && dAbbr ? `\n   ${dCityClean}, ${dAbbr}` : (dCityClean ? `\n   ${dCityClean}` : (dAbbr ? `\n   ${dAbbr}` : ""))) +
       `\n   ${load.destination_pincode}`;
-    const truckLabelCard = load.truck_type === "20ft" ? "20ft Container" : load.truck_type === "40ft" ? "40ft Container" : load.truck_type === "40HC" ? "40HC Container" : load.truck_type;
+    const truckLabelCard = containerLabel(load.truck_type);
     const oArea = oLocClean || oCityClean || load.origin_pincode;
     const oPin = load.origin_pincode;
     const dArea = dLocClean || dCityClean || load.destination_pincode;
@@ -3739,11 +3785,11 @@ function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhon
     const destLabel   = `📍 To: ${dArea}${dCity}${dState}, ${dPin}`;
     const shareUrl = loadSharePath(load);
     const text =
-      `🚛 *Truck Space Available - Truck Traffic*\n\n` +
+      `🚛 *Container Space Available - Container Traffic*\n\n` +
       `${originLabel}\n${destLabel}\n\n` +
       `🚚 ${truckLabelCard}\n` +
       `⚖️ *Weight:* ${load.weight_tons} Tons\n` +
-      `📅 *Loading:* ${dateStrShare}\n\n` +
+      `📅 *Cutoff:* ${dateStrShare}\n\n` +
       `📞 *Contact:* ${load.poster_name}` +
       (load.poster_company ? ` — ${load.poster_company}` : "") +
       `\n+91 ${load.poster_phone}\n\n` +
@@ -3759,14 +3805,14 @@ function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhon
   return (
     <TouchableOpacity activeOpacity={0.92} onPress={() => setShowDetail(true)} testID={`load-card-${load.id}`}>
     <View style={[styles.card, marketCardStyles.truckCardOutline]}>
-      {/* At-a-glance type badge, pinned top-right. Blue = Truck Space,
-          matching the card's border color and the app's Truck Space theme
+      {/* At-a-glance type badge, pinned top-right. Blue = Container Space,
+          matching the card's border color and the app's Container Space theme
           elsewhere. The share button sits directly below it in the same
           right-hand column, so both live in the corner instead of the
           badge eating its own full-width row (keeps the card shorter). */}
       <View style={[marketCardStyles.typeBadgeAbs, marketCardStyles.typeBadgeTruck]}>
         <Ionicons name="car-outline" size={10} color={COLORS.surface} />
-        <Text style={marketCardStyles.typeBadgeText}>TRUCK SPACE</Text>
+        <Text style={marketCardStyles.typeBadgeText}>CONTAINER SPACE</Text>
       </View>
       {/* Share-to-WhatsApp button, below the badge, top-right of the card.
           The combined "share-social" icon makes it clear this *forwards*
@@ -3814,6 +3860,12 @@ function LoadCard({ load, isMine, distance, contactName, contactsMap, viewerPhon
           <View style={cardStyles.metaChip}>
             {truckImg ? <Image source={truckImg} style={cardStyles.truckMiniImg} resizeMode="contain" /> : null}
             <Text style={cardStyles.metaText}>{load.truck_type}</Text>
+          </View>
+        ) : null}
+        {load.vessel_name || load.voyage_name ? (
+          <View style={cardStyles.metaChip} testID={`load-vessel-${load.id}`}>
+            <Ionicons name="boat-outline" size={12} color={COLORS.textMuted} />
+            <Text style={cardStyles.metaText}>{[load.vessel_name, load.voyage_name].filter(Boolean).join(" • ")}</Text>
           </View>
         ) : null}
       </ScrollView>
@@ -4270,8 +4322,8 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
   const [showPtlPosterProfile, setShowPtlPosterProfile] = useState(false);
 
   // For bidding, we need the bid target = the post the user is looking at.
-  // Truck Space → load.id  (listing_type "load")
-  // Partial Load → the PTL load_id of the post's owner (not the group_id).
+  // Container Space → load.id  (listing_type "load")
+  // LCL → the PTL load_id of the post's owner (not the group_id).
   //   FORMING groups have exactly 1 member = the poster; in market view the
   //   modal is opened with a single-member group, so members[0] is the poster.
   const ptlPosterMember = (ptlGroup?.members || []).find(m => !m.is_me) || (ptlGroup?.members || [])[0];
@@ -4352,10 +4404,12 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
           </View>
         </View>
         <View style={detailStyles.section}>
-          <Text style={detailStyles.sectionTitle}>Truck Details</Text>
-          <DetailRow icon="calendar-outline" label="Loading Date" value={dateStr} />
+          <Text style={detailStyles.sectionTitle}>Container Details</Text>
+          <DetailRow icon="calendar-outline" label="Cutoff Date" value={dateStr} />
           <DetailRow icon="barbell-outline" label="Weight" value={`${l.weight_tons} Tons free`} />
           {l.truck_type ? <DetailRow icon="cube-outline" label="Container Type" value={l.truck_type} truckImg={truckImg} /> : null}
+          {l.vessel_name ? <DetailRow icon="boat-outline" label="Vessel Name" value={l.vessel_name} /> : null}
+          {l.voyage_name ? <DetailRow icon="navigate-outline" label="Voyage Name" value={l.voyage_name} /> : null}
           {dimStr ? <DetailRow icon="resize-outline" label="Dimensions (L×B×H)" value={dimStr} /> : null}
           {l.cargo_placement ? <DetailRow icon="layers-outline" label="Cargo Placement" value={l.cargo_placement} /> : null}
           {(l.cargo_types || []).filter(Boolean).length > 0 ? <DetailRow icon="cube-outline" label="Cargo Types" value={(l.cargo_types || []).map((c: string) => c.startsWith("Others:") ? c.slice(8).trim() : c).join(", ")} /> : null}
@@ -4443,7 +4497,7 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
         </View>
         <View style={detailStyles.section}>
           <Text style={detailStyles.sectionTitle}>Load Details</Text>
-          {dateStr ? <DetailRow icon="calendar-outline" label="Loading Date" value={dateStr} /> : null}
+          {dateStr ? <DetailRow icon="calendar-outline" label="Cutoff Date" value={dateStr} /> : null}
           <DetailRow icon="barbell-outline" label="Weight" value={`${(weightKg / 1000).toFixed(1)} Tons posted`} />
           {cargoLabel ? <DetailRow icon="cube-outline" label="Cargo Type" value={cargoLabel} /> : null}
           {primary?.truck_type ? <DetailRow icon="cube-outline" label="Container Type" value={primary.truck_type} truckImg={truckImg} /> : null}
@@ -4511,7 +4565,7 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
         const dCityClean = sanitizeCityForDisplay(load.destination_city || "", load.destination_pincode || "", dStateName);
         const oAbbr = stateAbbr(oStateName);
         const dAbbr = stateAbbr(dStateName);
-        const truckLabelDetail = load.truck_type === "20ft" ? "20ft Container" : load.truck_type === "40ft" ? "40ft Container" : load.truck_type === "40HC" ? "40HC Container" : load.truck_type;
+        const truckLabelDetail = containerLabel(load.truck_type);
         const oArea = oLocClean || oCityClean || load.origin_pincode;
         const dArea = dLocClean || dCityClean || load.destination_pincode;
         const oCity = oCityClean && oCityClean !== oLocClean ? `, ${oCityClean}` : "";
@@ -4522,11 +4576,12 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
         const destLabel   = `📍 To: ${dArea}${dCity}${dState}, ${load.destination_pincode}`;
         const shareUrl = loadSharePath(load);
         text =
-          `🚛 *Truck Space Available - Truck Traffic*\n\n` +
+          `🚛 *Container Space Available - Container Traffic*\n\n` +
           `${originLabel}\n${destLabel}\n\n` +
           `🚚 ${truckLabelDetail}\n` +
+          `🚢 *Vessel:* ${load.vessel_name || "-"}  •  *Voyage:* ${load.voyage_name || "-"}\n` +
           `⚖️ *Weight:* ${load.weight_tons} Tons\n` +
-          `📅 *Loading:* ${dateStrShare}\n\n` +
+          `📅 *Cutoff:* ${dateStrShare}\n\n` +
           `📞 *Contact:* ${load.poster_name}` +
           (load.poster_company ? ` — ${load.poster_company}` : "") +
           `\n+91 ${load.poster_phone}\n\n` +
@@ -4560,7 +4615,7 @@ function ListingDetailModal({ visible, load, ptlGroup, viewerPhone, viewerName, 
       <SafeAreaView style={[styles.fill, { backgroundColor: COLORS.bg }]} edges={["top"]}>
         <View style={styles.fsHeader}>
           <TouchableOpacity onPress={onClose} style={styles.iconBtn}><Ionicons name="arrow-back" size={24} color={COLORS.text} /></TouchableOpacity>
-          <Text style={styles.fsHeaderTitle}>{load ? "Truck Space Detail" : "Partial Load Detail"}</Text>
+          <Text style={styles.fsHeaderTitle}>{load ? "Container Space Detail" : "LCL Detail"}</Text>
           <TouchableOpacity onPress={shareDetailOnWhatsApp} style={[styles.iconBtn, { flexDirection: "row", gap: 4, alignItems: "center" }]} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
             <Ionicons name="logo-whatsapp" size={20} color="#25D366" />
           </TouchableOpacity>
@@ -4698,7 +4753,7 @@ function FindPtlModal({ visible, initial, onClose, onApply }: {
       <SafeAreaView style={[styles.fill, { backgroundColor: COLORS.bg }]} edges={["top"]}>
         <View style={styles.fsHeader}>
           <TouchableOpacity onPress={onClose} style={styles.iconBtn}><Ionicons name="arrow-back" size={24} color={COLORS.text} /></TouchableOpacity>
-          <Text style={styles.fsHeaderTitle}>Filter Partial Loads</Text>
+          <Text style={styles.fsHeaderTitle}>Filter LCL</Text>
           <View style={{ width: 32 }} />
         </View>
         <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.fill}>
@@ -4900,18 +4955,18 @@ function PosterProfileModal({ visible, load, contactName, contactsMap, viewerPho
           <View style={styles.statsRow}>
             <View style={[styles.statBox, profileStyles.statBoxOutline, { borderColor: COLORS.primary }]}>
               <Text style={[styles.statValue, { color: COLORS.primary }]}>{posterLoads.length}</Text>
-              <Text style={styles.statLabel}>Truck Space</Text>
+              <Text style={styles.statLabel}>Container Space</Text>
             </View>
             <View style={[styles.statBox, profileStyles.statBoxOutline, { borderColor: COLORS.secondary }]}>
               <Text style={[styles.statValue, { color: COLORS.secondary }]}>{posterPtlLoads.length}</Text>
-              <Text style={styles.statLabel}>Partial Loads</Text>
+              <Text style={styles.statLabel}>LCL</Text>
             </View>
           </View>
 
           {/* Action buttons removed per UX feedback */}
 
-          {/* Truck space postings */}
-          <Text style={styles.sectionHeading}>Truck Space Postings</Text>
+          {/* Container space postings */}
+          <Text style={styles.sectionHeading}>Container Space Postings</Text>
           {loading ? (
             <ActivityIndicator color={COLORS.primary} style={{ marginTop: 24 }} />
           ) : posterLoads.length === 0 ? (
@@ -4923,10 +4978,10 @@ function PosterProfileModal({ visible, load, contactName, contactsMap, viewerPho
             posterLoads.map(l => <LoadCard key={l.id} load={l} isMine={false} contactName={contactName} />)
           )}
 
-          {/* Adjustment (partial load) postings */}
+          {/* Adjustment (LCL) postings */}
           {!loading && posterPtlLoads.length > 0 && (
             <>
-              <Text style={[styles.sectionHeading, { marginTop: 8 }]}>Partial Load Postings</Text>
+              <Text style={[styles.sectionHeading, { marginTop: 8 }]}>LCL Postings</Text>
               {posterPtlLoads.map(item => (
                 <PtlGroupCard
                   key={item.id}
@@ -5206,7 +5261,7 @@ if (!destValid) {
         </View>
         <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.fill}>
           <SafeScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
-            <Text style={styles.modalSubtitle}>Select origin and destination ports to find exactly matching truck space and partial loads.</Text>
+            <Text style={styles.modalSubtitle}>Select origin and destination ports to find exactly matching container space and LCL.</Text>
 
             <SectionTitle icon="navigate-outline" title="Route" />
             <View style={styles.routeInputsRow}>
@@ -5272,7 +5327,7 @@ function SectionTitle({ icon, title }: { icon: any; title: string }) {
 }
 
 // ==========================================================================
-// ============== PTL (Partial Truck Load) Components ==============
+// ============== PTL (LCL) Components ==============
 // ==========================================================================
 
 function PtlGroupCard({ group, profile, onPress, contactsMap }: { group: PtlGroup; profile: Profile; onPress: () => void; contactsMap?: Map<string, string> }) {
@@ -5310,14 +5365,14 @@ function PtlGroupCard({ group, profile, onPress, contactsMap }: { group: PtlGrou
 
   return (
     <TouchableOpacity testID={`ptl-group-card-${group.id}`} onPress={onPress} activeOpacity={0.92} style={[styles.card, marketCardStyles.cardOutline]}>
-      {/* At-a-glance type badge, pinned top-right. Orange = Partial Load,
+      {/* At-a-glance type badge, pinned top-right. Orange = LCL,
           matching the card's border color and the app's Adjustment Load
           theme elsewhere. Share pill sits directly below it, same
           right-hand column as LoadCard, so the badge no longer eats its
           own full-width row (keeps the card shorter). */}
       <View style={[marketCardStyles.typeBadgeAbs, marketCardStyles.typeBadgePtl]}>
         <Ionicons name="cube-outline" size={10} color={COLORS.surface} />
-        <Text style={marketCardStyles.typeBadgeText}>PARTIAL LOAD</Text>
+        <Text style={marketCardStyles.typeBadgeText}>LCL LOAD</Text>
       </View>
       {/* Share pill — below the badge, top right, same column as LoadCard */}
       <TouchableOpacity style={cardStyles.shareTopPill} onPress={shareOnWhatsApp} activeOpacity={0.85} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
@@ -5347,7 +5402,7 @@ function PtlGroupCard({ group, profile, onPress, contactsMap }: { group: PtlGrou
 
       <View style={styles.divider} />
 
-      {/* LINE 2: Loading date · Weight posted · Cargo type — matching Find Truck card's meta line */}
+      {/* LINE 2: Cutoff date · Weight posted · Cargo type — matching Find Truck card's meta line */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={cardStyles.metaScrollContent}>
         <View style={cardStyles.metaChip}>
           <Ionicons name="calendar-outline" size={12} color={COLORS.textMuted} />
@@ -5650,7 +5705,7 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
     if (!destValid) return Alert.alert("Destination", "Please select a valid destination from the list.");
     if (!cargoType) return Alert.alert("Product type", "Please select a product type.");
     if (weight <= 0) return Alert.alert("Weight", "Please enter a valid weight in tons.");
-    if (weight > 20) return Alert.alert("Too heavy", "A single partial load can't exceed 20 tons. Use Post Space for a full truck.");
+    if (weight > 20) return Alert.alert("Too heavy", "A single LCL can't exceed 20 tons. Use Post Space for a full truck.");
 
     const L = dimL ? parseInt(dimL, 10) : null;
     const B = dimB ? parseInt(dimB, 10) : null;
@@ -5703,7 +5758,7 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
       }
       Alert.alert(
         editLoad ? "Posting updated!" : "Load posted!",
-        "Your partial load is now listed.",
+        "Your LCL is now listed.",
       );
       reset();
       onPosted(result.data);
@@ -5720,7 +5775,7 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
         <View style={[styles.modalSheet, { maxHeight: "94%", borderColor: COLORS.secondary, borderWidth: 2 }]} testID="post-ptl-modal">
           <View style={[styles.modalHandle, { backgroundColor: COLORS.secondary }]} />
           <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-            <Text style={styles.modalTitle}>{editLoad ? "Edit partial load" : "Post partial load"}</Text>
+            <Text style={styles.modalTitle}>{editLoad ? "Edit LCL" : "Post LCL"}</Text>
 
             <SectionTitle icon="navigate-outline" title="Route" />
             <View style={styles.routeInputsRow}>
@@ -5745,7 +5800,7 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
               />
             </View>
 
-            <SectionTitle icon="calendar-outline" title="Loading Date" />
+            <SectionTitle icon="calendar-outline" title="Cutoff Date" />
             <View style={[styles.stepperRow, styles.filledBorderOrange]}>
               <TouchableOpacity
                 testID="ptl-date-minus"
@@ -6096,7 +6151,7 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
               const n = parseFloat(weightInput);
               if (!isNaN(n) && n > 20) {
                 setWeightInput("");
-                Alert.alert("Weight limit exceeded", "A partial load can't exceed 20 tons. Use Post Space for a full truck.");
+                Alert.alert("Weight limit exceeded", "A LCL can't exceed 20 tons. Use Post Space for a full truck.");
                 return;
               }
               if (!isNaN(n) && n > 0) setWeight(parseFloat(n.toFixed(1)));
@@ -6111,7 +6166,7 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
   );
 }
 
-// ============== Post Partial Load Screen (3rd bottom-nav tab) ==============
+// ============== Post LCL Screen (3rd bottom-nav tab) ==============
 // Mirrors PostLoadScreen layout 1:1 — same stepper UI for date & weight, same
 // CollapsibleSection blocks for optional fields. On submit, creates a
 // standalone partial-load listing and opens WhatsApp with a pre-filled
@@ -6242,7 +6297,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
     if (!destValid) return Alert.alert("Destination", "Please select a valid destination from the list.");
     if (!cargoType) return Alert.alert("Product type", "Please select a product type.");
     if (weight <= 0) return Alert.alert("Weight", "Please enter a valid weight in tons.");
-    if (weight > 20) return Alert.alert("Too heavy", "A single partial load can't exceed 20 tons. Use Post Space for a full truck.");
+    if (weight > 20) return Alert.alert("Too heavy", "A single LCL can't exceed 20 tons. Use Post Space for a full truck.");
 
     // Dimension validation (only if entered)
     const L = dimL ? parseInt(dimL, 10) : null;
@@ -6290,7 +6345,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
         return;
       }
       const data = result.data;
-      // Build WhatsApp share message (mirrors the Truck Space "Post & Share" flow)
+      // Build WhatsApp share message (mirrors the Container Space "Post & Share" flow)
       const dateStr = date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
       const oStateName = sanitizeStateForDisplay(originInfo?.state || "", originPin);
       const dStateName = sanitizeStateForDisplay(destInfo?.state || "", destPin);
@@ -6309,15 +6364,15 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
       const postOriginLabel = `📍 From: ${poArea}${poCity}${poState}${originPin ? `, ${originPin}` : ""}`;
       const postDestLabel   = `📍 To: ${pdArea}${pdCity}${pdState}${destPin ? `, ${destPin}` : ""}`;
       const cargoDisplay = cargoTypeFinal.replace(/^Others:\s*/, "");
-      const truckLabelPost = truckType === "20ft" ? "20ft Container" : truckType === "40ft" ? "40ft Container" : truckType === "40HC" ? "40HC Container" : truckType;
+      const truckLabelPost = containerLabel(truckType);
 
       const waText =
-        `📦 *Partial Load Available - Truck Traffic*\n\n` +
+        `📦 *LCL Available - Container Traffic*\n\n` +
         `${postOriginLabel}\n${postDestLabel}\n\n` +
         (truckLabelPost ? `🚚 ${truckLabelPost}\n` : "") +
         `⚖️ *Weight:* ${weight.toFixed(1)} Tons\n` +
         (cargoDisplay ? `📦 *Cargo:* ${cargoDisplay}\n` : "") +
-        `📅 *Loading:* ${dateStr}\n\n` +
+        `📅 *Cutoff:* ${dateStr}\n\n` +
         `📞 *Contact:* ${profile.name}` +
         (profile.company ? ` — ${profile.company}` : "") +
         `\n+91 ${profile.phone}\n\n` +
@@ -6331,7 +6386,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
       if (canOpen) {
         await Linking.openURL(waUrl).catch(() => {});
       } else {
-        Alert.alert("Partial Load Posted! 🎉", "Your partial load has been posted. WhatsApp is not installed on this device.");
+        Alert.alert("LCL Posted! 🎉", "Your LCL has been posted. WhatsApp is not installed on this device.");
       }
       const routeFilter = await buildRouteFilterFromPost(originPin, originInfo, destPin, destInfo);
       const filterWithPost = routeFilter ? { ...routeFilter, postedKind: "ptl" as const, postedId: data?.group_id } : null;
@@ -6361,7 +6416,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
                     {interest.viewer_verified && <Ionicons name="checkmark-circle" size={13} color={COLORS.success} />}
                   </View>
                   {interest.viewer_company ? <Text style={notifStyles.body}>{interest.viewer_company}</Text> : null}
-                  <Text style={notifStyles.body}>Interested in your {interest.listing_type === "ptl_group" ? "partial load group" : "truck space"}{interest.listing_summary?.origin ? ` (${interest.listing_summary.origin} → ${interest.listing_summary.destination})` : ""}</Text>
+                  <Text style={notifStyles.body}>Interested in your {interest.listing_type === "ptl_group" ? "LCL group" : "container space"}{interest.listing_summary?.origin ? ` (${interest.listing_summary.origin} → ${interest.listing_summary.destination})` : ""}</Text>
                   {interest.viewer_phone ? (
                     <TouchableOpacity style={[notifStyles.actionBtn, { backgroundColor: "#E8F8EE", marginTop: 8, alignSelf: "flex-start" }]} onPress={() => Linking.openURL(`tel:${interest.viewer_phone}`).catch(() => {})}>
                       <Ionicons name="call-outline" size={13} color={COLORS.success} /><Text style={[notifStyles.actionBtnText, { color: COLORS.success }]}>Call {interest.viewer_name.split(" ")[0]}</Text>
@@ -6399,8 +6454,8 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
           />
         </View>
 
-        {/* 2. Loading Date — same stepper as Post Space */}
-        <SectionTitle icon="calendar-outline" title="Loading Date" />
+        {/* 2. Cutoff Date — same stepper as Post Space */}
+        <SectionTitle icon="calendar-outline" title="Cutoff Date" />
         <View style={[styles.stepperRow, styles.filledBorderOrange]}>
           <TouchableOpacity
             testID="ptl-date-minus"
@@ -6507,7 +6562,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
                 const n = parseFloat(weightInput);
                 if (!isNaN(n) && n > 20) {
                   setWeightInput("");
-                  Alert.alert("Weight limit exceeded", "A partial load can't exceed 20 tons. Use Post Space for a full truck.");
+                  Alert.alert("Weight limit exceeded", "A LCL can't exceed 20 tons. Use Post Space for a full truck.");
                   return;
                 }
                 if (!isNaN(n) && n > 0) setWeight(parseFloat(n.toFixed(1)));
@@ -6758,7 +6813,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
           )}
         </TouchableOpacity>
         <Text style={[styles.hintMuted, { textAlign: "center", marginTop: 8 }]}>
-          You can track this load in your Profile → My Posted Partial Loads.
+          You can track this load in your Profile → My Posted LCL.
         </Text>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -6766,7 +6821,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
 }
 
 
-// ============== My Partial Loads list (used inside ProfileScreen) ==============
+// ============== My LCL list (used inside ProfileScreen) ==============
 // Build a PtlGroup-shaped object from a single raw PtlLoad so it can be
 // rendered with the same PtlGroupCard used everywhere else in the app
 // (Marketplace, My Posts, and poster profile screens).
@@ -6839,7 +6894,7 @@ function MyPtlLoadsList({ profile }: { profile: Profile }) {
       const data = await r.json();
       let list: PtlLoad[] = Array.isArray(data) ? data : [];
 
-      // Postings whose loading date has passed are no longer relevant — delete
+      // Postings whose cutoff date has passed are no longer relevant — delete
       // them outright (not just hide them client-side) so they don't linger
       // in My Posts forever. Only auto-clean active postings (OPEN/MATCHED);
       // CONFIRMED/CANCELLED loads are left alone since they're terminal states.
@@ -6890,7 +6945,7 @@ function MyPtlLoadsList({ profile }: { profile: Profile }) {
   useEffect(() => { fetchMyLoads(); }, [fetchMyLoads]);
 
   // Build a PtlGroup-shaped object for each of my loads so it can be
-  // rendered with the exact same card used in Marketplace → Find Partial Loads.
+  // rendered with the exact same card used in Marketplace → Find LCL.
   // Prefer the real fetched group (has all members/fill info); fall back to a
   // single-member synthetic group when no group has formed yet.
   const groupFor = (item: PtlLoad): PtlGroup => {
@@ -6932,8 +6987,8 @@ function MyPtlLoadsList({ profile }: { profile: Profile }) {
     return (
       <View style={styles.emptyWrap} testID="myptl-empty">
         <Ionicons name="cube-outline" size={42} color={COLORS.textSubtle} />
-        <Text style={styles.emptyTitle}>No partial loads yet</Text>
-        <Text style={styles.emptySub}>Open the Post Load tab to post your first partial load.</Text>
+        <Text style={styles.emptyTitle}>No LCL yet</Text>
+        <Text style={styles.emptySub}>Open the Post Load tab to post your first LCL.</Text>
       </View>
     );
   }
@@ -7141,7 +7196,7 @@ function PostSelectionScreen({
         What would you like to post?
       </Text>
 
-      {/* ── Truck Space Card ── */}
+      {/* ── Container Space Card ── */}
       <TouchableOpacity
         testID="select-truck-space"
         activeOpacity={0.85}
@@ -7157,9 +7212,9 @@ function PostSelectionScreen({
             />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={newStyles.postTypeTitle}>Truck Space</Text>
+            <Text style={newStyles.postTypeTitle}>Container Space</Text>
             <View style={[newStyles.postTypeDivider, { backgroundColor: COLORS.primary }]} />
-            <Text style={newStyles.postTypeDesc}>{"Empty space in your truck? Find a partial load on your route to fill it."}</Text>
+            <Text style={newStyles.postTypeDesc}>{"Empty space in your truck? Find a LCL on your route to fill it."}</Text>
           </View>
           <View style={[newStyles.postTypeChevron, { backgroundColor: COLORS.primary }]}>
             <Ionicons name="chevron-forward" size={18} color={COLORS.surface} />
@@ -7167,7 +7222,7 @@ function PostSelectionScreen({
         </View>
       </TouchableOpacity>
 
-      {/* ── Partial Load Card ── */}
+      {/* ── LCL Card ── */}
       <TouchableOpacity
         testID="select-adjustment"
         activeOpacity={0.85}
@@ -7183,7 +7238,7 @@ function PostSelectionScreen({
             />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={newStyles.postTypeTitle}>Partial Load</Text>
+            <Text style={newStyles.postTypeTitle}>LCL</Text>
             <View style={[newStyles.postTypeDivider, { backgroundColor: COLORS.secondary }]} />
             <Text style={newStyles.postTypeDesc}>{"Have a partial truck load? Find adjustment loads on your route to cut freight cost."}</Text>
           </View>
@@ -7196,7 +7251,7 @@ function PostSelectionScreen({
   );
 }
 
-// ============== My Truck Space Postings List ==============
+// ============== My Container Space Postings List ==============
 function MyTruckSpacePostsList({ profile }: { profile: Profile }) {
   const [myLoads, setMyLoads] = useState<Load[]>([]);
   const [loading, setLoading] = useState(true);
@@ -7246,8 +7301,8 @@ function MyTruckSpacePostsList({ profile }: { profile: Profile }) {
         ListEmptyComponent={!loading ? (
           <View style={styles.emptyWrap} testID="my-truck-space-empty">
             <Ionicons name="truck-outline" size={42} color={COLORS.textSubtle} />
-            <Text style={styles.emptyTitle}>No truck spaces posted yet</Text>
-            <Text style={styles.emptySub}>Tap Post to add your first truck space.</Text>
+            <Text style={styles.emptyTitle}>No container spaces posted yet</Text>
+            <Text style={styles.emptySub}>Tap Post to add your first container space.</Text>
           </View>
         ) : null}
         renderItem={({ item }) => {
@@ -7303,13 +7358,13 @@ function MyTruckSpacePostsList({ profile }: { profile: Profile }) {
   );
 }
 
-// ============== My Posts Screen (single merged list, sorted by loading date) ==============
+// ============== My Posts Screen (single merged list, sorted by cutoff date) ==============
 type MyPostMergedItem =
   | { kind: "truck"; key: string; date: number; load: Load }
   | { kind: "ptl"; key: string; date: number; ptlLoad: PtlLoad };
 
 function MyPostsScreen({ profile }: { profile: Profile }) {
-  // Same independent-toggle pattern as the Find page's Truck Space / Partial
+  // Same independent-toggle pattern as the Find page's Container Space / Partial
   // Load chips: each starts unselected, tapping a chip selects only that
   // type, and tapping an already-selected chip deselects it again — when
   // neither chip is actively selected, both types show by default.
@@ -7372,7 +7427,7 @@ function MyPostsScreen({ profile }: { profile: Profile }) {
       const myTruck: Load[] = Array.isArray(loadsRes) ? loadsRes : [];
       let myPtl: PtlLoad[] = Array.isArray(ptlRes) ? ptlRes : [];
 
-      // Postings whose loading date has passed are no longer relevant — delete
+      // Postings whose cutoff date has passed are no longer relevant — delete
       // them outright (not just hide them client-side) so they don't linger
       // in My Posts forever. Only auto-clean active postings (OPEN/MATCHED);
       // CONFIRMED/CANCELLED loads are left alone since they're terminal states.
@@ -7460,7 +7515,7 @@ function MyPostsScreen({ profile }: { profile: Profile }) {
   }, [cacheKey, fetchAll]);
 
   // Build a PtlGroup-shaped object for each of my loads so it can be
-  // rendered with the exact same card used in Marketplace → Find Partial Loads.
+  // rendered with the exact same card used in Marketplace → Find LCL.
   // Prefer the real fetched group (has all members/fill info); fall back to a
   // single-member synthetic group when no group has formed yet.
   const groupFor = (item: PtlLoad): PtlGroup => {
@@ -7507,7 +7562,7 @@ function MyPostsScreen({ profile }: { profile: Profile }) {
     );
   };
 
-  // Entries without a valid loading date sort to the end rather than
+  // Entries without a valid cutoff date sort to the end rather than
   // jumping to the front, so "closest loading first" stays meaningful.
   const dateVal = (s?: string | null) => {
     if (!s) return Infinity;
@@ -7522,7 +7577,7 @@ function MyPostsScreen({ profile }: { profile: Profile }) {
 
   return (
     <View style={styles.fill}>
-      {/* Same size/component as the Find page's Truck Space / Partial Load
+      {/* Same size/component as the Find page's Container Space / LCL
           toggle (styles.modeToggleBar) for visual and interaction
           consistency — independent deselectable chips, not a single-select
           tab switch. */}
@@ -7534,7 +7589,7 @@ function MyPostsScreen({ profile }: { profile: Profile }) {
           activeOpacity={0.8}
         >
           <Ionicons name="car-outline" size={14} color={showTruckSpace ? COLORS.surface : COLORS.textMuted} />
-          <Text style={[styles.modeToggleText, showTruckSpace && styles.modeToggleTextActive]}>Truck Space</Text>
+          <Text style={[styles.modeToggleText, showTruckSpace && styles.modeToggleTextActive]}>Container Space</Text>
         </TouchableOpacity>
         <TouchableOpacity
           testID="myposts-mode-ptl"
@@ -7543,7 +7598,7 @@ function MyPostsScreen({ profile }: { profile: Profile }) {
           activeOpacity={0.8}
         >
           <Ionicons name="cube-outline" size={14} color={showAdjustment ? COLORS.surface : COLORS.textMuted} />
-          <Text style={[styles.modeToggleText, showAdjustment && styles.modeToggleTextActive]}>Partial Load</Text>
+          <Text style={[styles.modeToggleText, showAdjustment && styles.modeToggleTextActive]}>LCL</Text>
         </TouchableOpacity>
       </View>
 
@@ -7558,7 +7613,7 @@ function MyPostsScreen({ profile }: { profile: Profile }) {
           <View style={styles.emptyWrap} testID="my-posts-empty">
             <Ionicons name="albums-outline" size={42} color={COLORS.textSubtle} />
             <Text style={styles.emptyTitle}>No posts yet</Text>
-            <Text style={styles.emptySub}>Tap Post to add your first truck space or partial load.</Text>
+            <Text style={styles.emptySub}>Tap Post to add your first container space or LCL.</Text>
           </View>
         ) : null}
         renderItem={({ item }) => {

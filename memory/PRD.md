@@ -33,3 +33,16 @@ backend exact-match `/loads?origin&destination`, PTL corridor match, and no-geoc
 - Native UI E2E (emulator) not runnable in this env.
 - Optional: prune unused StyleSheet entries (distanceRow/Chip/Text, approxNote) and dead
   `_resolve_missing_coords` / FindPtlModal.
+
+### 2026-08-25 — Container rebrand + Reefer + Vessel/Voyage
+- Container types now: 20ft, 40ft, 40ftHC, Reefer (new artwork in assets/trucks/cont_*.png, generated).
+  Reefer capacity = 40ft (26730 kg). Frontend `containerLabel()` maps stored values to display labels.
+- Renamed user-facing text (text-only; code/URLs/testIDs unchanged): "Truck Space"->"Container Space",
+  "Partial Load(s)"/"PTL" (display)->"LCL", "Loading Date"->"Cutoff Date", app name "Truck Traffic"->"Container Traffic"
+  (app.json display name + permission strings; slug/package/scheme kept).
+- New COMPULSORY inputs on Post Container Space screen: Vessel Name + Voyage Name.
+  Stored as load.vessel_name / load.voyage_name (backend LoadCreate/Load/LoadUpdate); shown on
+  the load card meta, the Container Details detail view, and the WhatsApp share text.
+- Backend CONTAINER_CAPACITY_KG adds 40ftHC + Reefer; resolve_container_capacity_kg now case-insensitive.
+- Validated: frontend Metro bundle compiles (new assets + code); backend 42/42 tests pass incl. vessel/voyage
+  persistence, PATCH no-wipe, Reefer/40ftHC, and exact-match + PTL regressions.
