@@ -2108,7 +2108,7 @@ function PostLoadScreen({ profile, onPosted }: { profile: Profile; onPosted: (fi
   const [vesselName, setVesselName] = useState("");
   const [voyageName, setVoyageName] = useState("");
  
-const [weight, setWeight] = useState(1.0);
+const [weight, setWeight] = useState(0);
 const [date, setDate] = useState<Date>(new Date());
 const [showDatePicker, setShowDatePicker] = useState(false);
 const [weightModalVisible, setWeightModalVisible] = useState(false);
@@ -2230,7 +2230,7 @@ if (pricePerTon && parseInt(pricePerTon, 10) > 10000) return Alert.alert("Price 
       const reset = () => {
         setOriginText(""); setOriginPin(""); setOriginInfo(null);
         setDestText(""); setDestPin(""); setDestInfo(null);
-        setTruckType(""); setPlacement(""); setWeight(1.0); setImages([]);
+        setTruckType(""); setPlacement(""); setWeight(0); setImages([]);
         setDimL(""); setDimB(""); setDimH(""); setPricePerTon(""); setPriceError("");
         setVesselName(""); setVoyageName(""); setSpaceCbm("");
       };
@@ -2411,28 +2411,34 @@ return (
         </View>
 
         <SectionTitle icon="boat-outline" title="Vessel Details" />
-        <Field label="Vessel Name *">
-          <TextInput
-            testID="post-vessel-name-input"
-            style={[styles.input, vesselName.trim() && styles.filledBorderBlue]}
-            placeholder="e.g., MSC Anna"
-            placeholderTextColor={COLORS.textSubtle}
-            value={vesselName}
-            onChangeText={setVesselName}
-            autoCapitalize="words"
-          />
-        </Field>
-        <Field label="Voyage Name *">
-          <TextInput
-            testID="post-voyage-name-input"
-            style={[styles.input, voyageName.trim() && styles.filledBorderBlue]}
-            placeholder="e.g., 245W"
-            placeholderTextColor={COLORS.textSubtle}
-            value={voyageName}
-            onChangeText={setVoyageName}
-            autoCapitalize="characters"
-          />
-        </Field>
+        <View style={{ flexDirection: "row", gap: 10 }}>
+          <View style={{ flex: 0.7 }}>
+            <Field label="Vessel Name *">
+              <TextInput
+                testID="post-vessel-name-input"
+                style={[styles.input, vesselName.trim() && styles.filledBorderBlue]}
+                placeholder="e.g., MSC Anna"
+                placeholderTextColor={COLORS.textSubtle}
+                value={vesselName}
+                onChangeText={setVesselName}
+                autoCapitalize="words"
+              />
+            </Field>
+          </View>
+          <View style={{ flex: 0.3 }}>
+            <Field label="Voyage Name *">
+              <TextInput
+                testID="post-voyage-name-input"
+                style={[styles.input, voyageName.trim() && styles.filledBorderBlue]}
+                placeholder="e.g., 245W"
+                placeholderTextColor={COLORS.textSubtle}
+                value={voyageName}
+                onChangeText={setVoyageName}
+                autoCapitalize="characters"
+              />
+            </Field>
+          </View>
+        </View>
 
         <SectionTitle icon="cube-outline" title="Space in CBM" />
         <Field label="Space in CBM (cubic m) *">
@@ -2477,9 +2483,9 @@ return (
             <TouchableOpacity
               style={styles.stepperCenter}
               activeOpacity={0.8}
-              onPress={() => { setWeightInput(String(weight)); setWeightModalVisible(true); }}
+              onPress={() => { setWeightInput(weight > 0 ? String(weight) : ""); setWeightModalVisible(true); }}
             >
-              <Text style={styles.stepperValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6} allowFontScaling={false}>{weight.toFixed(1)}</Text>
+              <Text style={styles.stepperValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6} allowFontScaling={false}>{weight > 0 ? weight.toFixed(1) : "–"}</Text>
               <Text style={styles.stepperUnit} numberOfLines={1} allowFontScaling={false}>tons</Text>
             </TouchableOpacity>
             <TouchableOpacity
@@ -2531,7 +2537,7 @@ return (
         <CollapsibleSection
           accentColor={COLORS.primary}
           icon="resize-outline"
-          title="Available Space"
+          title="Dimensions"
           summary={(dimL || dimB || dimH) ? `${dimL || "-"} x ${dimB || "-"} x ${dimH || "-"} ft` : ""}
           testID="opt-space"
         >
@@ -5542,6 +5548,7 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
   const [cargoTypes, setCargoTypes] = useState<string[]>([]);
   const [cargoOther, setCargoOther] = useState("");
   const [showCargoOtherInput, setShowCargoOtherInput] = useState(false);
+  const [spaceCbm, setSpaceCbm] = useState("");
 
   const [dimL, setDimL] = useState("");
   const [dimB, setDimB] = useState("");
@@ -5590,6 +5597,7 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
       setShowCargoOtherInput(et.startsWith("Others"));
       if (et.startsWith("Others:")) setCargoOther(et.replace(/^Others:\s*/, ""));
       setWeightKgToTons(editLoad.weight_kg);
+      setSpaceCbm((editLoad as any).space_cbm ? String((editLoad as any).space_cbm) : "");
       setTruckType((editLoad as any).truck_type || "");
       setPlacement((editLoad as any).cargo_placement || "");
       setDimL((editLoad as any).dimension_length ? String((editLoad as any).dimension_length) : "");
@@ -5694,7 +5702,7 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
     setOriginText(""); setOriginPin(""); setOriginInfo(null);
     setDestText(""); setDestPin(""); setDestInfo(null);
     setDate(new Date()); setWeight(1.0); setWeightInput("");
-    setCargoTypes([]); setCargoOther(""); setShowCargoOtherInput(false);
+    setCargoTypes([]); setCargoOther(""); setShowCargoOtherInput(false); setSpaceCbm("");
     setDimL(""); setDimB(""); setDimH("");
     setTruckType(""); setPlacement(""); setImages([]);
   };
@@ -5707,6 +5715,9 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
     if (!cargoType) return Alert.alert("Product type", "Please select a product type.");
     if (weight <= 0) return Alert.alert("Weight", "Please enter a valid weight in tons.");
     if (weight > 20) return Alert.alert("Too heavy", "A single LCL can't exceed 20 tons. Use Post Space for a full truck.");
+    const cbmVal = parseInt(spaceCbm, 10);
+    if (!spaceCbm || isNaN(cbmVal) || cbmVal <= 0) return Alert.alert("Required", "Enter available space in CBM (1-65).");
+    if (cbmVal > 65) return Alert.alert("Invalid space", "Space cannot exceed 65 CBM.");
 
     const L = dimL ? parseInt(dimL, 10) : null;
     const B = dimB ? parseInt(dimB, 10) : null;
@@ -5744,6 +5755,7 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
           cargo_type: cargoTypeFinal,
           cargo_category: cargoTypeFinal,
           weight_kg: Math.round(weight * 1000),
+          space_cbm: cbmVal,
           truck_type: truckType,
           loading_date: date.toISOString().slice(0, 10),
           dimension_length: L,
@@ -5917,6 +5929,29 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
                 />
               </View>
             )}
+
+            <SectionTitle icon="cube-outline" title="Space in CBM" />
+            <Field label="Space in CBM (cubic m) *">
+              <View style={[styles.priceRow, spaceCbm && styles.filledBorderOrange]}>
+                <TextInput
+                  testID="ptlmodal-space-cbm-input"
+                  style={styles.priceInput}
+                  value={spaceCbm}
+                  onChangeText={(t) => {
+                    const digits = t.replace(/\D/g, "");
+                    if (!digits) { setSpaceCbm(""); return; }
+                    if (parseInt(digits, 10) > 65) { setSpaceCbm("65"); return; }
+                    setSpaceCbm(digits);
+                  }}
+                  keyboardType="number-pad"
+                  maxLength={2}
+                  placeholder="e.g. 15"
+                  placeholderTextColor={COLORS.textSubtle}
+                />
+                <Text style={styles.priceSuffix}>cbm</Text>
+              </View>
+              {spaceCbm && parseInt(spaceCbm, 10) > 65 ? <Text style={styles.errorText}>Max space: 65 cbm</Text> : null}
+            </Field>
 
             <Text style={styles.optionalHeading}>Add more details (optional)</Text>
 
@@ -6207,6 +6242,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
 
   // HSN code
   const [hsnCode, setHsnCode] = useState("");
+  const [spaceCbm, setSpaceCbm] = useState("");
 
   // Optional sections
   const [dimL, setDimL] = useState("");
@@ -6268,7 +6304,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
     setOriginText(""); setOriginPin(""); setOriginInfo(null);
     setDestText(""); setDestPin(""); setDestInfo(null);
     setDate(new Date()); setWeight(1.0); setWeightInput("");
-    setHsnCode("");
+    setHsnCode(""); setSpaceCbm("");
     setDimL(""); setDimB(""); setDimH("");
     setTruckType(""); setPlacement(""); setImages([]);
   };
@@ -6281,6 +6317,10 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
     if (!hsnCode.trim()) return Alert.alert("HSN Code", "Please enter the HSN code.");
     if (weight <= 0) return Alert.alert("Weight", "Please enter a valid weight in tons.");
     if (weight > 20) return Alert.alert("Too heavy", "A single LCL can't exceed 20 tons. Use Post Space for a full truck.");
+    const cbmVal = parseInt(spaceCbm, 10);
+    if (!spaceCbm || isNaN(cbmVal) || cbmVal <= 0) return Alert.alert("Required", "Enter available space in CBM (1-65).");
+    if (cbmVal > 65) return Alert.alert("Invalid space", "Space cannot exceed 65 CBM.");
+    if (!truckType) return Alert.alert("Required", "Select a container type");
 
     // Dimension validation (only if entered)
     const L = dimL ? parseInt(dimL, 10) : null;
@@ -6312,6 +6352,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
           cargo_type: hsnCode.trim(),
           cargo_category: hsnCode.trim(),
           weight_kg: Math.round(weight * 1000),    // tons → kg
+          space_cbm: cbmVal,
           truck_type: truckType,
           loading_date: date.toISOString().slice(0, 10),
           dimension_length: L,
@@ -6492,31 +6533,58 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
         )}
 
         {/* 3. Weight in Tons — same stepper + modal as Post Space */}
-        <SectionTitle icon="scale-outline" title="Weight" />
-        <View style={[styles.stepperRow, weight > 0 && styles.filledBorderOrange]}>
-          <TouchableOpacity
-            testID="ptl-weight-minus"
-            style={styles.stepperBtn}
-            onPress={() => setWeight(w => Math.max(0.5, parseFloat((w - 0.5).toFixed(1))))}
-          >
-            <Text style={styles.stepperBtnText}>-</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            testID="ptl-weight-btn"
-            style={styles.stepperCenter}
-            activeOpacity={0.8}
-            onPress={() => { setWeightInput(String(weight)); setWeightModalVisible(true); }}
-          >
-            <Text style={styles.stepperValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6} allowFontScaling={false}>{weight.toFixed(1)}</Text>
-            <Text style={styles.stepperUnit} numberOfLines={1} allowFontScaling={false}>tons</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            testID="ptl-weight-plus"
-            style={styles.stepperBtn}
-            onPress={() => setWeight(w => Math.min(20, parseFloat((w + 0.5).toFixed(1))))}
-          >
-            <Text style={styles.stepperBtnText}>+</Text>
-          </TouchableOpacity>
+        <SectionTitle icon="scale-outline" title="Weight & Space" />
+        <View style={{ flexDirection: "row", gap: 10 }}>
+          <View style={{ flex: 0.5 }}>
+            <Text style={styles.dimLabel}>Weight</Text>
+            <View style={[styles.stepperRow, weight > 0 && styles.filledBorderOrange, { marginBottom: 0 }]}>
+              <TouchableOpacity
+                testID="ptl-weight-minus"
+                style={styles.stepperBtn}
+                onPress={() => setWeight(w => Math.max(0.5, parseFloat((w - 0.5).toFixed(1))))}
+              >
+                <Text style={styles.stepperBtnText}>-</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                testID="ptl-weight-btn"
+                style={styles.stepperCenter}
+                activeOpacity={0.8}
+                onPress={() => { setWeightInput(String(weight)); setWeightModalVisible(true); }}
+              >
+                <Text style={styles.stepperValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6} allowFontScaling={false}>{weight.toFixed(1)}</Text>
+                <Text style={styles.stepperUnit} numberOfLines={1} allowFontScaling={false}>T</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                testID="ptl-weight-plus"
+                style={styles.stepperBtn}
+                onPress={() => setWeight(w => Math.min(20, parseFloat((w + 0.5).toFixed(1))))}
+              >
+                <Text style={styles.stepperBtnText}>+</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+          <View style={{ flex: 0.5 }}>
+            <Text style={styles.dimLabel}>Space (cbm)</Text>
+            <View style={[styles.priceRow, spaceCbm && styles.filledBorderOrange, { marginBottom: 0, paddingHorizontal: 10 }]}>
+              <TextInput
+                testID="ptl-space-cbm-input"
+                style={styles.priceInput}
+                value={spaceCbm}
+                onChangeText={(t) => {
+                  const digits = t.replace(/\D/g, "");
+                  if (!digits) { setSpaceCbm(""); return; }
+                  if (parseInt(digits, 10) > 65) { setSpaceCbm("65"); return; }
+                  setSpaceCbm(digits);
+                }}
+                keyboardType="number-pad"
+                maxLength={2}
+                placeholder="e.g. 15"
+                placeholderTextColor={COLORS.textSubtle}
+              />
+              <Text style={styles.priceSuffix}>cbm</Text>
+            </View>
+            {spaceCbm && parseInt(spaceCbm, 10) > 65 ? <Text style={styles.errorText}>Max 65 cbm</Text> : null}
+          </View>
         </View>
 
         <Modal visible={weightModalVisible} transparent animationType="fade" onRequestClose={() => setWeightModalVisible(false)}>
@@ -6570,6 +6638,25 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
           />
         </Field>
 
+        <SectionTitle icon="cube-outline" title="Container Type" />
+        <View style={styles.truckRow} testID="ptl-truck-row">
+          {CONTAINER_TYPES.map((t) => {
+            const on = truckType === t.name;
+            return (
+              <TouchableOpacity
+                key={t.name}
+                testID={`ptl-truck-${t.name}`}
+                style={[styles.truckCard, on && styles.truckCardOn, on && styles.filledBorderOrange]}
+                onPress={() => setTruckType(prev => prev === t.name ? "" : t.name)}
+                activeOpacity={0.7}
+              >
+                <View style={styles.truckIconWrap}><Ionicons name={t.icon as any} size={30} color={on ? COLORS.primary : COLORS.textMuted} /></View>
+                <Text style={[styles.truckLabel, on && styles.truckLabelOn]} numberOfLines={1} allowFontScaling={false}>{t.name}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
         {/* ===== Optional fields (collapsible) ===== */}
         <Text style={styles.optionalHeading}>Add more details (optional)</Text>
 
@@ -6577,7 +6664,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
           accentColor={COLORS.secondary}
           accentBg="#FFF4EE"
           icon="resize-outline"
-          title="Available Space"
+          title="Dimensions"
           summary={(dimL || dimB || dimH) ? `${dimL || "-"} x ${dimB || "-"} x ${dimH || "-"} ft` : ""}
           testID="ptl-opt-space"
         >
@@ -6648,33 +6735,6 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
               </View>
               {dimH && parseInt(dimH, 10) > 9 ? <Text style={styles.errorText}>Max height: 9 ft</Text> : null}
             </View>
-          </View>
-        </CollapsibleSection>
-
-        <CollapsibleSection
-          accentColor={COLORS.secondary}
-          accentBg="#FFF4EE"
-          icon="cube-outline"
-          title="Container Preference"
-          summary={truckType}
-          testID="ptl-opt-truck"
-        >
-          <View style={styles.truckRow} testID="ptl-truck-row">
-            {CONTAINER_TYPES.map((t) => {
-              const on = truckType === t.name;
-              return (
-                <TouchableOpacity
-                  key={t.name}
-                  testID={`ptl-truck-${t.name}`}
-                  style={[styles.truckCard, on && styles.truckCardOn, on && styles.filledBorderOrange]}
-                  onPress={() => setTruckType(prev => prev === t.name ? "" : t.name)}
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.truckIconWrap}><Ionicons name={t.icon as any} size={30} color={on ? COLORS.primary : COLORS.textMuted} /></View>
-                  <Text style={[styles.truckLabel, on && styles.truckLabelOn]} numberOfLines={1} allowFontScaling={false}>{t.name}</Text>
-                </TouchableOpacity>
-              );
-            })}
           </View>
         </CollapsibleSection>
 
