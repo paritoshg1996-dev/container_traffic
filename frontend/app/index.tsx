@@ -249,6 +249,7 @@ type Load = {
   cargo_placement: string;
   weight_tons: number;
   space_cuft: number | null;
+  space_cbm?: number | null;
   dimension_length?: number | null;
   dimension_breadth?: number | null;
   dimension_height?: number | null;
@@ -298,6 +299,7 @@ type PtlLoad = {
   cargo_type: string;
   cargo_category: string;
   weight_kg: number;
+  space_cbm?: number | null;
   status: "OPEN" | "MATCHED" | "CONFIRMED" | "CANCELLED";
   group_id?: string | null;
   posted_at: string;
@@ -1265,6 +1267,7 @@ function EditLoadModal({ load, visible, onClose, onSaved }: { load: Load; visibl
   const [dimB, setDimB] = useState(load.dimension_breadth ? String(load.dimension_breadth) : "");
   const [dimH, setDimH] = useState(load.dimension_height ? String(load.dimension_height) : "");
   const [pricePerTon, setPricePerTon] = useState(load.price_per_ton ? String(load.price_per_ton) : "");
+  const [spaceCbm, setSpaceCbm] = useState(load.space_cbm ? String(load.space_cbm) : "");
   const [images, setImages] = useState<string[]>([]);
   const [imagesLoaded, setImagesLoaded] = useState(false);
 
@@ -1347,6 +1350,9 @@ if (!destValid)
 	if (!truckType) return Alert.alert("Required", "Select a container type.");
     if (!weight || weight <= 0) return Alert.alert("Invalid", "Enter valid weight.");
     if (weight > 40) return Alert.alert("Weight limit exceeded", "Maximum allowed weight is 40 tons.");
+    const cbmVal = parseInt(spaceCbm, 10);
+    if (!spaceCbm || isNaN(cbmVal) || cbmVal <= 0) return Alert.alert("Required", "Enter available space in CBM (1-65).");
+    if (cbmVal > 65) return Alert.alert("Invalid space", "Space cannot exceed 65 CBM.");
     if (pricePerTon && parseInt(pricePerTon, 10) > 10000) return Alert.alert("Price limit exceeded", "Maximum allowed price is ₹10,000 per ton.");
     setBusy(true);
     try {
@@ -1366,7 +1372,7 @@ if (!destValid)
         destination_place_name: destInfo?.placeName || "",
         destination_full_address: destInfo?.fullAddress || "",
         destination_eloc: destInfo?.eLoc || "",
-        cargo_placement: placement, truck_type: truckType, weight_tons: weight, space_cuft: null,
+        cargo_placement: placement, truck_type: truckType, weight_tons: weight, space_cuft: null, space_cbm: cbmVal,
         dimension_length: lengthVal, dimension_breadth: breadthVal, dimension_height: heightVal, price_per_ton: priceVal,
         loading_date: date.toISOString().slice(0, 10),
         images,
@@ -1478,6 +1484,29 @@ if (!destValid)
                 );
               })}
             </View>
+
+            <SectionTitle icon="cube-outline" title="Space in CBM" />
+            <Field label="Space in CBM (cubic m) *">
+              <View style={[styles.priceRow, spaceCbm && styles.filledBorderBlue]}>
+                <TextInput
+                  testID="edit-space-cbm-input"
+                  style={styles.priceInput}
+                  value={spaceCbm}
+                  onChangeText={(t) => {
+                    const digits = t.replace(/\D/g, "");
+                    if (!digits) { setSpaceCbm(""); return; }
+                    if (parseInt(digits, 10) > 65) { setSpaceCbm("65"); return; }
+                    setSpaceCbm(digits);
+                  }}
+                  keyboardType="number-pad"
+                  maxLength={2}
+                  placeholder="e.g. 30"
+                  placeholderTextColor={COLORS.textSubtle}
+                />
+                <Text style={styles.priceSuffix}>cbm</Text>
+              </View>
+              {spaceCbm && parseInt(spaceCbm, 10) > 65 ? <Text style={styles.errorText}>Max space: 65 cbm</Text> : null}
+            </Field>
 
             <Text style={styles.optionalHeading}>Add more details (optional)</Text>
 
@@ -2089,6 +2118,7 @@ const [dimB, setDimB] = useState("");
 const [dimH, setDimH] = useState("");
 const [pricePerTon, setPricePerTon] = useState("");
   const [priceError, setPriceError] = useState("");
+  const [spaceCbm, setSpaceCbm] = useState("");
 
 const today = useMemo(() => { const d = new Date(); d.setHours(0,0,0,0); return d; }, []);
 const maxDate = useMemo(() => { const d = new Date(today); d.setDate(d.getDate() + 14); return d; }, [today]);
@@ -2162,6 +2192,9 @@ if (!destValid) {
     if (!truckType) return Alert.alert("Required", "Select a container type");
 if (!vesselName.trim()) return Alert.alert("Required", "Enter the vessel name");
 if (!voyageName.trim()) return Alert.alert("Required", "Enter the voyage name");
+const cbmVal = parseInt(spaceCbm, 10);
+if (!spaceCbm || isNaN(cbmVal) || cbmVal <= 0) return Alert.alert("Required", "Enter available space in CBM (1-65).");
+if (cbmVal > 65) return Alert.alert("Invalid space", "Space cannot exceed 65 CBM.");
 const w = weight;
 if (w > 40) return Alert.alert("Weight limit exceeded", "Maximum allowed weight is 40 tons.");
 if (pricePerTon && parseInt(pricePerTon, 10) > 10000) return Alert.alert("Price limit exceeded", "Maximum allowed price is ₹10,000 per ton.");
@@ -2184,7 +2217,7 @@ if (pricePerTon && parseInt(pricePerTon, 10) > 10000) return Alert.alert("Price 
         destination_place_name: destInfo?.placeName || "",
         destination_full_address: destInfo?.fullAddress || "",
         destination_eloc: destInfo?.eLoc || "",
-        cargo_types: [] as string[], cargo_placement: placement, truck_type: truckType, weight_tons: w, space_cuft: null,
+        cargo_types: [] as string[], cargo_placement: placement, truck_type: truckType, weight_tons: w, space_cuft: null, space_cbm: cbmVal,
         dimension_length: lengthVal, dimension_breadth: breadthVal, dimension_height: heightVal, price_per_ton: priceVal,
         loading_date: date.toISOString().slice(0, 10), poster_name: profile.name, poster_phone: profile.phone,
         poster_company: profile.company, images,
@@ -2199,7 +2232,7 @@ if (pricePerTon && parseInt(pricePerTon, 10) > 10000) return Alert.alert("Price 
         setDestText(""); setDestPin(""); setDestInfo(null);
         setTruckType(""); setPlacement(""); setWeight(1.0); setImages([]);
         setDimL(""); setDimB(""); setDimH(""); setPricePerTon(""); setPriceError("");
-        setVesselName(""); setVoyageName("");
+        setVesselName(""); setVoyageName(""); setSpaceCbm("");
       };
 
       if (alsoShare) {
@@ -2399,6 +2432,29 @@ return (
             onChangeText={setVoyageName}
             autoCapitalize="characters"
           />
+        </Field>
+
+        <SectionTitle icon="cube-outline" title="Space in CBM" />
+        <Field label="Space in CBM (cubic m) *">
+          <View style={[styles.priceRow, spaceCbm && styles.filledBorderBlue]}>
+            <TextInput
+              testID="post-space-cbm-input"
+              style={styles.priceInput}
+              value={spaceCbm}
+              onChangeText={(t) => {
+                const digits = t.replace(/\D/g, "");
+                if (!digits) { setSpaceCbm(""); return; }
+                if (parseInt(digits, 10) > 65) { setSpaceCbm("65"); return; }
+                setSpaceCbm(digits);
+              }}
+              keyboardType="number-pad"
+              maxLength={2}
+              placeholder="e.g. 30"
+              placeholderTextColor={COLORS.textSubtle}
+            />
+            <Text style={styles.priceSuffix}>cbm</Text>
+          </View>
+          {spaceCbm && parseInt(spaceCbm, 10) > 65 ? <Text style={styles.errorText}>Max space: 65 cbm</Text> : null}
         </Field>
 
         {/* ===== Optional fields (collapsible) ===== */}

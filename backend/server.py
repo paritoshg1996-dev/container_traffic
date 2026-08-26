@@ -148,6 +148,7 @@ class LoadCreate(BaseModel):
     voyage_name: Optional[str] = ""
     weight_tons: float
     space_cuft: Optional[float] = None
+    space_cbm: Optional[int] = None       # available space in cubic metres (max 65)
     dimension_length: Optional[float] = None
     dimension_breadth: Optional[float] = None
     dimension_height: Optional[float] = None
@@ -651,6 +652,8 @@ async def test_mappls(
 
 @api_router.post("/loads", response_model=Load)
 async def create_load(payload: LoadCreate):
+    if payload.space_cbm is None or payload.space_cbm <= 0 or payload.space_cbm > 65:
+        raise HTTPException(status_code=400, detail="space_cbm is required and must be between 1 and 65")
     load = Load(**payload.dict())
     # Assign a unique short_id before inserting
     load.short_id = await _unique_short_id()
@@ -789,6 +792,7 @@ class LoadUpdate(BaseModel):
     voyage_name: Optional[str] = None
     weight_tons: Optional[float] = None
     space_cuft: Optional[float] = None
+    space_cbm: Optional[int] = None
     dimension_length: Optional[float] = None
     dimension_breadth: Optional[float] = None
     dimension_height: Optional[float] = None
@@ -1367,6 +1371,7 @@ class PtlLoadPost(BaseModel):
     cargo_type: str          # e.g. "Bags", "Carton Box", "Drums"
     cargo_category: str      # "GENERAL" | "FRAGILE" | "HAZMAT" | "PERISHABLE"
     weight_kg: float
+    space_cbm: Optional[int] = None       # available space in cubic metres (max 65)
     truck_type: Optional[str] = ""   # container type: "20ft" / "40ft" / "40HC"
                                       # (field name kept as truck_type — an
                                       # API/DB rename wasn't in scope for this pass)
@@ -1466,6 +1471,8 @@ async def post_ptl_load(payload: PtlLoadPost):
         raise HTTPException(status_code=400, detail="poster_phone must be a 10-digit number")
     if payload.weight_kg <= 0:
         raise HTTPException(status_code=400, detail="weight_kg must be > 0")
+    if payload.space_cbm is None or payload.space_cbm <= 0 or payload.space_cbm > 65:
+        raise HTTPException(status_code=400, detail="space_cbm is required and must be between 1 and 65")
     max_kg = resolve_container_capacity_kg(payload.truck_type)
     if payload.weight_kg > max_kg:
         raise HTTPException(
@@ -1508,6 +1515,7 @@ async def post_ptl_load(payload: PtlLoadPost):
         "cargo_type": payload.cargo_type,
         "cargo_category": payload.cargo_category,
         "weight_kg": payload.weight_kg,
+        "space_cbm": payload.space_cbm,
         "truck_type": payload.truck_type or "",
         "loading_date": payload.loading_date or payload.ready_date,
         "ready_date": payload.ready_date,

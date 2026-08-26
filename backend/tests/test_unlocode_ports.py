@@ -14,7 +14,7 @@ import requests
 from pymongo import MongoClient
 
 BASE_URL = os.environ.get(
-    "EXPO_PUBLIC_BACKEND_URL", "https://ports-exact-match.preview.emergentagent.com"
+    "EXPO_PUBLIC_BACKEND_URL", "https://volume-capacity-tool.preview.emergentagent.com"
 ).rstrip("/")
 API = f"{BASE_URL}/api"
 
