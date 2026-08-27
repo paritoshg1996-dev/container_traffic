@@ -2109,10 +2109,12 @@ function PostLoadScreen({ profile, onPosted }: { profile: Profile; onPosted: (fi
   const [voyageName, setVoyageName] = useState("");
  
 const [weight, setWeight] = useState(0);
-const [date, setDate] = useState<Date>(new Date());
+const [date, setDate] = useState<Date | null>(null);
 const [showDatePicker, setShowDatePicker] = useState(false);
 const [weightModalVisible, setWeightModalVisible] = useState(false);
 const [weightInput, setWeightInput] = useState("");
+const [spaceCbmModalVisible, setSpaceCbmModalVisible] = useState(false);
+const [spaceCbmInput, setSpaceCbmInput] = useState("");
 const [dimL, setDimL] = useState("");
 const [dimB, setDimB] = useState("");
 const [dimH, setDimH] = useState("");
@@ -2131,6 +2133,22 @@ const onDateChange = (event: any, selected?: Date) => {
     else if (selected > maxDate) setDate(maxDate);
     else setDate(selected);
   }
+};
+
+const decrementDate = () => {
+  setDate(prev => {
+    const base = prev ?? today;
+    const d = new Date(base); d.setDate(d.getDate() - 1);
+    return d < today ? today : d;
+  });
+};
+
+const incrementDate = () => {
+  setDate(prev => {
+    const base = prev ?? today;
+    const d = new Date(base); d.setDate(d.getDate() + 1);
+    return d > maxDate ? maxDate : d;
+  });
 };
   
 	
@@ -2187,6 +2205,7 @@ if (!destValid) {
   );
 }
 
+if (!date) return Alert.alert("Required", "Select a cutoff date");
 
 	  
     if (!truckType) return Alert.alert("Required", "Select a container type");
@@ -2219,7 +2238,7 @@ if (pricePerTon && parseInt(pricePerTon, 10) > 10000) return Alert.alert("Price 
         destination_eloc: destInfo?.eLoc || "",
         cargo_types: [] as string[], cargo_placement: placement, truck_type: truckType, weight_tons: w, space_cuft: null, space_cbm: cbmVal,
         dimension_length: lengthVal, dimension_breadth: breadthVal, dimension_height: heightVal, price_per_ton: priceVal,
-        loading_date: date.toISOString().slice(0, 10), poster_name: profile.name, poster_phone: profile.phone,
+        loading_date: date!.toISOString().slice(0, 10), poster_name: profile.name, poster_phone: profile.phone,
         poster_company: profile.company, images,
         vessel_name: vesselName.trim(), voyage_name: voyageName.trim(),
       };
@@ -2232,11 +2251,11 @@ if (pricePerTon && parseInt(pricePerTon, 10) > 10000) return Alert.alert("Price 
         setDestText(""); setDestPin(""); setDestInfo(null);
         setTruckType(""); setPlacement(""); setWeight(0); setImages([]);
         setDimL(""); setDimB(""); setDimH(""); setPricePerTon(""); setPriceError("");
-        setVesselName(""); setVoyageName(""); setSpaceCbm("");
+        setVesselName(""); setVoyageName(""); setSpaceCbm(""); setDate(null);
       };
 
       if (alsoShare) {
-        const dateStr = date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+        const dateStr = date!.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
         const oStateName = sanitizeStateForDisplay(originInfo?.state || "", originPin);
         const dStateName = sanitizeStateForDisplay(destInfo?.state || "", destPin);
         const oCityClean = sanitizeCityForDisplay(originInfo?.city || "", originPin, oStateName);
@@ -2296,6 +2315,8 @@ if (pricePerTon && parseInt(pricePerTon, 10) > 10000) return Alert.alert("Price 
     }
   };
 
+  const cbmFillPct = spaceCbm ? Math.max(0, Math.min(100, (parseInt(spaceCbm, 10) / 65) * 100)) : 0;
+
 return (
     <KeyboardAvoidingView
       behavior={Platform.OS === "ios" ? "padding" : "height"}
@@ -2343,16 +2364,11 @@ return (
         </View>
 
         <SectionTitle icon="calendar-outline" title="Cutoff Date" />
-        <View style={[styles.stepperRow, styles.filledBorderBlue]}>
+        <View style={[styles.stepperRow, date && styles.filledBorderBlue]}>
           <TouchableOpacity
             testID="loading-date-minus"
             style={styles.stepperBtn}
-            onPress={() => {
-              setDate(prev => {
-                const d = new Date(prev); d.setDate(d.getDate() - 1);
-                return d < today ? today : d;
-              });
-            }}
+            onPress={decrementDate}
           >
             <Text style={styles.stepperBtnText}>-</Text>
           </TouchableOpacity>
@@ -2362,33 +2378,28 @@ return (
             activeOpacity={0.8}
             onPress={() => setShowDatePicker(true)}
           >
-            <Ionicons name="calendar" size={14} color={COLORS.primary} />
+            <Ionicons name="calendar" size={14} color={date ? COLORS.primary : COLORS.textSubtle} />
             <Text
-              style={styles.stepperDateText}
+              style={[styles.stepperDateText, !date && { color: COLORS.textSubtle }]}
               numberOfLines={1}
               adjustsFontSizeToFit
               minimumFontScale={0.6}
               allowFontScaling={false}
             >
-              {date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+              {date ? date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "DD-MM-YYYY"}
             </Text>
           </TouchableOpacity>
           <TouchableOpacity
             testID="loading-date-plus"
             style={styles.stepperBtn}
-            onPress={() => {
-              setDate(prev => {
-                const d = new Date(prev); d.setDate(d.getDate() + 1);
-                return d > maxDate ? maxDate : d;
-              });
-            }}
+            onPress={incrementDate}
           >
             <Text style={styles.stepperBtnText}>+</Text>
           </TouchableOpacity>
         </View>
         {showDatePicker && (
           <DateTimePicker
-            value={date}
+            value={date ?? today}
             mode="date"
             display={Platform.OS === "ios" ? "spinner" : "default"}
             minimumDate={today}
@@ -2396,6 +2407,88 @@ return (
             onChange={onDateChange}
           />
         )}
+
+        <SectionTitle icon="cube-outline" title="Available Space" />
+        <View style={[styles.stepperRow, spaceCbm && styles.filledBorderBlue]}>
+          <TouchableOpacity
+            testID="post-space-cbm-minus"
+            style={styles.stepperBtn}
+            onPress={() => {
+              setSpaceCbm(prev => {
+                const cur = prev ? parseInt(prev, 10) : 0;
+                return String(Math.max(1, cur - 1));
+              });
+            }}
+          >
+            <Text style={styles.stepperBtnText}>-</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            testID="post-space-cbm-btn"
+            style={styles.stepperCenter}
+            activeOpacity={0.8}
+            onPress={() => { setSpaceCbmInput(spaceCbm || ""); setSpaceCbmModalVisible(true); }}
+          >
+            <Text style={styles.stepperValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6} allowFontScaling={false}>{spaceCbm || "–"}</Text>
+            <Text style={styles.stepperUnit} numberOfLines={1} allowFontScaling={false}>cbm</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            testID="post-space-cbm-plus"
+            style={styles.stepperBtn}
+            onPress={() => {
+              setSpaceCbm(prev => {
+                const cur = prev ? parseInt(prev, 10) : 0;
+                return String(Math.min(65, cur + 1));
+              });
+            }}
+          >
+            <Text style={styles.stepperBtnText}>+</Text>
+          </TouchableOpacity>
+        </View>
+        {spaceCbm && parseInt(spaceCbm, 10) > 65 ? <Text style={styles.errorText}>Max space: 65 cbm</Text> : null}
+        <View style={styles.ptlFillBg}>
+          <View style={[styles.ptlFillInner, { width: `${cbmFillPct}%`, backgroundColor: COLORS.primary }]} />
+        </View>
+        <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 14 }}>
+          <Text style={{ fontSize: 12, color: COLORS.textMuted }}>0 cbm</Text>
+          <Text style={{ fontSize: 12, color: COLORS.textMuted }}>65 cbm max</Text>
+        </View>
+
+        <Modal visible={spaceCbmModalVisible} transparent animationType="fade" onRequestClose={() => setSpaceCbmModalVisible(false)}>
+          <TouchableOpacity style={wmStyles.backdrop} activeOpacity={1} onPress={() => setSpaceCbmModalVisible(false)}>
+            <TouchableOpacity style={wmStyles.sheet} activeOpacity={1}>
+              <Text style={wmStyles.title}>Enter Space</Text>
+              <TextInput
+                testID="post-space-cbm-input"
+                style={wmStyles.input}
+                value={spaceCbmInput}
+                onChangeText={(t) => setSpaceCbmInput(t.replace(/\D/g, ""))}
+                keyboardType="number-pad"
+                autoFocus
+                placeholder="e.g. 30"
+                placeholderTextColor={COLORS.textSubtle}
+              />
+              <View style={wmStyles.presets}>
+                {[5, 10, 15, 20, 30, 40, 45].map(n => (
+                  <TouchableOpacity key={n} style={wmStyles.preset} onPress={() => setSpaceCbmInput(String(n))}>
+                    <Text style={wmStyles.presetText}>{n} cbm</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <TouchableOpacity style={wmStyles.btn} onPress={() => {
+                const n = parseInt(spaceCbmInput, 10);
+                if (!isNaN(n) && n > 65) {
+                  setSpaceCbmInput("");
+                  Alert.alert("Invalid space", "Space cannot exceed 65 CBM.");
+                  return;
+                }
+                if (!isNaN(n) && n > 0) setSpaceCbm(String(n));
+                setSpaceCbmModalVisible(false);
+              }}>
+                <Text style={wmStyles.btnText}>Set Space</Text>
+              </TouchableOpacity>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </Modal>
 
         <SectionTitle icon="cube-outline" title="Container Type" />
         <View style={styles.truckRow} testID="truck-types-row">
@@ -2412,7 +2505,7 @@ return (
 
         <SectionTitle icon="boat-outline" title="Vessel Details" />
         <View style={{ flexDirection: "row", gap: 10 }}>
-          <View style={{ flex: 0.7 }}>
+          <View style={{ flex: 0.5 }}>
             <Field label="Vessel Name *">
               <TextInput
                 testID="post-vessel-name-input"
@@ -2425,7 +2518,7 @@ return (
               />
             </Field>
           </View>
-          <View style={{ flex: 0.3 }}>
+          <View style={{ flex: 0.5 }}>
             <Field label="Voyage Name *">
               <TextInput
                 testID="post-voyage-name-input"
@@ -2439,29 +2532,6 @@ return (
             </Field>
           </View>
         </View>
-
-        <SectionTitle icon="cube-outline" title="Space in CBM" />
-        <Field label="Space in CBM (cubic m) *">
-          <View style={[styles.priceRow, spaceCbm && styles.filledBorderBlue]}>
-            <TextInput
-              testID="post-space-cbm-input"
-              style={styles.priceInput}
-              value={spaceCbm}
-              onChangeText={(t) => {
-                const digits = t.replace(/\D/g, "");
-                if (!digits) { setSpaceCbm(""); return; }
-                if (parseInt(digits, 10) > 65) { setSpaceCbm("65"); return; }
-                setSpaceCbm(digits);
-              }}
-              keyboardType="number-pad"
-              maxLength={2}
-              placeholder="e.g. 30"
-              placeholderTextColor={COLORS.textSubtle}
-            />
-            <Text style={styles.priceSuffix}>cbm</Text>
-          </View>
-          {spaceCbm && parseInt(spaceCbm, 10) > 65 ? <Text style={styles.errorText}>Max space: 65 cbm</Text> : null}
-        </Field>
 
         {/* ===== Optional fields (collapsible) ===== */}
         <Text style={styles.optionalHeading}>Add more details (optional)</Text>
@@ -6234,15 +6304,17 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
   // Date & weight (tons)
   const today = useMemo(() => { const d = new Date(); d.setHours(0,0,0,0); return d; }, []);
   const maxDate = useMemo(() => { const d = new Date(today); d.setDate(d.getDate() + 14); return d; }, [today]);
-  const [date, setDate] = useState<Date>(new Date());
+  const [date, setDate] = useState<Date | null>(null);
   const [showDatePicker, setShowDatePicker] = useState(false);
-  const [weight, setWeight] = useState(1.0);                   // tons
+  const [weight, setWeight] = useState(0);                     // tons
   const [weightModalVisible, setWeightModalVisible] = useState(false);
   const [weightInput, setWeightInput] = useState("");
 
-  // HSN code
+  // HSN code (optional)
   const [hsnCode, setHsnCode] = useState("");
   const [spaceCbm, setSpaceCbm] = useState("");
+  const [spaceCbmModalVisible, setSpaceCbmModalVisible] = useState(false);
+  const [spaceCbmInput, setSpaceCbmInput] = useState("");
 
   // Optional sections
   const [dimL, setDimL] = useState("");
@@ -6264,6 +6336,22 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
       else if (selected > maxDate) setDate(maxDate);
       else setDate(selected);
     }
+  };
+
+  const decrementDate = () => {
+    setDate(prev => {
+      const base = prev ?? today;
+      const d = new Date(base); d.setDate(d.getDate() - 1);
+      return d < today ? today : d;
+    });
+  };
+
+  const incrementDate = () => {
+    setDate(prev => {
+      const base = prev ?? today;
+      const d = new Date(base); d.setDate(d.getDate() + 1);
+      return d > maxDate ? maxDate : d;
+    });
   };
 
   const pickImage = async () => {
@@ -6303,7 +6391,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
   const reset = () => {
     setOriginText(""); setOriginPin(""); setOriginInfo(null);
     setDestText(""); setDestPin(""); setDestInfo(null);
-    setDate(new Date()); setWeight(1.0); setWeightInput("");
+    setDate(null); setWeight(0); setWeightInput("");
     setHsnCode(""); setSpaceCbm("");
     setDimL(""); setDimB(""); setDimH("");
     setTruckType(""); setPlacement(""); setImages([]);
@@ -6314,7 +6402,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
     const destValid = isRouteInfoValid(destPin, destInfo);
     if (!originValid) return Alert.alert("Origin", "Please select a valid origin from the list.");
     if (!destValid) return Alert.alert("Destination", "Please select a valid destination from the list.");
-    if (!hsnCode.trim()) return Alert.alert("HSN Code", "Please enter the HSN code.");
+    if (!date) return Alert.alert("Required", "Select a shipping date");
     if (weight <= 0) return Alert.alert("Weight", "Please enter a valid weight in tons.");
     if (weight > 20) return Alert.alert("Too heavy", "A single LCL can't exceed 20 tons. Use Post Space for a full truck.");
     const cbmVal = parseInt(spaceCbm, 10);
@@ -6354,7 +6442,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
           weight_kg: Math.round(weight * 1000),    // tons → kg
           space_cbm: cbmVal,
           truck_type: truckType,
-          loading_date: date.toISOString().slice(0, 10),
+          loading_date: date!.toISOString().slice(0, 10),
           dimension_length: L,
           dimension_breadth: B,
           dimension_height: H,
@@ -6368,7 +6456,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
       }
       const data = result.data;
       // Build WhatsApp share message (mirrors the Container Space "Post & Share" flow)
-      const dateStr = date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+      const dateStr = date!.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
       const oStateName = sanitizeStateForDisplay(originInfo?.state || "", originPin);
       const dStateName = sanitizeStateForDisplay(destInfo?.state || "", destPin);
       const oCityClean = sanitizeCityForDisplay(originInfo?.city || "", originPin, oStateName);
@@ -6478,16 +6566,11 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
 
         {/* 2. Shipping Date — same stepper as Post Space */}
         <SectionTitle icon="calendar-outline" title="Shipping Date" />
-        <View style={[styles.stepperRow, styles.filledBorderOrange]}>
+        <View style={[styles.stepperRow, date && styles.filledBorderOrange]}>
           <TouchableOpacity
             testID="ptl-date-minus"
             style={styles.stepperBtn}
-            onPress={() => {
-              setDate(prev => {
-                const d = new Date(prev); d.setDate(d.getDate() - 1);
-                return d < today ? today : d;
-              });
-            }}
+            onPress={decrementDate}
           >
             <Text style={styles.stepperBtnText}>-</Text>
           </TouchableOpacity>
@@ -6497,33 +6580,28 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
             activeOpacity={0.8}
             onPress={() => setShowDatePicker(true)}
           >
-            <Ionicons name="calendar" size={14} color={COLORS.primary} />
+            <Ionicons name="calendar" size={14} color={date ? COLORS.primary : COLORS.textSubtle} />
             <Text
-              style={styles.stepperDateText}
+              style={[styles.stepperDateText, !date && { color: COLORS.textSubtle }]}
               numberOfLines={1}
               adjustsFontSizeToFit
               minimumFontScale={0.6}
               allowFontScaling={false}
             >
-              {date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+              {date ? date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "DD-MM-YYYY"}
             </Text>
           </TouchableOpacity>
           <TouchableOpacity
             testID="ptl-date-plus"
             style={styles.stepperBtn}
-            onPress={() => {
-              setDate(prev => {
-                const d = new Date(prev); d.setDate(d.getDate() + 1);
-                return d > maxDate ? maxDate : d;
-              });
-            }}
+            onPress={incrementDate}
           >
             <Text style={styles.stepperBtnText}>+</Text>
           </TouchableOpacity>
         </View>
         {showDatePicker && (
           <DateTimePicker
-            value={date}
+            value={date ?? today}
             mode="date"
             display={Platform.OS === "ios" ? "spinner" : "default"}
             minimumDate={today}
@@ -6549,9 +6627,9 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
                 testID="ptl-weight-btn"
                 style={styles.stepperCenter}
                 activeOpacity={0.8}
-                onPress={() => { setWeightInput(String(weight)); setWeightModalVisible(true); }}
+                onPress={() => { setWeightInput(weight > 0 ? String(weight) : ""); setWeightModalVisible(true); }}
               >
-                <Text style={styles.stepperValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6} allowFontScaling={false}>{weight.toFixed(1)}</Text>
+                <Text style={styles.stepperValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6} allowFontScaling={false}>{weight > 0 ? weight.toFixed(1) : "–"}</Text>
                 <Text style={styles.stepperUnit} numberOfLines={1} allowFontScaling={false}>T</Text>
               </TouchableOpacity>
               <TouchableOpacity
@@ -6565,27 +6643,81 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
           </View>
           <View style={{ flex: 0.5 }}>
             <Text style={styles.dimLabel}>Space (cbm)</Text>
-            <View style={[styles.priceRow, spaceCbm && styles.filledBorderOrange, { marginBottom: 0, paddingHorizontal: 10 }]}>
-              <TextInput
-                testID="ptl-space-cbm-input"
-                style={styles.priceInput}
-                value={spaceCbm}
-                onChangeText={(t) => {
-                  const digits = t.replace(/\D/g, "");
-                  if (!digits) { setSpaceCbm(""); return; }
-                  if (parseInt(digits, 10) > 65) { setSpaceCbm("65"); return; }
-                  setSpaceCbm(digits);
+            <View style={[styles.stepperRow, spaceCbm && styles.filledBorderOrange, { marginBottom: 0 }]}>
+              <TouchableOpacity
+                testID="ptl-space-cbm-minus"
+                style={styles.stepperBtn}
+                onPress={() => {
+                  setSpaceCbm(prev => {
+                    const cur = prev ? parseInt(prev, 10) : 0;
+                    return String(Math.max(1, cur - 1));
+                  });
                 }}
-                keyboardType="number-pad"
-                maxLength={2}
-                placeholder="e.g. 15"
-                placeholderTextColor={COLORS.textSubtle}
-              />
-              <Text style={styles.priceSuffix}>cbm</Text>
+              >
+                <Text style={styles.stepperBtnText}>-</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                testID="ptl-space-cbm-btn"
+                style={styles.stepperCenter}
+                activeOpacity={0.8}
+                onPress={() => { setSpaceCbmInput(spaceCbm || ""); setSpaceCbmModalVisible(true); }}
+              >
+                <Text style={styles.stepperValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6} allowFontScaling={false}>{spaceCbm || "–"}</Text>
+                <Text style={styles.stepperUnit} numberOfLines={1} allowFontScaling={false}>cbm</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                testID="ptl-space-cbm-plus"
+                style={styles.stepperBtn}
+                onPress={() => {
+                  setSpaceCbm(prev => {
+                    const cur = prev ? parseInt(prev, 10) : 0;
+                    return String(Math.min(65, cur + 1));
+                  });
+                }}
+              >
+                <Text style={styles.stepperBtnText}>+</Text>
+              </TouchableOpacity>
             </View>
             {spaceCbm && parseInt(spaceCbm, 10) > 65 ? <Text style={styles.errorText}>Max 65 cbm</Text> : null}
           </View>
         </View>
+
+        <Modal visible={spaceCbmModalVisible} transparent animationType="fade" onRequestClose={() => setSpaceCbmModalVisible(false)}>
+          <TouchableOpacity style={wmStyles.backdrop} activeOpacity={1} onPress={() => setSpaceCbmModalVisible(false)}>
+            <TouchableOpacity style={wmStyles.sheet} activeOpacity={1}>
+              <Text style={wmStyles.title}>Enter Space</Text>
+              <TextInput
+                testID="ptl-space-cbm-input"
+                style={wmStyles.input}
+                value={spaceCbmInput}
+                onChangeText={(t) => setSpaceCbmInput(t.replace(/\D/g, ""))}
+                keyboardType="number-pad"
+                autoFocus
+                placeholder="e.g. 15"
+                placeholderTextColor={COLORS.textSubtle}
+              />
+              <View style={wmStyles.presets}>
+                {[5, 10, 15, 20, 30, 40, 45].map(n => (
+                  <TouchableOpacity key={n} style={wmStyles.preset} onPress={() => setSpaceCbmInput(String(n))}>
+                    <Text style={wmStyles.presetText}>{n} cbm</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <TouchableOpacity style={wmStyles.btn} onPress={() => {
+                const n = parseInt(spaceCbmInput, 10);
+                if (!isNaN(n) && n > 65) {
+                  setSpaceCbmInput("");
+                  Alert.alert("Invalid space", "Space cannot exceed 65 CBM.");
+                  return;
+                }
+                if (!isNaN(n) && n > 0) setSpaceCbm(String(n));
+                setSpaceCbmModalVisible(false);
+              }}>
+                <Text style={wmStyles.btnText}>Set Space</Text>
+              </TouchableOpacity>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </Modal>
 
         <Modal visible={weightModalVisible} transparent animationType="fade" onRequestClose={() => setWeightModalVisible(false)}>
           <TouchableOpacity style={wmStyles.backdrop} activeOpacity={1} onPress={() => setWeightModalVisible(false)}>
@@ -6623,21 +6755,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
           </TouchableOpacity>
         </Modal>
 
-        {/* 4. HSN Code */}
-        <SectionTitle icon="barcode-outline" title="HSN Code" />
-        <Field label="HSN Code *">
-          <TextInput
-            testID="ptl-hsn-code-input"
-            style={[styles.input, hsnCode.trim() && styles.filledBorderOrange]}
-            value={hsnCode}
-            onChangeText={(t) => setHsnCode(t.replace(/[^0-9]/g, "").slice(0, 8))}
-            placeholder="e.g., 8471"
-            placeholderTextColor={COLORS.textSubtle}
-            keyboardType="number-pad"
-            returnKeyType="done"
-          />
-        </Field>
-
+        {/* 4. Container Type */}
         <SectionTitle icon="cube-outline" title="Container Type" />
         <View style={styles.truckRow} testID="ptl-truck-row">
           {CONTAINER_TYPES.map((t) => {
@@ -6656,6 +6774,21 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
             );
           })}
         </View>
+
+        {/* 5. HSN Code (optional) */}
+        <SectionTitle icon="barcode-outline" title="HSN Code" />
+        <Field label="HSN Code (optional)">
+          <TextInput
+            testID="ptl-hsn-code-input"
+            style={[styles.input, hsnCode.trim() && styles.filledBorderOrange]}
+            value={hsnCode}
+            onChangeText={(t) => setHsnCode(t.replace(/[^0-9]/g, "").slice(0, 8))}
+            placeholder="e.g., 8471"
+            placeholderTextColor={COLORS.textSubtle}
+            keyboardType="number-pad"
+            returnKeyType="done"
+          />
+        </Field>
 
         {/* ===== Optional fields (collapsible) ===== */}
         <Text style={styles.optionalHeading}>Add more details (optional)</Text>
@@ -7234,7 +7367,7 @@ function PostSelectionScreen({
           <View style={{ flex: 1 }}>
             <Text style={newStyles.postTypeTitle}>Container Space</Text>
             <View style={[newStyles.postTypeDivider, { backgroundColor: COLORS.primary }]} />
-            <Text style={newStyles.postTypeDesc}>{"Empty space in your truck? Find a LCL on your route to fill it."}</Text>
+            <Text style={newStyles.postTypeDesc}>{"Have space left in your container? Find LCL cargo on your route to fill it."}</Text>
           </View>
           <View style={[newStyles.postTypeChevron, { backgroundColor: COLORS.primary }]}>
             <Ionicons name="chevron-forward" size={18} color={COLORS.surface} />
@@ -7260,7 +7393,7 @@ function PostSelectionScreen({
           <View style={{ flex: 1 }}>
             <Text style={newStyles.postTypeTitle}>LCL</Text>
             <View style={[newStyles.postTypeDivider, { backgroundColor: COLORS.secondary }]} />
-            <Text style={newStyles.postTypeDesc}>{"Have a partial truck load? Find adjustment loads on your route to cut freight cost."}</Text>
+            <Text style={newStyles.postTypeDesc}>{"Have a partial container load? Find container space on your route to cut freight cost."}</Text>
           </View>
           <View style={[newStyles.postTypeChevron, { backgroundColor: COLORS.secondary }]}>
             <Ionicons name="chevron-forward" size={18} color={COLORS.surface} />
