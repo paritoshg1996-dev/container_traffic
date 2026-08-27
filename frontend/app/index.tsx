@@ -2338,6 +2338,8 @@ return (
           <SmartRouteInput
             accentColor={COLORS.primary}
             label="Origin"
+            hideLabel
+            placeholder="Origin"
             testIDPrefix="origin"
             text={originText}
             pin={originPin}
@@ -2354,6 +2356,8 @@ return (
           <SmartRouteInput
             accentColor={COLORS.primary}
             label="Destination"
+            hideLabel
+            placeholder="Destination"
             testIDPrefix="dest"
             text={destText}
             pin={destPin}
@@ -2383,7 +2387,7 @@ return (
           >
             <Ionicons name="calendar" size={14} color={date ? COLORS.primary : COLORS.textSubtle} />
             <Text
-              style={[styles.stepperDateText, !date && { color: COLORS.textSubtle }]}
+              style={[styles.stepperDateText, !date && { fontSize: 15, color: COLORS.textSubtle }]}
               numberOfLines={1}
               adjustsFontSizeToFit
               minimumFontScale={0.6}
@@ -2452,8 +2456,8 @@ return (
           <View style={[styles.ptlFillInner, { width: `${cbmFillPct}%`, backgroundColor: COLORS.primary }]} />
         </View>
         <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 14 }}>
-          <Text style={{ fontSize: 12, color: COLORS.textMuted }}>0 cbm</Text>
-          <Text style={{ fontSize: 12, color: COLORS.textMuted }}>65 cbm max</Text>
+          <Text style={{ fontSize: 12, color: COLORS.textMuted }}>0%</Text>
+          <Text style={{ fontSize: 12, color: COLORS.textMuted }}>100%</Text>
         </View>
 
         <Modal visible={spaceCbmModalVisible} transparent animationType="fade" onRequestClose={() => setSpaceCbmModalVisible(false)}>
@@ -3324,7 +3328,6 @@ function SmartRouteInput({ label, testIDPrefix, text, pin, info, onChange, accen
           </>
         ) : (
           <View style={sriStyles.placeholder}>
-            <Ionicons name="search" size={16} color={COLORS.textMuted} style={{ marginRight: 6 }} />
             <Text style={sriStyles.placeholderText}>{placeholder}</Text>
           </View>
         )}
@@ -3373,7 +3376,7 @@ const sriStyles = StyleSheet.create({
   city: { fontSize: rf(15), fontFamily: "Inter_700Bold", fontWeight: "800", color: COLORS.text, marginBottom: 3 },
   state: { fontSize: rf(11), color: COLORS.textMuted, fontStyle: "italic", fontFamily: "Inter_500Medium", fontWeight: "500" },
   placeholder: { flexDirection: "row", alignItems: "center" },
-  placeholderText: { fontSize: rf(13), fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.textSubtle, flexShrink: 1 },
+  placeholderText: { fontSize: rf(15), fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.textSubtle, flexShrink: 1 },
   clearBtn: { position: "absolute", top: 8, right: 8 },
 });
 // ============== Load Market ==============
@@ -6590,7 +6593,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
           >
             <Ionicons name="calendar" size={14} color={date ? COLORS.primary : COLORS.textSubtle} />
             <Text
-              style={[styles.stepperDateText, !date && { color: COLORS.textSubtle }]}
+              style={[styles.stepperDateText, !date && { fontSize: 15, color: COLORS.textSubtle }]}
               numberOfLines={1}
               adjustsFontSizeToFit
               minimumFontScale={0.6}
@@ -6796,7 +6799,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
         >
           <TextInput
             testID="ptl-hsn-code-input"
-            style={[styles.input, { fontSize: 20 }, hsnCode.trim() && styles.filledBorderOrange]}
+            style={[styles.input, { fontSize: 15 }, hsnCode.trim() && styles.filledBorderOrange]}
             value={hsnCode}
             onChangeText={(t) => setHsnCode(t.replace(/[^0-9]/g, "").slice(0, 8))}
             placeholder="e.g., 8471"
