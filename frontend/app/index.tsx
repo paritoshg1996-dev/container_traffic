@@ -3373,7 +3373,7 @@ const sriStyles = StyleSheet.create({
   city: { fontSize: rf(15), fontFamily: "Inter_700Bold", fontWeight: "800", color: COLORS.text, marginBottom: 3 },
   state: { fontSize: rf(11), color: COLORS.textMuted, fontStyle: "italic", fontFamily: "Inter_500Medium", fontWeight: "500" },
   placeholder: { flexDirection: "row", alignItems: "center" },
-  placeholderText: { fontSize: rf(13), color: COLORS.textSubtle, flexShrink: 1 },
+  placeholderText: { fontSize: rf(13), fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.textSubtle, flexShrink: 1 },
   clearBtn: { position: "absolute", top: 8, right: 8 },
 });
 // ============== Load Market ==============
@@ -6637,7 +6637,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
                 activeOpacity={0.8}
                 onPress={() => { setWeightInput(weight > 0 ? String(weight) : ""); setWeightModalVisible(true); }}
               >
-                <Text style={styles.stepperValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6} allowFontScaling={false}>{weight > 0 ? weight.toFixed(1) : "–"}</Text>
+                <Text style={[styles.stepperValue, weight <= 0 && { color: COLORS.textSubtle }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6} allowFontScaling={false}>{weight > 0 ? weight.toFixed(1) : "–"}</Text>
                 <Text style={styles.stepperUnit} numberOfLines={1} allowFontScaling={false}>T</Text>
               </TouchableOpacity>
               <TouchableOpacity
@@ -6670,7 +6670,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
                 activeOpacity={0.8}
                 onPress={() => { setSpaceCbmInput(spaceCbm || ""); setSpaceCbmModalVisible(true); }}
               >
-                <Text style={styles.stepperValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6} allowFontScaling={false}>{spaceCbm || "–"}</Text>
+                <Text style={[styles.stepperValue, !spaceCbm && { color: COLORS.textSubtle }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6} allowFontScaling={false}>{spaceCbm || "–"}</Text>
                 <Text style={styles.stepperUnit} numberOfLines={1} allowFontScaling={false}>cbm</Text>
               </TouchableOpacity>
               <TouchableOpacity
@@ -6796,7 +6796,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
         >
           <TextInput
             testID="ptl-hsn-code-input"
-            style={[styles.input, hsnCode.trim() && styles.filledBorderOrange]}
+            style={[styles.input, { fontSize: 20 }, hsnCode.trim() && styles.filledBorderOrange]}
             value={hsnCode}
             onChangeText={(t) => setHsnCode(t.replace(/[^0-9]/g, "").slice(0, 8))}
             placeholder="e.g., 8471"
