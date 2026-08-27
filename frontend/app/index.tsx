@@ -120,10 +120,11 @@ function isRouteInfoValid(pin: string, info: any, requireValidFlag: boolean = fa
 // Approximate standard payload capacities (kg) by container type — mirrors
 // backend/server.py's CONTAINER_CAPACITY_KG. Verify against your CFS/carrier
 // tariff before relying on these for anything beyond a UI estimate.
-// Legacy size-based keys (20ft/40ft/40ftHC/40HC) are kept so listings posted
-// before the General/Dangerous Goods/Reefer switch still resolve correctly.
+// Legacy size-based keys (20ft/40ft/40ftHC/40HC) and the old "Dangerous
+// Goods" label are kept so listings posted before the naming switches still
+// resolve correctly.
 const CONTAINER_CAPACITY_KG: Record<string, number> = {
-  "General": 26700, "Dangerous Goods": 26700, "Reefer": 25000,
+  "General": 26700, "Hazardous": 26700, "Dangerous Goods": 26700, "Reefer": 25000,
   "20ft": 21700, "40ft": 26730, "40ftHC": 26500, "40HC": 26500,
 };
 const DEFAULT_CONTAINER_CAPACITY_KG = 26700; // fallback: standard payload estimate
@@ -131,11 +132,13 @@ function resolveContainerCapacityKg(containerType?: string | null): number {
   return CONTAINER_CAPACITY_KG[(containerType || "").trim()] ?? DEFAULT_CONTAINER_CAPACITY_KG;
 }
 // Human-readable label for a stored container type value. Legacy size-based
-// values are kept so old listings still display a friendly label.
+// values (and the old "Dangerous Goods" value) are kept so old listings
+// still display a friendly label.
 function containerLabel(t?: string | null): string {
   const s = (t || "").trim();
   const map: Record<string, string> = {
     "General": "General Container",
+    "Hazardous": "Hazardous Container",
     "Dangerous Goods": "Dangerous Goods Container",
     "Reefer": "Reefer Container",
     "20ft": "20ft Container",
@@ -216,7 +219,7 @@ const CARGO_TYPE_OPTIONS = [
 // artwork for these three classes is ready.
 const CONTAINER_TYPES: { name: string; icon: string }[] = [
   { name: "General", icon: "cube-outline" },
-  { name: "Dangerous Goods", icon: "warning-outline" },
+  { name: "Hazardous", icon: "warning-outline" },
   { name: "Reefer", icon: "snow-outline" },
 ];
 
@@ -3211,9 +3214,10 @@ const srm = StyleSheet.create({
 });
 
 // ============== SmartRouteInput (Post Load - tap-to-open modal) ==============
-function SmartRouteInput({ label, testIDPrefix, text, pin, info, onChange, accentColor = COLORS.success }: {
+function SmartRouteInput({ label, testIDPrefix, text, pin, info, onChange, accentColor = COLORS.success, hideLabel = false, placeholder = "Search port…" }: {
   label: string; testIDPrefix: string; text: string; pin: string; info: RouteInfo;
   onChange: (text: string, pin: string, info: RouteInfo) => void; accentColor?: string;
+  hideLabel?: boolean; placeholder?: string;
 }) {
   const [modalOpen, setModalOpen] = useState(false);
 
@@ -3228,7 +3232,7 @@ function SmartRouteInput({ label, testIDPrefix, text, pin, info, onChange, accen
 
   return (
     <View style={sriStyles.wrap}>
-      <Text style={sriStyles.label}>{label}</Text>
+      {!hideLabel && <Text style={sriStyles.label}>{label}</Text>}
       <TouchableOpacity
         testID={`${testIDPrefix}-tap-card`}
         style={[sriStyles.card, hasValue && { borderColor: accentColor, borderWidth: 1.5 }]}
@@ -3321,7 +3325,7 @@ function SmartRouteInput({ label, testIDPrefix, text, pin, info, onChange, accen
         ) : (
           <View style={sriStyles.placeholder}>
             <Ionicons name="search" size={16} color={COLORS.textMuted} style={{ marginRight: 6 }} />
-            <Text style={sriStyles.placeholderText}>Search port…</Text>
+            <Text style={sriStyles.placeholderText}>{placeholder}</Text>
           </View>
         )}
         {hasValue ? (
@@ -6544,6 +6548,8 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
           <SmartRouteInput
             accentColor={COLORS.secondary}
             label="Origin"
+            hideLabel
+            placeholder="Origin"
             testIDPrefix="ptl-post-origin"
             text={originText}
             pin={originPin}
@@ -6556,6 +6562,8 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
           <SmartRouteInput
             accentColor={COLORS.secondary}
             label="Destination"
+            hideLabel
+            placeholder="Destination"
             testIDPrefix="ptl-post-dest"
             text={destText}
             pin={destPin}
@@ -6775,9 +6783,17 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
           })}
         </View>
 
-        {/* 5. HSN Code (optional) */}
-        <SectionTitle icon="barcode-outline" title="HSN Code" />
-        <Field label="HSN Code (optional)">
+        {/* ===== Optional fields (collapsible) ===== */}
+        <Text style={styles.optionalHeading}>Add more details (optional)</Text>
+
+        <CollapsibleSection
+          accentColor={COLORS.secondary}
+          accentBg="#FFF4EE"
+          icon="barcode-outline"
+          title="HSN Code"
+          summary={hsnCode.trim()}
+          testID="ptl-opt-hsn"
+        >
           <TextInput
             testID="ptl-hsn-code-input"
             style={[styles.input, hsnCode.trim() && styles.filledBorderOrange]}
@@ -6788,10 +6804,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
             keyboardType="number-pad"
             returnKeyType="done"
           />
-        </Field>
-
-        {/* ===== Optional fields (collapsible) ===== */}
-        <Text style={styles.optionalHeading}>Add more details (optional)</Text>
+        </CollapsibleSection>
 
         <CollapsibleSection
           accentColor={COLORS.secondary}
@@ -6965,9 +6978,6 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
             </View>
           )}
         </TouchableOpacity>
-        <Text style={[styles.hintMuted, { textAlign: "center", marginTop: 8 }]}>
-          You can track this load in your Profile → My Posted LCL.
-        </Text>
       </ScrollView>
     </KeyboardAvoidingView>
   );
