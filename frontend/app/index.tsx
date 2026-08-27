@@ -32,6 +32,10 @@ import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from "expo-spe
 
 const API = `https://ptl-market.onrender.com/api`;
 
+// Shared hitSlop for the (visually compact) stepper +/- buttons — keeps the
+// tappable area comfortable even though the on-screen circle is small.
+const STEPPER_HIT_SLOP = { top: 10, bottom: 10, left: 10, right: 10 };
+
 // ─── App-wide limits (previously hardcoded inline at each call site) ───────
 const MAX_LOAD_PHOTO_BYTES = 5 * 1024 * 1024;    // load/cargo photos (PostPtlLoadScreen) — post-resize ceiling, was 50MB pre-resize
 const MAX_DOC_PHOTO_BYTES = 5 * 1024 * 1024;     // verification doc photos
@@ -1411,6 +1415,7 @@ if (!destValid)
               <TouchableOpacity
                 testID="edit-loading-date-minus"
                 style={styles.stepperBtn}
+                hitSlop={STEPPER_HIT_SLOP}
                 onPress={() => {
                   setDate(prev => {
                     const d = new Date(prev); d.setDate(d.getDate() - 1);
@@ -1440,6 +1445,7 @@ if (!destValid)
               <TouchableOpacity
                 testID="edit-loading-date-plus"
                 style={styles.stepperBtn}
+                hitSlop={STEPPER_HIT_SLOP}
                 onPress={() => {
                   setDate(prev => {
                     const d = new Date(prev); d.setDate(d.getDate() + 1);
@@ -1463,14 +1469,16 @@ if (!destValid)
 
             <SectionTitle icon="scale-outline" title="Available Load Capacity" />
             <View style={[styles.stepperRow, weight > 0 && styles.filledBorderBlue]}>
-              <TouchableOpacity style={styles.stepperBtn} onPress={() => setWeight(w => Math.max(0.5, parseFloat((w - 0.5).toFixed(1))))}>
+              <TouchableOpacity style={styles.stepperBtn}
+                hitSlop={STEPPER_HIT_SLOP} onPress={() => setWeight(w => Math.max(0.5, parseFloat((w - 0.5).toFixed(1))))}>
                 <Text style={styles.stepperBtnText}>-</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.stepperCenter} activeOpacity={0.8} onPress={() => { setWeightInput(String(weight)); setWeightModalVisible(true); }}>
                 <Text style={styles.stepperValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6} allowFontScaling={false}>{weight.toFixed(1)}</Text>
                 <Text style={styles.stepperUnit} numberOfLines={1} allowFontScaling={false}>tons</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.stepperBtn} onPress={() => setWeight(w => parseFloat((w + 0.5).toFixed(1)))}>
+              <TouchableOpacity style={styles.stepperBtn}
+                hitSlop={STEPPER_HIT_SLOP} onPress={() => setWeight(w => parseFloat((w + 0.5).toFixed(1)))}>
                 <Text style={styles.stepperBtnText}>+</Text>
               </TouchableOpacity>
             </View>
@@ -2375,6 +2383,7 @@ return (
           <TouchableOpacity
             testID="loading-date-minus"
             style={styles.stepperBtn}
+                hitSlop={STEPPER_HIT_SLOP}
             onPress={decrementDate}
           >
             <Text style={styles.stepperBtnText}>-</Text>
@@ -2399,6 +2408,7 @@ return (
           <TouchableOpacity
             testID="loading-date-plus"
             style={styles.stepperBtn}
+                hitSlop={STEPPER_HIT_SLOP}
             onPress={incrementDate}
           >
             <Text style={styles.stepperBtnText}>+</Text>
@@ -2420,6 +2430,7 @@ return (
           <TouchableOpacity
             testID="post-space-cbm-minus"
             style={styles.stepperBtn}
+                hitSlop={STEPPER_HIT_SLOP}
             onPress={() => {
               setSpaceCbm(prev => {
                 const cur = prev ? parseInt(prev, 10) : 0;
@@ -2441,6 +2452,7 @@ return (
           <TouchableOpacity
             testID="post-space-cbm-plus"
             style={styles.stepperBtn}
+                hitSlop={STEPPER_HIT_SLOP}
             onPress={() => {
               setSpaceCbm(prev => {
                 const cur = prev ? parseInt(prev, 10) : 0;
@@ -2516,7 +2528,7 @@ return (
             <Field label="Vessel Name *">
               <TextInput
                 testID="post-vessel-name-input"
-                style={[styles.input, vesselName.trim() && styles.filledBorderBlue]}
+                style={[styles.input, { fontSize: rf(15) }, vesselName.trim() && styles.filledBorderBlue]}
                 placeholder="e.g., MSC Anna"
                 placeholderTextColor={COLORS.textSubtle}
                 value={vesselName}
@@ -2529,7 +2541,7 @@ return (
             <Field label="Voyage Name *">
               <TextInput
                 testID="post-voyage-name-input"
-                style={[styles.input, voyageName.trim() && styles.filledBorderBlue]}
+                style={[styles.input, { fontSize: rf(15) }, voyageName.trim() && styles.filledBorderBlue]}
                 placeholder="e.g., 245W"
                 placeholderTextColor={COLORS.textSubtle}
                 value={voyageName}
@@ -2553,6 +2565,7 @@ return (
           <View style={[styles.stepperRow, weight > 0 && styles.filledBorderBlue]}>
             <TouchableOpacity
               style={styles.stepperBtn}
+                hitSlop={STEPPER_HIT_SLOP}
               onPress={() => setWeight(w => Math.max(0.5, parseFloat((w - 0.5).toFixed(1))))}
             >
               <Text style={styles.stepperBtnText}>-</Text>
@@ -2567,6 +2580,7 @@ return (
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.stepperBtn}
+                hitSlop={STEPPER_HIT_SLOP}
               onPress={() => setWeight(w => Math.min(40, parseFloat((w + 0.5).toFixed(1))))}
             >
               <Text style={styles.stepperBtnText}>+</Text>
@@ -3375,8 +3389,8 @@ const sriStyles = StyleSheet.create({
   cityState: { fontSize: rf(11), color: COLORS.textMuted, fontFamily: "Inter_600SemiBold", fontWeight: "600" },
   city: { fontSize: rf(15), fontFamily: "Inter_700Bold", fontWeight: "800", color: COLORS.text, marginBottom: 3 },
   state: { fontSize: rf(11), color: COLORS.textMuted, fontStyle: "italic", fontFamily: "Inter_500Medium", fontWeight: "500" },
-  placeholder: { flexDirection: "row", alignItems: "center" },
-  placeholderText: { fontSize: rf(15), fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.textSubtle, flexShrink: 1 },
+  placeholder: { flexDirection: "row", alignItems: "center", justifyContent: "center", width: "100%" },
+  placeholderText: { fontSize: rf(15), fontFamily: "Inter_700Bold", fontWeight: "700", color: COLORS.textSubtle, flexShrink: 1, textAlign: "center" },
   clearBtn: { position: "absolute", top: 8, right: 8 },
 });
 // ============== Load Market ==============
@@ -5895,6 +5909,7 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
               <TouchableOpacity
                 testID="ptl-date-minus"
                 style={styles.stepperBtn}
+                hitSlop={STEPPER_HIT_SLOP}
                 onPress={() => {
                   setDate(prev => {
                     const d = new Date(prev); d.setDate(d.getDate() - 1);
@@ -5924,6 +5939,7 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
               <TouchableOpacity
                 testID="ptl-date-plus"
                 style={styles.stepperBtn}
+                hitSlop={STEPPER_HIT_SLOP}
                 onPress={() => {
                   setDate(prev => {
                     const d = new Date(prev); d.setDate(d.getDate() + 1);
@@ -5950,6 +5966,7 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
               <TouchableOpacity
                 testID="ptl-weight-minus"
                 style={styles.stepperBtn}
+                hitSlop={STEPPER_HIT_SLOP}
                 onPress={() => setWeight(w => Math.max(0.5, parseFloat((w - 0.5).toFixed(1))))}
               >
                 <Text style={styles.stepperBtnText}>-</Text>
@@ -5966,6 +5983,7 @@ function PostPtlModal({ visible, profile, onClose, onPosted, prefillRoute, editL
               <TouchableOpacity
                 testID="ptl-weight-plus"
                 style={styles.stepperBtn}
+                hitSlop={STEPPER_HIT_SLOP}
                 onPress={() => setWeight(w => Math.min(20, parseFloat((w + 0.5).toFixed(1))))}
               >
                 <Text style={styles.stepperBtnText}>+</Text>
@@ -6581,6 +6599,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
           <TouchableOpacity
             testID="ptl-date-minus"
             style={styles.stepperBtn}
+                hitSlop={STEPPER_HIT_SLOP}
             onPress={decrementDate}
           >
             <Text style={styles.stepperBtnText}>-</Text>
@@ -6605,6 +6624,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
           <TouchableOpacity
             testID="ptl-date-plus"
             style={styles.stepperBtn}
+                hitSlop={STEPPER_HIT_SLOP}
             onPress={incrementDate}
           >
             <Text style={styles.stepperBtnText}>+</Text>
@@ -6630,6 +6650,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
               <TouchableOpacity
                 testID="ptl-weight-minus"
                 style={styles.stepperBtn}
+                hitSlop={STEPPER_HIT_SLOP}
                 onPress={() => setWeight(w => Math.max(0.5, parseFloat((w - 0.5).toFixed(1))))}
               >
                 <Text style={styles.stepperBtnText}>-</Text>
@@ -6646,6 +6667,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
               <TouchableOpacity
                 testID="ptl-weight-plus"
                 style={styles.stepperBtn}
+                hitSlop={STEPPER_HIT_SLOP}
                 onPress={() => setWeight(w => Math.min(20, parseFloat((w + 0.5).toFixed(1))))}
               >
                 <Text style={styles.stepperBtnText}>+</Text>
@@ -6658,6 +6680,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
               <TouchableOpacity
                 testID="ptl-space-cbm-minus"
                 style={styles.stepperBtn}
+                hitSlop={STEPPER_HIT_SLOP}
                 onPress={() => {
                   setSpaceCbm(prev => {
                     const cur = prev ? parseInt(prev, 10) : 0;
@@ -6679,6 +6702,7 @@ function PostPtlLoadScreen({ profile, onNotificationsRead, onPosted }: { profile
               <TouchableOpacity
                 testID="ptl-space-cbm-plus"
                 style={styles.stepperBtn}
+                hitSlop={STEPPER_HIT_SLOP}
                 onPress={() => {
                   setSpaceCbm(prev => {
                     const cur = prev ? parseInt(prev, 10) : 0;
@@ -8176,9 +8200,9 @@ stepperRow: {
   gap: rs(8),
 },
 stepperBtn: {
-  width: rs(36),
-  height: rs(36),
-  borderRadius: rs(18),
+  width: rs(30),
+  height: rs(30),
+  borderRadius: rs(15),
   borderWidth: 1,
   borderColor: COLORS.border,
   backgroundColor: COLORS.bg,
@@ -8187,9 +8211,12 @@ stepperBtn: {
   flexShrink: 0,
 },
 stepperBtnText: {
-  fontSize: rf(22),
+  fontSize: rf(17),
+  fontFamily: "Inter_700Bold",
+  fontWeight: "700",
   color: COLORS.text,
-  lineHeight: rf(26),
+  lineHeight: rf(17),
+  textAlign: "center",
 },
 stepperCenter: {
   flex: 1,
